@@ -1,0 +1,64 @@
+### Alanya — Tests manuels de l'API d'authentification
+### Utiliser l'extension "REST Client" (VS Code) ou le client HTTP d'IntelliJ.
+### En dev sans SMTP, le code OTP s'affiche dans la console du serveur (`npm run dev`).
+
+@host = http://localhost:3000
+
+### 1) Inscription : demande d'un code OTP par email
+POST {{host}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "test@example.com"
+}
+
+### 2) Vérification du code OTP (récupéré dans la console serveur)
+# Copier le `setupToken` de la réponse pour l'étape 3.
+POST {{host}}/api/auth/verify
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "code": "000000"
+}
+
+### 3) Configuration du compte : pseudo + mot de passe
+# Remplacer SETUP_TOKEN par le setupToken de l'étape 2.
+POST {{host}}/api/auth/setup
+Content-Type: application/json
+Authorization: Bearer SETUP_TOKEN
+
+{
+  "pseudo": "Brian",
+  "password": "motdepasse123"
+}
+
+### 4) Connexion (par email ou par numéro public à 6 chiffres)
+POST {{host}}/api/auth/login
+Content-Type: application/json
+
+{
+  "identifier": "test@example.com",
+  "password": "motdepasse123"
+}
+
+### 5) Profil de l'utilisateur connecté
+# Remplacer ACCESS_TOKEN par l'accessToken obtenu au login/setup.
+GET {{host}}/api/me
+Authorization: Bearer ACCESS_TOKEN
+
+### 6) Rafraîchir les tokens
+POST {{host}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "REFRESH_TOKEN"
+}
+
+### 7) Déconnexion (révoque le refresh token)
+POST {{host}}/api/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "REFRESH_TOKEN"
+}

@@ -1,0 +1,341 @@
+// Schéma de données Alanya — PostgreSQL + Prisma
+// Dérivé du cahier des charges (Groupe Alanya II), enrichi : numéro public 6 chiffres,
+// statuts éphémères (stories) et IA conversationnelle (Gemini).
+//
+// Conventions (cf. cahier des charges) :
+//  - Clés primaires en UUID
+//  - Dates en TIMESTAMPTZ (DateTime @db.Timestamptz)
+//  - Mots de passe hachés (BCrypt) avant insertion
+//  - Index sur les colonnes fréquemment filtrées
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH & COMPTE
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  // Hash BCrypt du mot de passe (défini après vérification de l'email)
+  passwordHash  String?
+  // Numéro public à 6 chiffres, identifiant cherchable (différent de l'id interne)
+  publicNumber  String   @unique @db.VarChar(6)
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now()) @db.Timestamptz
+  updatedAt     DateTime @updatedAt @db.Timestamptz
+
+  profile          Profile?
+  refreshTokens    RefreshToken[]
+  contacts         Contact[]       @relation("UserContacts")
+  contactOf        Contact[]       @relation("ContactOf")
+  participations   Participant[]
+  sentMessages     Message[]       @relation("MessageSender")
+  ownedMedia       MediaFile[]
+  statuses         Status[]
+  statusViews      StatusView[]
+  callsInitiated   Call[]          @relation("CallInitiator")
+  callParticipants CallParticipant[]
+  aiThreads        AiThread[]
+  pushDevices      PushDevice[]
+
+  @@index([publicNumber])
+  @@map("users")
+}
+
+// Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
+model PushDevice {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique @db.VarChar(512)
+  platform  String   @db.VarChar(16) // android | ios | web
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([userId])
+  @@map("push_devices")
+}
+
+// Codes de vérification email (OTP 6 chiffres) — envoyés via Firebase/email
+model EmailVerification {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String
+  codeHash  String // hash du code OTP à 6 chiffres (jamais en clair)
+  expiresAt DateTime @db.Timestamptz
+  consumed  Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([email])
+  @@map("email_verifications")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String // hash du refresh token
+  expiresAt DateTime @db.Timestamptz
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Profile {
+  userId      String   @id @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // « pseudo » choisi par l'utilisateur
+  displayName String   @db.VarChar(100)
+  avatarUrl   String?
+  statusMsg   String?  @db.VarChar(255)
+  lastSeen    DateTime? @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  @@map("profiles")
+}
+
+model Contact {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  contactId String   @db.Uuid
+  user      User     @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
+  contact   User     @relation("ContactOf", fields: [contactId], references: [id], onDelete: Cascade)
+  alias     String?  @db.VarChar(100) // nom donné par l'utilisateur dans son répertoire
+  isBlocked Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@unique([userId, contactId])
+  @@index([userId])
+  @@map("contacts")
+}
+
+// ---------------------------------------------------------------------------
+// MESSAGERIE
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  isGroup   Boolean  @default(false)
+  name      String?  @db.VarChar(150) // nom du groupe (null pour les conversations directes)
+  avatarUrl String?
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  participants Participant[]
+  messages     Message[]
+
+  @@map("conversations")
+}
+
+enum ParticipantRole {
+  MEMBER
+  ADMIN
+}
+
+model Participant {
+  id       String          @id @default(uuid()) @db.Uuid
+  convId   String          @db.Uuid
+  userId   String          @db.Uuid
+  conv     Conversation    @relation(fields: [convId], references: [id], onDelete: Cascade)
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role     ParticipantRole @default(MEMBER)
+  joinedAt DateTime        @default(now()) @db.Timestamptz
+  // Pointeur de lecture pour calculer les non-lus
+  lastReadAt DateTime?     @db.Timestamptz
+
+  @@unique([convId, userId])
+  @@index([userId])
+  @@map("participants")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  AUDIO // message vocal
+  VIDEO
+  SYSTEM
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+model Message {
+  id        String        @id @default(uuid()) @db.Uuid
+  convId    String        @db.Uuid
+  senderId  String        @db.Uuid
+  conv      Conversation  @relation(fields: [convId], references: [id], onDelete: Cascade)
+  sender    User          @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content   String?       // texte (null pour médias purs)
+  type      MessageType   @default(TEXT)
+  status    MessageStatus @default(SENT)
+  replyToId String?       @db.Uuid
+  replyTo   Message?      @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies   Message[]     @relation("MessageReplies")
+  media     MediaFile[]
+  createdAt DateTime      @default(now()) @db.Timestamptz
+  editedAt  DateTime?     @db.Timestamptz
+  deletedAt DateTime?     @db.Timestamptz
+
+  @@index([convId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// MÉDIAS (binaires sur disque, métadonnées en base)
+// ---------------------------------------------------------------------------
+
+model MediaFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  ownerId      String   @db.Uuid
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  messageId    String?  @db.Uuid
+  message      Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  url          String // chemin/URL d'accès (le binaire est stocké hors BD)
+  thumbnailUrl String?
+  durationMs   Int? // pour audio/vidéo (messages vocaux, appels)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  @@index([ownerId])
+  @@index([messageId])
+  @@map("media_files")
+}
+
+// ---------------------------------------------------------------------------
+// STATUTS (stories éphémères, 24 h)
+// ---------------------------------------------------------------------------
+
+enum StatusType {
+  TEXT
+  IMAGE
+  VIDEO
+}
+
+model Status {
+  id        String       @id @default(uuid()) @db.Uuid
+  userId    String       @db.Uuid
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      StatusType   @default(TEXT)
+  text      String?      @db.VarChar(700)
+  mediaUrl  String?
+  bgColor   String?      @db.VarChar(9) // couleur de fond pour les statuts texte
+  createdAt DateTime     @default(now()) @db.Timestamptz
+  expiresAt DateTime     @db.Timestamptz // createdAt + 24 h
+
+  views StatusView[]
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("statuses")
+}
+
+model StatusView {
+  id       String   @id @default(uuid()) @db.Uuid
+  statusId String   @db.Uuid
+  viewerId String   @db.Uuid
+  status   Status   @relation(fields: [statusId], references: [id], onDelete: Cascade)
+  viewer   User     @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+  viewedAt DateTime @default(now()) @db.Timestamptz
+
+  @@unique([statusId, viewerId])
+  @@map("status_views")
+}
+
+// ---------------------------------------------------------------------------
+// APPELS (WebRTC : signaling + métadonnées)
+// ---------------------------------------------------------------------------
+
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ONGOING
+  ENDED
+  MISSED
+  REJECTED
+}
+
+model Call {
+  id        String     @id @default(uuid()) @db.Uuid
+  initiatorId String   @db.Uuid
+  initiator User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  convId    String?    @db.Uuid
+  type      CallType   @default(AUDIO)
+  status    CallStatus @default(RINGING)
+  startedAt DateTime   @default(now()) @db.Timestamptz
+  answeredAt DateTime? @db.Timestamptz
+  endedAt   DateTime?  @db.Timestamptz
+
+  participants CallParticipant[]
+
+  @@index([initiatorId])
+  @@map("calls")
+}
+
+model CallParticipant {
+  id       String    @id @default(uuid()) @db.Uuid
+  callId   String    @db.Uuid
+  userId   String    @db.Uuid
+  call     Call      @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime? @db.Timestamptz
+  leftAt   DateTime? @db.Timestamptz
+
+  @@unique([callId, userId])
+  @@map("call_participants")
+}
+
+// ---------------------------------------------------------------------------
+// IA CONVERSATIONNELLE (Gemini)
+// ---------------------------------------------------------------------------
+
+enum AiRole {
+  USER
+  MODEL
+}
+
+model AiThread {
+  id        String      @id @default(uuid()) @db.Uuid
+  userId    String      @db.Uuid
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?     @db.VarChar(150)
+  createdAt DateTime    @default(now()) @db.Timestamptz
+  updatedAt DateTime    @updatedAt @db.Timestamptz
+
+  messages AiMessage[]
+
+  @@index([userId])
+  @@map("ai_threads")
+}
+
+model AiMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  threadId  String   @db.Uuid
+  thread    AiThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role      AiRole
+  content   String
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([threadId, createdAt])
+  @@map("ai_messages")
+}
