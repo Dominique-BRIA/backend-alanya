@@ -1,4 +1,4 @@
-import { type NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -82,7 +82,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       call: { status: { in: ["RINGING", "ONGOING"] } },
     },
   });
-  if (busy) return fail("Vous êtes déjà en appel", 409, "BUSY");
+
+  // Correction de la gestion d'erreur ici
+  if (busy) {
+    return NextResponse.json(
+      { message: "Vous êtes déjà en appel", code: "BUSY" },
+      { status: 409 }
+    );
+  }
 
   const convParts = await prisma.participant.findMany({
     where: { convId },
