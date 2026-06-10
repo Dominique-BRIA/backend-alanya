@@ -27,8 +27,10 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     where: { id },
     data: { status: status as "ENDED" | "MISSED", endedAt: now },
   });
+  // Marque TOUS les participants comme sortis (pas seulement le demandeur),
+  // pour éviter des CallParticipant orphelins avec leftAt = null.
   await prisma.callParticipant.updateMany({
-    where: { callId: id, userId },
+    where: { callId: id, leftAt: null },
     data: { leftAt: now },
   });
 
