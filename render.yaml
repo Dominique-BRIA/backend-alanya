@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: alanya-ws
+    runtime: node
+    repo: https://github.com/Dominique-BRIA/alanya  # adapte si ton repo backend est séparé
+    rootDir: .
+    buildCommand: npm install && npx prisma generate
+    startCommand: node ws-server.mjs
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false   # à renseigner dans le dashboard Render
+      - key: JWT_ACCESS_SECRET
+        sync: false   # à renseigner dans le dashboard Render
+      - key: WS_PORT
+        value: "3001"
+    healthCheckPath: /
+    autoDeploy: true
