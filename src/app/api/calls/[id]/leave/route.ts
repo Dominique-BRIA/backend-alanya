@@ -25,17 +25,18 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     data: { leftAt: now },
   });
 
-  const stillActive = part.call.participants.filter(
-    (p) => p.userId !== userId && p.joinedAt && !p.leftAt,
-  );
+  // Re-query depuis la base pour éviter une race condition avec le snapshot en mémoire.
+  const stillActiveCount = await prisma.callParticipant.count({
+    where: { callId: id, joinedAt: { not: null }, leftAt: null },
+  });
 
   // Plus personne en ligne : on clôture l'appel.
-  if (stillActive.length === 0) {
+  if (stillActiveCount === 0) {
     await prisma.call.update({
       where: { id },
       data: { status: "ENDED", endedAt: now },
     });
   }
 
-  return ok({ id, left: true, callEnded: stillActive.length === 0 });
+  return ok({ id, left: true, callEnded: stillActiveCount === 0 });
 });

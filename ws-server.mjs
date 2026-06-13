@@ -11,7 +11,8 @@ import { parse } from "node:url";
 import { isPushEnabled, pushIncomingCall, pushNewMessage } from "./push.mjs";
 
 const prisma = new PrismaClient();
-const PORT = Number(process.env.WS_PORT ?? 3001);
+// Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
+const PORT = Number(process.env.PORT ?? process.env.WS_PORT ?? 3001);
 const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 
 if (!ACCESS_SECRET) {
@@ -261,16 +262,18 @@ async function handleCallState(ws, msg) {
   if (!callId || !state) return;
   const ids = await callParticipantIds(callId);
   if (!ids.includes(ws.userId)) return;
+  const payload = {
+    type: "call_state",
+    callId,
+    state,
+    from: ws.userId,
+    userId: joinedUserId ?? ws.userId,
+    displayName: displayName ?? null,
+  };
   for (const uid of ids) {
-    if (uid === ws.userId) continue;
-    sendTo(uid, {
-      type: "call_state",
-      callId,
-      state,
-      from: ws.userId,
-      userId: joinedUserId ?? ws.userId,
-      displayName: displayName ?? null,
-    });
+    // Envoie à tous les participants, y compris l'émetteur lui-même
+    // pour synchroniser ses autres appareils connectés.
+    sendTo(uid, payload);
   }
 }
 

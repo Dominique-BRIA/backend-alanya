@@ -45,10 +45,20 @@ export const updateProfileSchema = z.object({
   statusMsg: z.string().trim().max(255).nullable().optional(),
 });
 
-export const addContactSchema = z.object({
-  publicNumber: publicNumberSchema,
-  alias: z.string().trim().max(100).optional(),
-});
+export const addContactSchema = z
+  .object({
+    publicNumber: publicNumberSchema.optional(),
+    number: publicNumberSchema.optional(),
+    alias: z.string().trim().max(100).optional(),
+  })
+  .transform((d) => ({
+    publicNumber: (d.publicNumber ?? d.number) as string,
+    alias: d.alias,
+  }))
+  .refine((d) => Boolean(d.publicNumber), {
+    message: "publicNumber est requis (6 chiffres)",
+    path: ["publicNumber"],
+  });
 
 export const updateContactSchema = z.object({
   alias: z.string().trim().max(100).nullable().optional(),
