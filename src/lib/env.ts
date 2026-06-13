@@ -73,10 +73,27 @@ export const env = {
     iceServers(): Array<{ urls: string | string[]; username?: string; credential?: string }> {
       const servers: Array<{ urls: string | string[]; username?: string; credential?: string }> =
         [];
-      const stunRaw = optional("STUN_URLS", "stun:stun.l.google.com:19302");
+
+      // STUN servers (plusieurs pour la redondance)
+      const stunRaw = optional("STUN_URLS",
+        "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun.cloudflare.com:3478"
+      );
       for (const url of stunRaw.split(",").map((s) => s.trim()).filter(Boolean)) {
         servers.push({ urls: url });
       }
+
+      // TURN server via Metered (gratuit, nécessite METERED_API_KEY)
+      const meteredKey = optional("METERED_API_KEY");
+      const meteredDomain = optional("METERED_DOMAIN");
+      if (meteredKey && meteredDomain) {
+        servers.push(
+          { urls: `turn:${meteredDomain}:80`, username: "openrelayproject", credential: meteredKey },
+          { urls: `turn:${meteredDomain}:443`, username: "openrelayproject", credential: meteredKey },
+          { urls: `turns:${meteredDomain}:443`, username: "openrelayproject", credential: meteredKey },
+        );
+      }
+
+      // TURN server manuel (optionnel)
       const turnUrl = optional("TURN_URL");
       if (turnUrl) {
         const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
@@ -86,6 +103,7 @@ export const env = {
         if (cred) entry.credential = cred;
         servers.push(entry);
       }
+
       return servers;
     },
   },
