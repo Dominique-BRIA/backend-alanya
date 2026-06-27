@@ -82,18 +82,19 @@ export const env = {
         servers.push({ urls: url });
       }
 
-      // TURN server via Metered (gratuit, nécessite METERED_API_KEY)
+      // TURN server via Metered
       const meteredKey = optional("METERED_API_KEY");
-      const meteredDomain = optional("METERED_DOMAIN");
-      if (meteredKey && meteredDomain) {
-        servers.push(
-          { urls: `turn:${meteredDomain}:80`, username: "openrelayproject", credential: meteredKey },
-          { urls: `turn:${meteredDomain}:443`, username: "openrelayproject", credential: meteredKey },
-          { urls: `turns:${meteredDomain}:443`, username: "openrelayproject", credential: meteredKey },
-        );
+      const meteredDomainRaw = optional("METERED_DOMAIN");
+      
+      if (meteredKey && meteredDomainRaw) {
+        // Enlève l'éventuel https:// pour construire les URI "turn:"
+        const meteredDomain = meteredDomainRaw.replace(/^https?:\/\//, '');
+        // On n'injecte plus manuellement openrelayproject ici si on a fourni TURN_USERNAME/CREDENTIAL
+        // On préfère laisser l'API dynamique (route.ts) s'en charger. Si on passe par le fallback, 
+        // les valeurs manuelles TURN_URL, TURN_USERNAME, TURN_CREDENTIAL seront utilisées ci-dessous.
       }
 
-      // TURN server manuel (optionnel)
+      // TURN server manuel (optionnel, utilisé en fallback)
       const turnUrl = optional("TURN_URL");
       if (turnUrl) {
         const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
