@@ -1,4 +1,4 @@
-# 🏠 Alanya — Backend API
+# 🏠 Alanya — Backend API -- BRIA GROUP
 
 > API backend pour l'application Alanya : messagerie temps réel, appels audio/vidéo, stories éphémères et assistant IA.
 
