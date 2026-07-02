@@ -91,19 +91,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
 // DELETE /api/media/:id — supprime le média (base + binaire stocké).
 // Seul le propriétaire peut supprimer son média.
-export const DELETE = withAuth(
-  async (_req: NextRequest, userId: string, ctx: { params: Promise<{ id: string }> }) => {
-    const { id } = await ctx.params;
+// NB : on n'annote PAS `ctx` → TypeScript l'infère depuis la signature de
+// `withAuth`, ce qui évite tout risque de désynchronisation de types.
+export const DELETE = withAuth(async (_req, userId, ctx) => {
+  const { id } = await ctx.params;
 
-    const media = await prisma.mediaFile.findUnique({ where: { id } });
-    if (!media) return fail("Média introuvable", 404, "NOT_FOUND");
-    if (media.ownerId !== userId) return fail("Accès refusé", 403, "FORBIDDEN");
+  const media = await prisma.mediaFile.findUnique({ where: { id } });
+  if (!media) return fail("Média introuvable", 404, "NOT_FOUND");
+  if (media.ownerId !== userId) return fail("Accès refusé", 403, "FORBIDDEN");
 
-    // Supprime d'abord le binaire (local ou B2), puis l'enregistrement en base.
-    // deleteStored est best-effort : un objet déjà absent ne fait pas échouer.
-    await deleteStored(media.url);
-    await prisma.mediaFile.delete({ where: { id } });
+  // Supprime d'abord le binaire (local ou B2), puis l'enregistrement en base.
+  // deleteStored est best-effort : un objet déjà absent ne fait pas échouer.
+  await deleteStored(media.url);
+  await prisma.mediaFile.delete({ where: { id } });
 
-    return NextResponse.json({ ok: true }, { status: 200 });
-  },
-);
+  return NextResponse.json({ ok: true }, { status: 200 });
+});

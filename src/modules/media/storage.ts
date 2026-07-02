@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
 import { env } from "@/lib/env";
+import { HttpError } from "@/lib/http";
 import { uploadToB2, getB2SignedUrl, readFromB2, deleteFromB2 } from "./b2";
 
 // =============================================================================
@@ -18,6 +19,29 @@ import { uploadToB2, getB2SignedUrl, readFromB2, deleteFromB2 } from "./b2";
 // Sélection du backend actif.
 export function useCloudStorage(): boolean {
   return env.media.provider === "b2" && env.media.b2.isConfigured();
+}
+
+// Détecte les environnements serverless à système de fichiers en lecture seule
+// (Vercel, AWS Lambda...). Sur ces plateformes, écrire dans le répertoire du
+// code déployé (/var/task/...) est impossible → d'où le fameux ENOENT/EROFS.
+function isServerlessReadOnly(): boolean {
+  return process.env.VERCEL === "1" || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
+// Garde-fou : en serverless, le stockage local est inutilisable. On échoue
+// TÔT avec un message explicite plutôt que d'attendre un "ENOENT mkdir" cryptique.
+// → indique clairement qu'il faut définir MEDIA_STORAGE_PROVIDER=b2 (+ clés B2)
+//   dans le dashboard de l'hébergeur (Vercel), car le fichier .env n'y est pas lu.
+export function assertStorageUsable(): void {
+  if (isServerlessReadOnly() && !useCloudStorage()) {
+    throw new HttpError(
+      500,
+      "Stockage local indisponible en serverless (FS en lecture seule). "
+        + "Définis MEDIA_STORAGE_PROVIDER=b2 ainsi que B2_KEY_ID et B2_APPLICATION_KEY "
+        + "dans le dashboard Vercel (le fichier .env local n'est PAS utilisé en production).",
+      "STORAGE_MISCONFIGURED",
+    );
+  }
 }
 
 // Répertoire absolu de stockage des binaires en mode local (hors base de données).
@@ -100,6 +124,9 @@ export async function saveBuffer(
   originalName: string,
   mime: string,
 ): Promise<{ storedName: string; relativeUrl: string }> {
+  // En serverless sans B2 configuré, on échoue tôt et clairement (cf. assertStorageUsable).
+  assertStorageUsable();
+
   const { storedName, relativeUrl } = buildRelativeUrl(originalName, mime);
 
   if (useCloudStorage()) {
