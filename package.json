@@ -14,17 +14,20 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:b2": "node --env-file=.env scripts/test-b2.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1077.0",
+    "@aws-sdk/s3-request-presigner": "^3.1077.0",
     "@prisma/client": "^6.1.0",
     "bcryptjs": "^2.4.3",
     "firebase-admin": "^13.0.2",
     "jsonwebtoken": "^9.0.2",
     "next": "16.2.7",
     "nodemailer": "^6.9.16",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "ws": "^8.21.0",
     "zod": "^3.24.1"
   },

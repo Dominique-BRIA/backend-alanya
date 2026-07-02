@@ -67,6 +67,26 @@ export const env = {
   media: {
     storageDir: optional("MEDIA_STORAGE_DIR", "./storage/media"),
     maxSizeMb: Number(optional("MEDIA_MAX_SIZE_MB", "50")),
+    // Backend de stockage : "local" (défaut) ou "b2" (Backblaze B2 cloud).
+    provider: optional("MEDIA_STORAGE_PROVIDER", "local").toLowerCase() as "local" | "b2",
+
+    // Configuration Backblaze B2 (API compatible S3).
+    b2: {
+      endpoint: optional("B2_ENDPOINT", "s3.us-west-004.backblazeb2.com"),
+      region: optional("B2_REGION", "us-west-004"),
+      bucket: optional("B2_BUCKET", "alanya"),
+      keyId: optional("B2_KEY_ID"),
+      applicationKey: optional("B2_APPLICATION_KEY"),
+      // Préfixe appliqué à toutes les clés d'objets dans le bucket (organisation).
+      keyPrefix: optional("B2_KEY_PREFIX", "media/"),
+      // Durée de validité des URLs présignées (en secondes) — 1h par défaut.
+      presignExpiresInSec: Number(optional("B2_PRESIGN_EXPIRES_IN_SEC", "3600")),
+      isConfigured(): boolean {
+        return Boolean(
+          optional("B2_BUCKET") && optional("B2_KEY_ID") && optional("B2_APPLICATION_KEY"),
+        );
+      },
+    },
   },
 
   webrtc: {
@@ -75,8 +95,9 @@ export const env = {
         [];
 
       // STUN servers (plusieurs pour la redondance)
-      const stunRaw = optional("STUN_URLS",
-        "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun.cloudflare.com:3478"
+      const stunRaw = optional(
+        "STUN_URLS",
+        "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun.cloudflare.com:3478",
       );
       for (const url of stunRaw.split(",").map((s) => s.trim()).filter(Boolean)) {
         servers.push({ urls: url });
@@ -85,13 +106,14 @@ export const env = {
       // TURN server via Metered
       const meteredKey = optional("METERED_API_KEY");
       const meteredDomainRaw = optional("METERED_DOMAIN");
-      
+
       if (meteredKey && meteredDomainRaw) {
         // Enlève l'éventuel https:// pour construire les URI "turn:"
-        const meteredDomain = meteredDomainRaw.replace(/^https?:\/\//, '');
+        const meteredDomain = meteredDomainRaw.replace(/^https?:\/\//, "");
         // On n'injecte plus manuellement openrelayproject ici si on a fourni TURN_USERNAME/CREDENTIAL
-        // On préfère laisser l'API dynamique (route.ts) s'en charger. Si on passe par le fallback, 
+        // On préfère laisser l'API dynamique (route.ts) s'en charger. Si on passe par le fallback,
         // les valeurs manuelles TURN_URL, TURN_USERNAME, TURN_CREDENTIAL seront utilisées ci-dessous.
+        void meteredDomain;
       }
 
       // TURN server manuel (optionnel, utilisé en fallback)

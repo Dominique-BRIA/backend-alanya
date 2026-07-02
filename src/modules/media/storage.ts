@@ -2,8 +2,25 @@ import { promises as fs } from "fs";
 import path from "path";
 import crypto from "crypto";
 import { env } from "@/lib/env";
+import { uploadToB2, getB2SignedUrl, readFromB2, deleteFromB2 } from "./b2";
 
-// Répertoire absolu de stockage des binaires (hors base de données).
+// =============================================================================
+// Couche de stockage des médias — abstraction provider.
+// =============================================================================
+// Deux backends possibles, choisis via MEDIA_STORAGE_PROVIDER :
+//   - "local" : système de fichiers (comportement historique, défaut)
+//   - "b2"    : Backblaze B2 (stockage objet cloud, via l'API S3)
+//
+// La signature publique (saveBuffer / readStored) est inchangée : les routes
+// n'ont pas à se soucier du backend sous-jacent.
+// =============================================================================
+
+// Sélection du backend actif.
+export function useCloudStorage(): boolean {
+  return env.media.provider === "b2" && env.media.b2.isConfigured();
+}
+
+// Répertoire absolu de stockage des binaires en mode local (hors base de données).
 export function storageRoot(): string {
   return path.isAbsolute(env.media.storageDir)
     ? env.media.storageDir
@@ -65,27 +82,68 @@ function extensionFor(filename: string, mime: string): string {
   return map[mime] ?? "";
 }
 
-// Écrit le binaire sur le disque et renvoie le nom de fichier stocké + le chemin relatif.
+// Génère la "clé" canonique d'un média : <YYYY-MM-DD>/<uuid><ext>.
+// Cette clé est stockée en base (MediaFile.url) et sert d'identifiant d'objet,
+// quel que soit le backend (locale = chemin relatif, B2 = clé objet).
+export function buildRelativeUrl(originalName: string, mime: string): {
+  storedName: string;
+  relativeUrl: string;
+} {
+  const day = new Date().toISOString().slice(0, 10);
+  const storedName = `${crypto.randomUUID()}${extensionFor(originalName, mime)}`;
+  return { storedName, relativeUrl: `${day}/${storedName}` };
+}
+
+// Persiste le binaire (disque OU B2) et renvoie la clé canonique stockée.
 export async function saveBuffer(
   buffer: Buffer,
   originalName: string,
   mime: string,
 ): Promise<{ storedName: string; relativeUrl: string }> {
-  const root = storageRoot();
-  // Répartition par jour pour éviter trop de fichiers dans un seul dossier.
-  const day = new Date().toISOString().slice(0, 10);
-  const dir = path.join(root, day);
-  await fs.mkdir(dir, { recursive: true });
+  const { storedName, relativeUrl } = buildRelativeUrl(originalName, mime);
 
-  const storedName = `${crypto.randomUUID()}${extensionFor(originalName, mime)}`;
-  await fs.writeFile(path.join(dir, storedName), buffer);
+  if (useCloudStorage()) {
+    await uploadToB2(buffer, relativeUrl, { contentType: mime });
+  } else {
+    const dir = path.join(storageRoot(), relativeUrl.slice(0, 10));
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(storageRoot(), relativeUrl), buffer);
+  }
 
-  // URL d'accès servie par /api/media/:id (l'id est en base).
-  return { storedName, relativeUrl: `${day}/${storedName}` };
+  return { storedName, relativeUrl };
 }
 
+// Lit le binaire (disque OU B2). En mode B2, préférez getSignedDownloadUrl +
+// redirection 302 plutôt que de tout charger en mémoire (cf. route GET /api/media/:id).
 export async function readStored(relativeUrl: string): Promise<Buffer> {
+  if (useCloudStorage()) {
+    return readFromB2(relativeUrl);
+  }
   // Empêche toute traversée de répertoire.
   const safe = path.normalize(relativeUrl).replace(/^(\.\.(\/|\\|$))+/, "");
   return fs.readFile(path.join(storageRoot(), safe));
+}
+
+// URL présignée d'accès à un objet privé (B2 uniquement).
+// Renvoie null en mode local (le fichier est servi directement par le backend).
+export async function getSignedDownloadUrl(
+  relativeUrl: string,
+  opts?: { expiresInSec?: number; responseContentDisposition?: string },
+): Promise<string | null> {
+  if (!useCloudStorage()) return null;
+  return getB2SignedUrl(relativeUrl, opts);
+}
+
+// Supprime le binaire (disque OU B2) — best-effort, n'échoue jamais
+// (un fichier déjà absent ne doit pas casser la suppression du média en base).
+export async function deleteStored(relativeUrl: string): Promise<void> {
+  try {
+    if (useCloudStorage()) {
+      await deleteFromB2(relativeUrl);
+    } else {
+      await fs.unlink(path.join(storageRoot(), relativeUrl));
+    }
+  } catch {
+    /* best-effort : fichier déjà absent ou inaccessible */
+  }
 }
