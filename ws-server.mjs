@@ -123,11 +123,26 @@ async function handleSend(ws, msg) {
 
   const serialized = serializeMessage(created, created.media);
   const recipients = await participantsOf(convId);
+
+  // --- Statut DELIVERED ---
+  // Si au moins un autre participant est en ligne, le message est « reçu » :
+  // on passe le statut de SENT à DELIVERED et on notifie l'expéditeur.
+  const otherOnline = recipients.some(
+    (uid) => uid !== ws.userId && isUserOnline(uid),
+  );
+  let finalStatus = created.status; // "SENT"
+  if (otherOnline) {
+    await prisma.message.update({ where: { id: created.id }, data: { status: "DELIVERED" } });
+    finalStatus = "DELIVERED";
+  }
+
+  // On diffuse le message (avec le statut potentiellement mis à jour) à tous les participants.
+  const messageWithStatus = { ...serialized, status: finalStatus };
   for (const uid of recipients) {
     // On renvoie le tempId uniquement à l'expéditeur pour réconcilier l'optimiste.
     sendTo(uid, {
       type: "message",
-      message: serialized,
+      message: messageWithStatus,
       tempId: uid === ws.userId ? tempId : undefined,
     });
   }
