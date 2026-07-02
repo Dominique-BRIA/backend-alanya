@@ -45,6 +45,7 @@ model User {
   callParticipants CallParticipant[]
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
+  messageHides     MessageHide[]
 
   @@index([publicNumber])
   @@map("users")
@@ -189,10 +190,28 @@ model Message {
   createdAt DateTime      @default(now()) @db.Timestamptz
   editedAt  DateTime?     @db.Timestamptz
   deletedAt DateTime?     @db.Timestamptz
+  hides     MessageHide[]
 
   @@index([convId, createdAt])
   @@index([senderId])
   @@map("messages")
+}
+
+// Suppression « pour moi » : enregistre qu'un utilisateur a masqué un message
+// de sa vue (les autres participants le voient toujours). @@unique empêche les
+// doublons ; onDelete: Cascade nettoie automatiquement si l'utilisateur ou le
+// message est supprimé.
+model MessageHide {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  messageId String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@unique([userId, messageId])
+  @@index([userId])
+  @@map("message_hides")
 }
 
 // ---------------------------------------------------------------------------
