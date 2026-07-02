@@ -277,130 +277,6 @@ async function handleCallState(ws, msg) {
   }
 }
 
-// Suppression de message : « pour moi » (masque localement) ou « pour tous »
-// (efface le contenu + détache les médias, visible par tous comme supprimé).
-async function handleDeleteMessage(ws, msg) {
-  const { messageId, scope } = msg;
-  if (!messageId) return;
-
-  const message = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!message) {
-    ws.send(JSON.stringify({ type: "error", message: "Message introuvable" }));
-    return;
-  }
-
-  // L'utilisateur doit participer à la conversation du message.
-  if (!(await isParticipant(message.convId, ws.userId))) return;
-
-  if (scope === "everyone") {
-    // Seul l'expéditeur peut supprimer pour tout le monde.
-    if (message.senderId !== ws.userId) {
-      ws.send(JSON.stringify({ type: "error", message: "Seul l'expéditeur peut supprimer pour tous" }));
-      return;
-    }
-    await prisma.message.update({
-      where: { id: messageId },
-      data: { deletedAt: new Date(), content: null },
-    });
-    // Détache les médias du message (ils restent en base mais ne sont plus liés).
-    await prisma.mediaFile.updateMany({
-      where: { messageId },
-      data: { messageId: null },
-    });
-
-    // Notifie TOUS les participants (y compris l'expéditeur pour confirmer).
-    const recipients = await participantsOf(message.convId);
-    for (const uid of recipients) {
-      sendTo(uid, {
-        type: "message_deleted",
-        messageId,
-        convId: message.convId,
-        scope: "everyone",
-      });
-    }
-  } else {
-    // « Pour moi » : masque le message pour cet utilisateur uniquement.
-    await prisma.messageHide.upsert({
-      where: { userId_messageId: { userId: ws.userId, messageId } },
-      create: { userId: ws.userId, messageId },
-      update: {},
-    });
-    // Confirme uniquement à l'expéditeur (les autres ne voient aucun changement).
-    sendTo(ws.userId, {
-      type: "message_deleted",
-      messageId,
-      convId: message.convId,
-      scope: "me",
-    });
-  }
-}
-
-// Transfert d'un message vers une ou plusieurs conversations cibles.
-// Copie le contenu + les médias (sans re-téléverser les binaires).
-async function handleForwardMessage(ws, msg) {
-  const { messageId, targetConvIds } = msg;
-  if (!messageId || !Array.isArray(targetConvIds) || targetConvIds.length === 0) return;
-
-  const original = await prisma.message.findUnique({
-    where: { id: messageId },
-    include: { media: true },
-  });
-  if (!original || original.deletedAt) return;
-
-  // L'utilisateur doit participer à la conversation source.
-  if (!(await isParticipant(original.convId, ws.userId))) return;
-
-  const results = [];
-  for (const targetConvId of targetConvIds) {
-    if (!(await isParticipant(targetConvId, ws.userId))) continue;
-
-    // Copie les médias (nouvelles entrées pointant vers le même binaire).
-    const mediaIds = [];
-    for (const m of original.media) {
-      const copy = await prisma.mediaFile.create({
-        data: {
-          ownerId: ws.userId,
-          filename: m.filename,
-          mimeType: m.mimeType,
-          sizeBytes: m.sizeBytes,
-          url: m.url,
-          durationMs: m.durationMs,
-        },
-      });
-      mediaIds.push(copy.id);
-    }
-
-    const created = await prisma.message.create({
-      data: {
-        convId: targetConvId,
-        senderId: ws.userId,
-        content: original.content,
-        type: original.type,
-        status: "SENT",
-        ...(mediaIds.length > 0 ? { media: { connect: mediaIds.map((id) => ({ id })) } } : {}),
-      },
-      include: { media: true },
-    });
-
-    await prisma.conversation.update({
-      where: { id: targetConvId },
-      data: { updatedAt: new Date() },
-    });
-
-    // Diffuse le nouveau message aux participants de la conversation cible.
-    const serialized = serializeMessage(created, created.media);
-    const recipients = await participantsOf(targetConvId);
-    for (const uid of recipients) {
-      sendTo(uid, { type: "message", message: serialized });
-    }
-
-    results.push({ convId: targetConvId, messageId: created.id });
-  }
-
-  // Confirme le résultat à l'expéditeur.
-  sendTo(ws.userId, { type: "forwarded", results });
-}
-
 const wss = new WebSocketServer({ port: PORT });
 
 wss.on("error", (err) => {
@@ -456,8 +332,6 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_ring") await handleCallRing(ws, msg);
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
       else if (msg.type === "call_state") await handleCallState(ws, msg);
-      else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
-      else if (msg.type === "forward_message") await handleForwardMessage(ws, msg);
     } catch (e) {
       console.error("[ws] erreur de traitement:", e);
       ws.send(JSON.stringify({ type: "error", message: "Erreur serveur", tempId: msg?.tempId }));

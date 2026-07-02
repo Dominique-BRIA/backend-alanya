@@ -17,13 +17,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? PAGE_SIZE), 100);
 
   const messages = await prisma.message.findMany({
-    where: {
-      convId,
-      // On GARDE les messages supprimés (deletedAt != null) pour afficher le
-    // placeholder « Ce message a été supprimé ». On EXCLUT seulement les
-    // messages que CET utilisateur a masqués (« supprimer pour moi »).
-      hides: { none: { userId } },
-    },
+    where: { convId, deletedAt: null },
     orderBy: { createdAt: "desc" },
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -42,7 +36,6 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
       type: m.type,
       status: m.status,
       replyToId: m.replyToId,
-      deletedAt: m.deletedAt,
       media: m.media.map((f) => ({
         id: f.id,
         url: `/api/media/${f.id}`,
