@@ -29,3 +29,10 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     })),
   });
 });
+
+// DELETE /api/ai/messages — efface tout l'historique de la conversation IA.
+export const DELETE = withAuth(async (_req: NextRequest, userId: string) => {
+  // Supprime le thread (cascade : les messages sont supprimés automatiquement).
+  await prisma.aiThread.deleteMany({ where: { userId } });
+  return ok({ deleted: true });
+});
