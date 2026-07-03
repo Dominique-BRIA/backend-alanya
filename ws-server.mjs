@@ -65,8 +65,11 @@ async function isParticipant(convId, userId) {
   return Boolean(p);
 }
 
-function serializeMessage(m, media) {
-  return {
+// Sérialise un message pour l'envoi WebSocket. Inclut un snapshot du message
+// cité (replyTo) si le message est une réponse — permet à l'UI d'afficher
+// l'aperçu même si le message original n'est plus chargé en mémoire locale.
+async function serializeMessage(m, media) {
+  const base = {
     id: m.id,
     convId: m.convId,
     senderId: m.senderId,
@@ -84,6 +87,25 @@ function serializeMessage(m, media) {
     })),
     createdAt: m.createdAt,
   };
+
+  // Si ce message est une réponse, on inclut un snapshot du message cité.
+  if (m.replyToId) {
+    const target = await prisma.message.findUnique({
+      where: { id: m.replyToId },
+      select: { senderId: true, content: true, type: true, deletedAt: true },
+    });
+    if (target) {
+      base.replyTo = {
+        id: m.replyToId,
+        senderId: target.senderId,
+        type: target.type,
+        content: target.deletedAt ? null : target.content,
+        isDeleted: target.deletedAt !== null,
+      };
+    }
+  }
+
+  return base;
 }
 
 async function handleSend(ws, msg) {
@@ -121,7 +143,7 @@ async function handleSend(ws, msg) {
   });
   await prisma.conversation.update({ where: { id: convId }, data: { updatedAt: new Date() } });
 
-  const serialized = serializeMessage(created, created.media);
+  const serialized = await serializeMessage(created, created.media);
   const recipients = await participantsOf(convId);
 
   // --- Statut DELIVERED ---
@@ -403,7 +425,7 @@ async function handleForwardMessage(ws, msg) {
     });
 
     // Diffuse le nouveau message aux participants de la conversation cible.
-    const serialized = serializeMessage(created, created.media);
+    const serialized = await serializeMessage(created, created.media);
     const recipients = await participantsOf(targetConvId);
     for (const uid of recipients) {
       sendTo(uid, { type: "message", message: serialized });

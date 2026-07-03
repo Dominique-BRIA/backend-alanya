@@ -33,26 +33,55 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const hasMore = messages.length > limit;
   const page = hasMore ? messages.slice(0, limit) : messages;
 
+  // --- Snapshots des messages cités (replyTo) ---
+  // On récupère en une seule requête tous les messages référencés par replyToId,
+  // pour pouvoir afficher l'aperçu côté UI même si le message original n'est pas
+  // chargé en mémoire locale.
+  const replyIds = [...new Set(
+    page.map((m) => m.replyToId).filter(Boolean) as string[],
+  )];
+  const replyTargets = replyIds.length > 0
+    ? await prisma.message.findMany({
+        where: { id: { in: replyIds } },
+        select: { id: true, senderId: true, content: true, type: true, deletedAt: true },
+      })
+    : [];
+  const replyMap = new Map(replyTargets.map((t) => [t.id, t]));
+
   return ok({
-    messages: page.map((m) => ({
-      id: m.id,
-      convId: m.convId,
-      senderId: m.senderId,
-      content: m.content,
-      type: m.type,
-      status: m.status,
-      replyToId: m.replyToId,
-      deletedAt: m.deletedAt,
-      media: m.media.map((f) => ({
-        id: f.id,
-        url: `/api/media/${f.id}`,
-        filename: f.filename,
-        mimeType: f.mimeType,
-        sizeBytes: f.sizeBytes,
-        durationMs: f.durationMs,
-      })),
-      createdAt: m.createdAt,
-    })),
+    messages: page.map((m) => {
+      let replyTo = null;
+      if (m.replyToId && replyMap.has(m.replyToId)) {
+        const t = replyMap.get(m.replyToId)!;
+        replyTo = {
+          id: m.replyToId,
+          senderId: t.senderId,
+          type: t.type,
+          content: t.deletedAt ? null : t.content,
+          isDeleted: t.deletedAt !== null,
+        };
+      }
+      return {
+        id: m.id,
+        convId: m.convId,
+        senderId: m.senderId,
+        content: m.content,
+        type: m.type,
+        status: m.status,
+        replyToId: m.replyToId,
+        replyTo,
+        deletedAt: m.deletedAt,
+        media: m.media.map((f) => ({
+          id: f.id,
+          url: `/api/media/${f.id}`,
+          filename: f.filename,
+          mimeType: f.mimeType,
+          sizeBytes: f.sizeBytes,
+          durationMs: f.durationMs,
+        })),
+        createdAt: m.createdAt,
+      };
+    }),
     nextCursor: hasMore ? page[page.length - 1]!.id : null,
   });
 });
