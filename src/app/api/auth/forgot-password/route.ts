@@ -30,7 +30,6 @@ export async function POST(req: NextRequest) {
 
       // ATTEND que l'email soit parti (sinon Vercel tue la fonction serverless trop tôt)
       await sendOtpEmail(email, code);
-      );
     }
 
     return ok({ message: "Si ce compte existe, un email lui a été envoyé." });
