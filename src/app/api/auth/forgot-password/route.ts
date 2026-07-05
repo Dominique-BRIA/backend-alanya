@@ -28,9 +28,8 @@ export async function POST(req: NextRequest) {
         data: { email, codeHash, expiresAt },
       });
 
-      // Envoie l'email en arrière-plan (fire and forget).
-      sendOtpEmail(email, code).catch((e) =>
-        console.error("[forgot-password] Erreur envoi email:", e),
+      // ATTEND que l'email soit parti (sinon Vercel tue la fonction serverless trop tôt)
+      await sendOtpEmail(email, code);
       );
     }
 
