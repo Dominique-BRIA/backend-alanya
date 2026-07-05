@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     const rl = rateLimit(`forgot:${clientIp(req)}`, 5, 60_000); // 5 req/min
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
-    const { email } = emailSchema.parse(await req.json());
+    const email = emailSchema.parse(await req.json());
 
     const user = await prisma.user.findUnique({ where: { email } });
 
