@@ -74,6 +74,31 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const { convId, type } = createCallSchema.parse(await req.json());
   await assertParticipant(convId, userId);
 
+  // AUTO-CLEANUP : termine les anciens appels restés bloqués (RINGING > 2min ou ONGOING > 2h)
+  // pour cet utilisateur. Évite l'erreur 409 BUSY après un crash de l'app.
+  const staleThreshold = new Date(Date.now() - 2 * 60 * 1000); // 2 minutes pour RINGING
+  const staleCalls = await prisma.callParticipant.findMany({
+    where: {
+      userId,
+      leftAt: null,
+      call: {
+        status: "RINGING",
+        startedAt: { lt: staleThreshold },
+      },
+    },
+    select: { callId: true },
+  });
+  if (staleCalls.length > 0) {
+    await prisma.call.updateMany({
+      where: { id: { in: staleCalls.map((s) => s.callId) } },
+      data: { status: "ENDED", endedAt: new Date() },
+    });
+    await prisma.callParticipant.updateMany({
+      where: { callId: { in: staleCalls.map((s) => s.callId) } },
+      data: { leftAt: new Date() },
+    });
+  }
+
   const busy = await prisma.callParticipant.findFirst({
     where: {
       userId,
