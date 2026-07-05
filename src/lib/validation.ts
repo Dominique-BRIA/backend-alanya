@@ -37,7 +37,7 @@ export const refreshSchema = z.object({
 export const publicNumberSchema = z
   .string()
   .trim()
-  .regex(/^\d{6}$/, "Le numéro doit comporter 6 chiffres");
+  .regex(/^(\d{6}|\d{8})$/, "Le numéro doit comporter 6 ou 8 chiffres");
 
 export const updateProfileSchema = z.object({
   pseudo: z.string().trim().min(2).max(100).optional(),
