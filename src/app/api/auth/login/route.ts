@@ -7,7 +7,7 @@ import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 // POST /api/auth/login
-// Connexion par email OU par numéro public à 6 chiffres + mot de passe.
+// Connexion par email OU par numéro public (6 ou 8 chiffres) + mot de passe.
 export async function POST(req: NextRequest) {
   try {
     const rl = rateLimit(`login:${clientIp(req)}`, 5, 60_000);
@@ -15,7 +15,11 @@ export async function POST(req: NextRequest) {
 
     const { identifier, password } = loginSchema.parse(await req.json());
 
-    const isPublicNumber = /^\d{6}$/.test(identifier);
+    // Un identifiant est un publicNumber si c'est 6 OU 8 chiffres.
+    // (Les nouveaux comptes ont 8 chiffres, cf. generateUniquePublicNumber.
+    // Le format 6 chiffres reste supporté pour rétrocompatibilité avec les
+    // éventuels comptes historiques.)
+    const isPublicNumber = /^(\d{6}|\d{8})$/.test(identifier);
     const user = await prisma.user.findFirst({
       where: isPublicNumber
         ? { publicNumber: identifier }

@@ -41,7 +41,20 @@ export const publicNumberSchema = z
 
 export const updateProfileSchema = z.object({
   pseudo: z.string().trim().min(2).max(100).optional(),
-  avatarUrl: z.string().url().max(2048).nullable().optional(),
+  // avatarUrl : accepte soit une URL absolue (https://...), soit un chemin
+  // interne relatif renvoyé par POST /api/media (ex: /api/media/<uuid>).
+  // Le client Flutter fournit toujours la variante relative pour rester
+  // indépendant du domaine backend.
+  avatarUrl: z
+    .string()
+    .trim()
+    .max(2048)
+    .regex(
+      /^(https?:\/\/[^\s]+|\/api\/media\/[a-zA-Z0-9-]+)$/,
+      "avatarUrl doit être une URL https ou un chemin /api/media/<id>",
+    )
+    .nullable()
+    .optional(),
   statusMsg: z.string().trim().max(255).nullable().optional(),
 });
 

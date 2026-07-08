@@ -6,7 +6,7 @@ import { z } from "zod";
 
 const matchSchema = z.object({
   numbers: z
-    .array(z.string().trim().regex(/^\d{6}$/, "Numéro invalide"))
+    .array(z.string().trim().regex(/^(\d{6}|\d{8})$/, "Numéro invalide"))
     .min(1)
     .max(500),
 });

@@ -41,7 +41,22 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const isOwner = media.ownerId === userId;
     const isParticipant =
       media.message?.conv.participants.some((p) => p.userId === userId) ?? false;
-    if (!isOwner && !isParticipant) return fail("Accès refusé", 403, "FORBIDDEN");
+
+    // Un média est aussi accessible s'il est utilisé comme avatar d'un profil.
+    // Les avatars sont par nature publics à toute personne authentifiée
+    // (sinon impossible d'afficher l'avatar de tes contacts).
+    const isAvatar = !isOwner && !isParticipant
+      ? Boolean(
+          await prisma.profile.findFirst({
+            where: { avatarUrl: `/api/media/${id}` },
+            select: { id: true },
+          }),
+        )
+      : false;
+
+    if (!isOwner && !isParticipant && !isAvatar) {
+      return fail("Accès refusé", 403, "FORBIDDEN");
+    }
 
     // ?download=1 force le téléchargement (Content-Disposition: attachment),
     // utile même en cross-origin depuis l'app web.
