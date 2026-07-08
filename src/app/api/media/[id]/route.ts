@@ -49,7 +49,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       ? Boolean(
           await prisma.profile.findFirst({
             where: { avatarUrl: `/api/media/${id}` },
-            select: { id: true },
+            select: { userId: true },
           }),
         )
       : false;
