@@ -236,12 +236,39 @@ async function callParticipantIds(callId) {
 // Notifie les autres participants qu'un appel sonne (après POST /api/calls).
 async function handleCallRing(ws, msg) {
   const { callId } = msg;
-  if (!callId) return;
-  const call = await prisma.call.findUnique({
-    where: { id: callId },
-    include: { initiator: { include: { profile: true } } },
-  });
-  if (!call || call.initiatorId !== ws.userId || call.status !== "RINGING") return;
+  console.log(`[call_ring] ⬇️ reçu de user=${ws.userId} callId=${callId}`);
+  if (!callId) {
+    console.warn(`[call_ring] ❌ callId manquant`);
+    return;
+  }
+
+  // FIX race Vercel↔Render : le POST /api/calls vient d'être fait sur Vercel,
+  // mais la ligne peut ne pas être encore visible côté Render (pooler / replica lag).
+  // On retente la lecture jusqu'à 5 fois avec 200ms d'attente.
+  let call = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    call = await prisma.call.findUnique({
+      where: { id: callId },
+      include: { initiator: { include: { profile: true } } },
+    });
+    if (call) break;
+    console.warn(`[call_ring] ⏳ call introuvable (tentative ${attempt + 1}/5), retry dans 200ms`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  if (!call) {
+    console.error(`[call_ring] ❌ ABANDON: call ${callId} introuvable après 5 tentatives`);
+    ws.send(JSON.stringify({ type: "error", message: "Appel introuvable", callId }));
+    return;
+  }
+  if (call.initiatorId !== ws.userId) {
+    console.error(`[call_ring] ❌ ABANDON: initiatorId=${call.initiatorId} != ws.userId=${ws.userId}`);
+    return;
+  }
+  if (call.status !== "RINGING") {
+    console.error(`[call_ring] ❌ ABANDON: status=${call.status} (attendu RINGING)`);
+    return;
+  }
 
   const callerName = call.initiator.profile?.displayName ?? call.initiator.publicNumber;
   let isGroup = false;
@@ -257,8 +284,11 @@ async function handleCallRing(ws, msg) {
     memberCount = conv?.participants.length ?? 0;
   }
   const targets = await callParticipantIds(callId);
+  console.log(`[call_ring] 🎯 cibles=${JSON.stringify(targets)} (émetteur exclu)`);
   for (const uid of targets) {
     if (uid === ws.userId) continue;
+    const online = isUserOnline(uid);
+    console.log(`[call_ring] → envoi incoming_call à ${uid} (online=${online})`);
     sendTo(uid, {
       type: "incoming_call",
       callId,
@@ -282,6 +312,7 @@ async function handleCallRing(ws, msg) {
       });
     }
   }
+  console.log(`[call_ring] ✅ terminé pour callId=${callId}`);
 }
 
 // Relaie la signalisation WebRTC (offer / answer / ICE) entre participants.
