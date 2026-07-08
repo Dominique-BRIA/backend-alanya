@@ -57,6 +57,9 @@ const ALLOWED_MIME = new Set([
   "image/png",
   "image/gif",
   "image/webp",
+  // Formats iPhone récents (photos par défaut sur iOS 11+).
+  "image/heic",
+  "image/heif",
   "audio/mpeg",
   "audio/mp4",
   "audio/aac",
