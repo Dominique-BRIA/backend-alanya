@@ -47,6 +47,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       isGroup,
       peerName,
       peerNumber: isGroup ? null : (peer?.publicNumber ?? null),
+      peerAvatarUrl: isGroup ? null : (peer?.profile?.avatarUrl ?? null),
       participantCount: c.participants.length,
       startedAt: c.startedAt,
       answeredAt: c.answeredAt,
