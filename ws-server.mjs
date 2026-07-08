@@ -37,16 +37,70 @@ function removeClient(userId, ws) {
 
 function sendTo(userId, payload) {
   const set = clients.get(userId);
-  if (!set) return;
+  if (!set) return false;
   const data = JSON.stringify(payload);
+  let delivered = false;
   for (const ws of set) {
-    if (ws.readyState === ws.OPEN) ws.send(data);
+    if (ws.readyState === ws.OPEN) {
+      ws.send(data);
+      delivered = true;
+    }
   }
+  return delivered;
 }
 
 function isUserOnline(userId) {
   const set = clients.get(userId);
-  return Boolean(set?.size);
+  if (!set) return false;
+  // FIX: ne compter QUE les sockets réellement OPEN.
+  // Sinon isUserOnline peut renvoyer true pour un socket zombie
+  // (readyState=2 CLOSING ou 3 CLOSED) pas encore nettoyé par le heartbeat.
+  for (const ws of set) {
+    if (ws.readyState === ws.OPEN) return true;
+  }
+  return false;
+}
+
+// FIX: buffer des trames "incoming_call" non délivrées.
+// Sur mobile 4G/VPN les sockets tombent régulièrement (errno 103 ECONNABORTED).
+// Si le serveur envoie incoming_call pendant que B est en train de reconnecter,
+// la trame est perdue. On la rejoue à la reconnexion tant que l'appel est RINGING.
+// Map: userId -> Array<{payload, expiresAt}>
+const pendingCalls = new Map();
+
+function bufferPendingCall(userId, payload) {
+  const list = pendingCalls.get(userId) ?? [];
+  // TTL 60s (durée max d'une sonnerie).
+  list.push({ payload, expiresAt: Date.now() + 60_000 });
+  pendingCalls.set(userId, list);
+}
+
+async function flushPendingCalls(userId, ws) {
+  const list = pendingCalls.get(userId);
+  if (!list?.length) return;
+  const now = Date.now();
+  const stillValid = [];
+  for (const { payload, expiresAt } of list) {
+    if (expiresAt < now) continue;
+    // Vérifie que l'appel est encore en RINGING avant de rejouer.
+    try {
+      const call = await prisma.call.findUnique({
+        where: { id: payload.callId },
+        select: { status: true },
+      });
+      if (call?.status !== "RINGING") continue;
+    } catch {
+      continue;
+    }
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify(payload));
+      console.log(`[replay] 🔁 incoming_call rejoué à ${userId} callId=${payload.callId}`);
+    } else {
+      stillValid.push({ payload, expiresAt });
+    }
+  }
+  if (stillValid.length) pendingCalls.set(userId, stillValid);
+  else pendingCalls.delete(userId);
 }
 
 async function participantsOf(convId) {
@@ -287,9 +341,7 @@ async function handleCallRing(ws, msg) {
   console.log(`[call_ring] 🎯 cibles=${JSON.stringify(targets)} (émetteur exclu)`);
   for (const uid of targets) {
     if (uid === ws.userId) continue;
-    const online = isUserOnline(uid);
-    console.log(`[call_ring] → envoi incoming_call à ${uid} (online=${online})`);
-    sendTo(uid, {
+    const payload = {
       type: "incoming_call",
       callId,
       convId: call.convId,
@@ -299,7 +351,14 @@ async function handleCallRing(ws, msg) {
       isGroup,
       groupName,
       memberCount,
-    });
+    };
+    const delivered = sendTo(uid, payload);
+    console.log(`[call_ring] → envoi incoming_call à ${uid} (delivered=${delivered})`);
+    if (!delivered) {
+      // Buffer pour rejouer à la reconnexion (cas typique mobile 4G qui drop).
+      bufferPendingCall(uid, payload);
+      console.log(`[call_ring] 💾 bufferisé pour rejeu (${uid})`);
+    }
     if (isPushEnabled()) {
       await pushIncomingCall(prisma, {
         recipientId: uid,
@@ -506,6 +565,12 @@ wss.on("connection", (ws, req) => {
   addClient(userId, ws);
   ws.send(JSON.stringify({ type: "ready" }));
 
+  // FIX: rejoue les incoming_call bufferisés pendant une éventuelle déconnexion.
+  // Indispensable pour les réseaux mobiles instables (4G Cameroun/VPN Render).
+  flushPendingCalls(userId, ws).catch((e) =>
+    console.error(`[replay] erreur flush pour ${userId}:`, e),
+  );
+
   ws.on("pong", () => {
     ws.isAlive = true;
   });
@@ -537,16 +602,23 @@ wss.on("connection", (ws, req) => {
 });
 
 // Heartbeat : ferme les connexions mortes.
+// FIX: intervalle réduit de 30s → 10s pour détecter plus vite les sockets
+// zombies (mobile 4G qui drop mais dont le TCP RST n'arrive pas au serveur).
+// Sans ça, isUserOnline peut renvoyer true pendant jusqu'à 60s après une
+// coupure réelle, et incoming_call est écrit dans le vide.
 const heartbeat = setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
+      console.log(`[hb] terminate zombie user=${ws.userId}`);
       ws.terminate();
       continue;
     }
     ws.isAlive = false;
-    ws.ping();
+    try {
+      ws.ping();
+    } catch {}
   }
-}, 30_000);
+}, 10_000);
 
 wss.on("close", () => clearInterval(heartbeat));
 
