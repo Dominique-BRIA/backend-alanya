@@ -47,3 +47,4 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     activeParticipants,
   });
 });
+ 
