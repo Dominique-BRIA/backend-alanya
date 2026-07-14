@@ -8,7 +8,7 @@ import { activeCallParticipants, conversationMeta } from "@/lib/calls";
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const { id } = await ctx.params;
 
-  const part = await prisma.callParticipant.findUnique({
+  const part = await prisma.call_Participant.findUnique({
     where: { callId_userId: { callId: id, userId } },
     include: { call: true },
   });
@@ -30,7 +30,7 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       data: { status: "ONGOING", answeredAt: now },
     });
   }
-  await prisma.callParticipant.update({
+  await prisma.call_Participant.update({
     where: { callId_userId: { callId: id, userId } },
     data: { joinedAt: now, leftAt: null },
   });
