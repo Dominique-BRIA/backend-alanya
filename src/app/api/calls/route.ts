@@ -15,8 +15,8 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     include: {
       call: {
         include: {
-          initiator: { include: { profile: true } },
-          participants: { include: { user: { include: { profile: true } } } },
+          initiator: true,
+          participants: { include: { user: true } },
         },
       },
     },
@@ -37,7 +37,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     const peer = others[0]?.user;
     const peerName = isGroup
       ? (conv?.name ?? "Groupe")
-      : (peer?.profile?.displayName ?? peer?.publicNumber ?? "Inconnu");
+      : (peer?.pseudo ?? peer?.publicNumber ?? "Inconnu");
     return {
       id: c.id,
       convId: c.convId,
@@ -47,7 +47,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       isGroup,
       peerName,
       peerNumber: isGroup ? null : (peer?.publicNumber ?? null),
-      peerAvatarUrl: isGroup ? null : (peer?.profile?.avatarUrl ?? null),
+      peerAvatarUrl: isGroup ? null : (peer?.avatarUrl ?? null),
       participantCount: c.participants.length,
       startedAt: c.startedAt,
       answeredAt: c.answeredAt,
@@ -130,8 +130,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       },
     },
     include: {
-      initiator: { include: { profile: true } },
-      participants: { include: { user: { include: { profile: true } } } },
+      initiator: true,
+      participants: { include: { user: true } },
     },
   });
 
@@ -139,7 +139,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     .filter((p) => p.userId !== userId)
     .map((p) => ({
       userId: p.userId,
-      pseudo: p.user.profile?.displayName ?? null,
+      pseudo: p.user.pseudo ?? null,
       publicNumber: p.user.publicNumber,
     }));
 
@@ -155,7 +155,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       groupName: meta.groupName,
       memberCount: meta.memberCount,
       callees,
-      callerName: call.initiator.profile?.displayName ?? call.initiator.publicNumber,
+      callerName: call.initiator.pseudo ?? call.initiator.publicNumber,
     },
     201,
   );

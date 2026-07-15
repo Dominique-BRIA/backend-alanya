@@ -16,9 +16,9 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     },
     orderBy: { start_time: "desc" },
     include: {
-      organiser: { include: { profile: true } },
+      organiser: true,
       participants: {
-        include: { user: { include: { profile: true } } },
+        include: { user: true },
       },
     },
   });
@@ -34,16 +34,16 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       duree: m.duree,
       organiser: {
         id: m.organiser.id,
-        pseudo: m.organiser.profile?.displayName ?? null,
+        pseudo: m.organiser.pseudo ?? null,
         publicNumber: m.organiser.publicNumber,
-        avatarUrl: m.organiser.profile?.avatarUrl ?? null,
+        avatarUrl: m.organiser.avatarUrl ?? null,
       },
       participants: m.participants.map((p) => ({
         ID: p.ID,
         IDparticipant: p.IDparticipant,
-        pseudo: p.user.profile?.displayName ?? null,
+        pseudo: p.user.pseudo ?? null,
         publicNumber: p.user.publicNumber,
-        avatarUrl: p.user.profile?.avatarUrl ?? null,
+        avatarUrl: p.user.avatarUrl ?? null,
         status: p.status,
         connecte: p.connecte,
         start_time: p.start_time,

@@ -32,7 +32,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   const contacts = await prisma.contact.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
-    include: { contact: { include: { profile: true } } },
+    include: { contact: true },
   });
 
   return ok({
@@ -43,9 +43,9 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       user: {
         id: c.contact.id,
         publicNumber: c.contact.publicNumber,
-        pseudo: c.contact.profile?.displayName ?? null,
-        avatarUrl: c.contact.profile?.avatarUrl ?? null,
-        statusMsg: c.contact.profile?.statusMsg ?? null,
+        pseudo: c.contact.pseudo ?? null,
+        avatarUrl: c.contact.avatarUrl ?? null,
+        statusMsg: c.contact.statusMsg ?? null,
       },
     })),
   });
@@ -78,7 +78,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
 
   const created = await prisma.contact.create({
     data: { userId, contactId: target.id, alias },
-    include: { contact: { include: { profile: true } } },
+    include: { contact: true },
   });
 
   return ok(
@@ -89,8 +89,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       user: {
         id: created.contact.id,
         publicNumber: created.contact.publicNumber,
-        pseudo: created.contact.profile?.displayName ?? null,
-        avatarUrl: created.contact.profile?.avatarUrl ?? null,
+        pseudo: created.contact.pseudo ?? null,
+        avatarUrl: created.contact.avatarUrl ?? null,
       },
     },
     201,

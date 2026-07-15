@@ -71,9 +71,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     matched: found.map((u) => ({
       id: u.id,
       publicNumber: u.publicNumber,
-      pseudo: u.profile?.displayName ?? null,
-      avatarUrl: u.profile?.avatarUrl ?? null,
-      statusMsg: u.profile?.statusMsg ?? null,
+      pseudo: u.pseudo ?? null,
+      avatarUrl: u.avatarUrl ?? null,
+      statusMsg: u.statusMsg ?? null,
       alreadyContact: alreadySet.has(u.id),
     })),
   });

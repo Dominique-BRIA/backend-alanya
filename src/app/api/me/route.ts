@@ -9,16 +9,15 @@ export async function GET(req: NextRequest) {
     const { sub } = requireUser(req);
     const user = await prisma.user.findUnique({
       where: { id: sub },
-      include: { profile: true },
     });
     if (!user) return fail("Utilisateur introuvable", 404);
     return ok({
       id: user.id,
       email: user.email,
       publicNumber: user.publicNumber,
-      pseudo: user.profile?.displayName ?? null,
-      avatarUrl: user.profile?.avatarUrl ?? null,
-      statusMsg: user.profile?.statusMsg ?? null,
+      pseudo: user.pseudo ?? null,
+      avatarUrl: user.avatarUrl ?? null,
+      statusMsg: user.statusMsg ?? null,
       nom: user.nom ?? null,
       idPays: user.idPays ?? null,
       typeCompte: user.typeCompte,

@@ -24,7 +24,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const number = parsed.data;
   const found = await prisma.user.findUnique({
     where: { publicNumber: number },
-    include: { profile: true },
+    ,
   });
 
   if (!found || found.id === userId) {
@@ -39,9 +39,9 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   return ok({
     id: found.id,
     publicNumber: found.publicNumber,
-    pseudo: found.profile?.displayName ?? null,
-    avatarUrl: found.profile?.avatarUrl ?? null,
-    statusMsg: found.profile?.statusMsg ?? null,
+    pseudo: found.pseudo ?? null,
+    avatarUrl: found.avatarUrl ?? null,
+    statusMsg: found.statusMsg ?? null,
     alreadyContact: Boolean(existing),
   });
 });

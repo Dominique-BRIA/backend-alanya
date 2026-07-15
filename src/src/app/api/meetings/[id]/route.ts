@@ -11,9 +11,9 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const meeting = await prisma.meeting.findUnique({
     where: { idMeeting: id },
     include: {
-      organiser: {  },
+      organiser: true,
       participants: {
-        include: { user: {  } },
+        include: { user: true },
       },
     },
   });

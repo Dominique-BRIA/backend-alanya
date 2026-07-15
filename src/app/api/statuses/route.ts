@@ -35,7 +35,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     where: { userId: { in: [userId, ...contactIds] }, expiresAt: { gt: now } },
     orderBy: { createdAt: "asc" },
     include: {
-      user: { include: { profile: true } },
+      user: true,
       views: { where: { viewerId: userId }, select: { id: true } },
       _count: { select: { views: true } },
     },
@@ -65,8 +65,8 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     const u = list[0]!.user;
     return {
       userId: uid,
-      pseudo: u.profile?.displayName ?? null,
-      avatarUrl: u.profile?.avatarUrl ?? null,
+      pseudo: u.pseudo ?? null,
+      avatarUrl: u.avatarUrl ?? null,
       publicNumber: u.publicNumber,
       hasUnviewed: list.some((s) => s.views.length === 0),
       statuses: list.map(mapStatus),

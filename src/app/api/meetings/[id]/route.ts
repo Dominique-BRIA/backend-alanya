@@ -11,9 +11,9 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const meeting = await prisma.meeting.findUnique({
     where: { idMeeting: id },
     include: {
-      organiser: { include: { profile: true } },
+      organiser: true,
       participants: {
-        include: { user: { include: { profile: true } } },
+        include: { user: true },
       },
     },
   });
@@ -39,16 +39,16 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     duree: meeting.duree,
     organiser: {
       id: meeting.organiser.id,
-      pseudo: meeting.organiser.profile?.displayName ?? null,
+      pseudo: meeting.organiser.pseudo ?? null,
       publicNumber: meeting.organiser.publicNumber,
-      avatarUrl: meeting.organiser.profile?.avatarUrl ?? null,
+      avatarUrl: meeting.organiser.avatarUrl ?? null,
     },
     participants: meeting.participants.map((p) => ({
       ID: p.ID,
       IDparticipant: p.IDparticipant,
-      pseudo: p.user.profile?.displayName ?? null,
+      pseudo: p.user.pseudo ?? null,
       publicNumber: p.user.publicNumber,
-      avatarUrl: p.user.profile?.avatarUrl ?? null,
+      avatarUrl: p.user.avatarUrl ?? null,
       status: p.status,
       connecte: p.connecte,
       start_time: p.start_time,

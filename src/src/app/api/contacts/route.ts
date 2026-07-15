@@ -34,7 +34,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   const contacts = await prisma.contact.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
-    include: { contact: {  } },
+    include: { contact: true },
   });
 
   return ok({

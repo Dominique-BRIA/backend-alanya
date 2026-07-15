@@ -10,7 +10,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     where: { alanyaID: userId },
     orderBy: { dateBlock: "desc" },
     include: {
-      blockedUser: {  },
+      blockedUser: true,
     },
   });
 

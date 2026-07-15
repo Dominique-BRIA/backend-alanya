@@ -13,7 +13,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     include: {
       conv: {
         include: {
-          participants: { include: { user: { include: { profile: true } } } },
+          participants: { include: { user: true } },
           messages: { orderBy: { createdAt: "desc" }, take: 1 },
         },
       },
@@ -43,16 +43,16 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       const others = conv.participants.filter((pp) => pp.userId !== userId);
       const title = conv.isGroup
         ? conv.name
-        : (others[0]?.user.profile?.displayName ?? others[0]?.user.publicNumber ?? "Inconnu");
+        : (others[0]?.user.pseudo ?? others[0]?.user.publicNumber ?? "Inconnu");
 
       return {
         id: conv.id,
         isGroup: conv.isGroup,
         title,
-        avatarUrl: conv.isGroup ? conv.avatarUrl : others[0]?.user.profile?.avatarUrl ?? null,
+        avatarUrl: conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null,
         members: conv.participants.map((pp) => ({
           id: pp.userId,
-          pseudo: pp.user.profile?.displayName ?? null,
+          pseudo: pp.user.pseudo ?? null,
           publicNumber: pp.user.publicNumber,
         })),
         lastMessage: last

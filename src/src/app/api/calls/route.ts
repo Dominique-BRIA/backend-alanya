@@ -15,8 +15,8 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     include: {
       call: {
         include: {
-          initiator: {  },
-          participants: { include: { user: {  } } },
+          initiator: true,
+          participants: { include: { user: true } },
         },
       },
     },
@@ -130,8 +130,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       },
     },
     include: {
-      initiator: {  },
-      participants: { include: { user: {  } } },
+      initiator: true,
+      participants: { include: { user: true } },
     },
   });
 

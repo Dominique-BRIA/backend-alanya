@@ -29,7 +29,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
 
   const blocked = await prisma.blocked.findUnique({
     where: { idBlock },
-    include: { blockedUser: {  } },
+    include: { blockedUser: true },
   });
 
   if (!blocked) return fail("Blocage introuvable", 404, "NOT_FOUND");

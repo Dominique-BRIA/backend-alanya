@@ -35,7 +35,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     where: { userId: { in: [userId, ...contactIds] }, expiresAt: { gt: now } },
     orderBy: { createdAt: "asc" },
     include: {
-      user: {  },
+      user: true,
       views: { where: { viewerId: userId }, select: { id: true } },
       _count: { select: { views: true } },
     },
