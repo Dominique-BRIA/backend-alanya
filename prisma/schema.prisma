@@ -35,6 +35,9 @@ model User {
   idPays        Int?     @db.SmallInt
   pays          Pays?    @relation(fields: [idPays], references: [idPays])
 
+  // --- F3 : Type de compte ---
+  typeCompte    Int      @default(0) @db.SmallInt
+
   profile          Profile?
   refreshTokens    RefreshToken[]
   contacts         Contact[]       @relation("UserContacts")

@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
           passwordHash,
           nom: nom ?? null,
           idPays: idPays ?? null,
+          typeCompte: 0,
         },
       }),
       prisma.profile.upsert({

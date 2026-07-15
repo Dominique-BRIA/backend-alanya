@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
       statusMsg: user.profile?.statusMsg ?? null,
       nom: user.nom ?? null,
       idPays: user.idPays ?? null,
+      typeCompte: user.typeCompte,
     });
   } catch (err) {
     if (err instanceof UnauthorizedError) return fail(err.message, 401, "UNAUTHORIZED");
