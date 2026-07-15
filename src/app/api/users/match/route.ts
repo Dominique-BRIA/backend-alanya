@@ -54,7 +54,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     select: {
       id: true,
       publicNumber: true,
-      profile: { select: { displayName: true, avatarUrl: true, statusMsg: true } },
+      pseudo: true, avatarUrl: true, statusMsg: true,
     },
   });
 

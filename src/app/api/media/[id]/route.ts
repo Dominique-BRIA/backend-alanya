@@ -47,7 +47,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     // (sinon impossible d'afficher l'avatar de tes contacts).
     const isAvatar = !isOwner && !isParticipant
       ? Boolean(
-          await prisma.profile.findFirst({
+          await prisma.user.findFirst({
             where: { avatarUrl: `/api/media/${id}` },
             select: { userId: true },
           }),
