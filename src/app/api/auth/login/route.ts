@@ -24,7 +24,6 @@ export async function POST(req: NextRequest) {
       where: isPublicNumber
         ? { publicNumber: identifier }
         : { email: identifier.toLowerCase() },
-      include: { profile: true },
     });
 
     // Message générique pour ne pas révéler l'existence d'un compte.
@@ -40,8 +39,8 @@ export async function POST(req: NextRequest) {
         id: user.id,
         email: user.email,
         publicNumber: user.publicNumber,
-        pseudo: user.profile?.displayName ?? null,
-        avatarUrl: user.profile?.avatarUrl ?? null,
+        pseudo: user.pseudo ?? null,
+        avatarUrl: user.avatarUrl ?? null,
       },
       ...tokens,
     });
