@@ -16,10 +16,10 @@ export async function conversationMeta(convId: string | null) {
 export async function activeCallParticipants(callId: string) {
   const parts = await prisma.callParticipant.findMany({
     where: { callId, joinedAt: { not: null }, leftAt: null },
-    include: { user: { include: { profile: true } } },
+    include: { user: true },
   });
   return parts.map((p) => ({
     userId: p.userId,
-    displayName: p.user.profile?.displayName ?? p.user.publicNumber,
+    displayName: p.user.pseudo ?? p.user.publicNumber,
   }));
 }
