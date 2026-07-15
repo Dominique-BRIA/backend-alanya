@@ -24,16 +24,29 @@ export async function POST(req: NextRequest) {
       return fail("setupToken invalide ou expiré", 401, "BAD_TOKEN");
     }
 
-    const { pseudo, password } = setupSchema.parse(await req.json());
+    const { pseudo, password, nom, idPays } = setupSchema.parse(await req.json());
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.emailVerified) return fail("Compte non vérifié", 400, "NOT_VERIFIED");
     if (user.passwordHash) return fail("Compte déjà configuré", 409, "ALREADY_SETUP");
 
+    // Vérifier que le pays existe si fourni
+    if (idPays != null) {
+      const pays = await prisma.pays.findUnique({ where: { idPays } });
+      if (!pays) return fail("Pays introuvable", 404, "PAYS_NOT_FOUND");
+    }
+
     const passwordHash = await hashPassword(password);
 
     await prisma.$transaction([
-      prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          nom: nom ?? null,
+          idPays: idPays ?? null,
+        },
+      }),
       prisma.profile.upsert({
         where: { userId: user.id },
         create: { userId: user.id, displayName: pseudo },
@@ -49,6 +62,8 @@ export async function POST(req: NextRequest) {
           email: user.email,
           publicNumber: user.publicNumber,
           pseudo,
+          nom: nom ?? null,
+          idPays: idPays ?? null,
         },
         ...tokens,
       },

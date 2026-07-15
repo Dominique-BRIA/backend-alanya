@@ -19,6 +19,8 @@ export async function GET(req: NextRequest) {
       pseudo: user.profile?.displayName ?? null,
       avatarUrl: user.profile?.avatarUrl ?? null,
       statusMsg: user.profile?.statusMsg ?? null,
+      nom: user.nom ?? null,
+      idPays: user.idPays ?? null,
     });
   } catch (err) {
     if (err instanceof UnauthorizedError) return fail(err.message, 401, "UNAUTHORIZED");

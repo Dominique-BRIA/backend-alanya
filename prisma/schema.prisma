@@ -24,13 +24,16 @@ datasource db {
 model User {
   id            String   @id @default(uuid()) @db.Uuid
   email         String   @unique
-  // Hash BCrypt du mot de passe (défini après vérification de l'email)
   passwordHash  String?
-  // Numéro public à 6 chiffres, identifiant cherchable (différent de l'id interne)
-  publicNumber  String   @unique @db.VarChar(8) // Étendu à 8 chiffres (rétro-compatible avec les 6 existants)
+  publicNumber  String   @unique @db.VarChar(8)
   emailVerified Boolean  @default(false)
   createdAt     DateTime @default(now()) @db.Timestamptz
   updatedAt     DateTime @updatedAt @db.Timestamptz
+
+  // --- F1 : Inscription avec pays ---
+  nom           String?  @db.VarChar(100)
+  idPays        Int?     @db.SmallInt
+  pays          Pays?    @relation(fields: [idPays], references: [idPays])
 
   profile          Profile?
   refreshTokens    RefreshToken[]
@@ -378,7 +381,9 @@ model Pays {
   libelle         String @db.VarChar(200)                            // MySQL varchar(200)
   prefix          String @db.VarChar(10)                             // indicatif téléphonique (+237, +33…)
   timeZone        String @db.VarChar(200)                            // ex: "Africa/Douala"
-  decalageHoraire Int                                                // MySQL int → PG INTEGER (décalage UTC en minutes)
+  decalageHoraire Int
+
+  users           User[]
 
   @@map("pays")
 }

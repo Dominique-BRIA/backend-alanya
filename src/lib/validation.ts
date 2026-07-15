@@ -20,6 +20,9 @@ export const setupSchema = z.object({
     .string()
     .min(8, "Le mot de passe doit faire au moins 8 caractères")
     .max(128),
+  // F1 : Inscription avec pays
+  nom: z.string().trim().min(1, "Le nom est requis").max(100).optional(),
+  idPays: z.number().int().positive().optional(),
 });
 
 // Connexion par email OU par numéro public à 6 chiffres.
