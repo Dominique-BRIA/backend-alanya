@@ -7,8 +7,7 @@ import { verifyAccessToken } from "@/lib/jwt";
 import { issueTokenPair } from "@/modules/auth/tokens";
 
 // POST /api/auth/setup
-// Étape finale d'inscription : choix du pseudo + mot de passe.
-// Requiert le « setupToken » (Authorization: Bearer ...) obtenu après vérification de l'email.
+// Étape finale d'inscription : choix du pseudo + mot de passe + pays.
 export async function POST(req: NextRequest) {
   try {
     const header = req.headers.get("authorization");
@@ -30,7 +29,6 @@ export async function POST(req: NextRequest) {
     if (!user || !user.emailVerified) return fail("Compte non vérifié", 400, "NOT_VERIFIED");
     if (user.passwordHash) return fail("Compte déjà configuré", 409, "ALREADY_SETUP");
 
-    // Vérifier que le pays existe si fourni
     if (idPays != null) {
       const pays = await prisma.pays.findUnique({ where: { idPays } });
       if (!pays) return fail("Pays introuvable", 404, "PAYS_NOT_FOUND");
@@ -38,22 +36,17 @@ export async function POST(req: NextRequest) {
 
     const passwordHash = await hashPassword(password);
 
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
-        data: {
-          passwordHash,
-          nom: nom ?? null,
-          idPays: idPays ?? null,
-          typeCompte: 0,
-        },
-      }),
-      prisma.profile.upsert({
-        where: { userId: user.id },
-        create: { userId: user.id, displayName: pseudo },
-        update: { displayName: pseudo },
-      }),
-    ]);
+    // F4 : on écrit directement dans users (plus de table profiles)
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        pseudo,
+        nom: nom ?? null,
+        idPays: idPays ?? null,
+        typeCompte: 0,
+      },
+    });
 
     const tokens = await issueTokenPair(user.id);
     return ok(
@@ -65,6 +58,7 @@ export async function POST(req: NextRequest) {
           pseudo,
           nom: nom ?? null,
           idPays: idPays ?? null,
+          typeCompte: 0,
         },
         ...tokens,
       },
