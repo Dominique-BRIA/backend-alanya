@@ -36,7 +36,6 @@ export async function POST(req: NextRequest) {
 
     const passwordHash = await hashPassword(password);
 
-    // F4 : on écrit directement dans users (plus de table profiles)
     await prisma.user.update({
       where: { id: user.id },
       data: {
