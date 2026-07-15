@@ -38,7 +38,12 @@ model User {
   // --- F3 : Type de compte ---
   typeCompte    Int      @default(0) @db.SmallInt
 
-  profile          Profile?
+  // --- F4 : Profil fusionné (anciennement dans Profile) ---
+  pseudo        String?  @db.VarChar(100)
+  avatarUrl     String?  @db.VarChar(2048)
+  statusMsg     String?  @db.VarChar(255)
+  lastSeen      DateTime? @db.Timestamptz
+
   refreshTokens    RefreshToken[]
   contacts         Contact[]       @relation("UserContacts")
   contactOf        Contact[]       @relation("ContactOf")
@@ -102,19 +107,6 @@ model RefreshToken {
 
   @@index([userId])
   @@map("refresh_tokens")
-}
-
-model Profile {
-  userId      String   @id @db.Uuid
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // « pseudo » choisi par l'utilisateur
-  displayName String   @db.VarChar(100)
-  avatarUrl   String?
-  statusMsg   String?  @db.VarChar(255)
-  lastSeen    DateTime? @db.Timestamptz
-  updatedAt   DateTime @updatedAt @db.Timestamptz
-
-  @@map("profiles")
 }
 
 model Contact {
