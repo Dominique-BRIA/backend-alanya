@@ -24,7 +24,6 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const number = parsed.data;
   const found = await prisma.user.findUnique({
     where: { publicNumber: number },
-    ,
   });
 
   if (!found || found.id === userId) {
