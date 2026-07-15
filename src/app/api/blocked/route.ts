@@ -10,7 +10,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     where: { alanyaID: userId },
     orderBy: { dateBlock: "desc" },
     include: {
-      blockedUser: { include: { profile: true } },
+      blockedUser: true,
     },
   });
 
@@ -18,9 +18,9 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     blocked: blocked.map((b) => ({
       idBlock: b.idBlock,
       idCallerBlock: b.idCallerBlock,
-      pseudo: b.blockedUser.profile?.displayName ?? null,
+      pseudo: b.blockedUser.pseudo ?? null,
       publicNumber: b.blockedUser.publicNumber,
-      avatarUrl: b.blockedUser.profile?.avatarUrl ?? null,
+      avatarUrl: b.blockedUser.avatarUrl ?? null,
       dateBlock: b.dateBlock,
     })),
   });
