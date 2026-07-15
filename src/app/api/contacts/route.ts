@@ -4,18 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { addContactSchema } from "@/lib/validation";
 
-interface ContactWithUser {
-  id: string;
-  alias: string | null;
-  isBlocked: boolean;
-  contact: {
-    id: string;
-    publicNumber: string;
-    profile: { displayName: string; avatarUrl: string | null; statusMsg: string | null } | null;
-  };
-}
-
-// OPTIONS — répond aux preflight CORS (Flutter mobile + Vercel)
+// OPTIONS — répond aux preflight CORS
 export async function OPTIONS() {
   return new Response(null, {
     status: 204,
@@ -36,7 +25,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   });
 
   return ok({
-    contacts: contacts.map((c: ContactWithUser) => ({
+    contacts: contacts.map((c) => ({
       id: c.id,
       alias: c.alias,
       isBlocked: c.isBlocked,
@@ -51,7 +40,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   });
 });
 
-// POST /api/contacts — ajoute un contact via son numéro public à 6 chiffres.
+// POST /api/contacts — ajoute un contact via son numéro public.
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   let body: unknown;
   try {
