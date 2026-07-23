@@ -109,6 +109,9 @@ async function isParticipant(convId, userId) {
   return Boolean(p);
 }
 
+// ═══════════════════════════════════════════════
+// SERIALIZE MESSAGE — modifié pour inclure médias dans replyTo
+// ═══════════════════════════════════════════════
 async function serializeMessage(m, media) {
   const base = {
     id: m.id,
@@ -129,10 +132,11 @@ async function serializeMessage(m, media) {
     createdAt: m.createdAt,
   };
 
+  // MODIFICATION : inclut les médias du message cité pour le preview reply
   if (m.replyToId) {
     const target = await prisma.message.findUnique({
       where: { id: m.replyToId },
-      select: { senderId: true, content: true, type: true, deletedAt: true },
+      select: { senderId: true, content: true, type: true, deletedAt: true, media: true },
     });
     if (target) {
       base.replyTo = {
@@ -141,6 +145,14 @@ async function serializeMessage(m, media) {
         type: target.type,
         content: target.deletedAt ? null : target.content,
         isDeleted: target.deletedAt !== null,
+        media: (target.media ?? []).slice(0, 1).map((f) => ({
+          id: f.id,
+          url: `/api/media/${f.id}`,
+          filename: f.filename,
+          mimeType: f.mimeType,
+          sizeBytes: f.sizeBytes,
+          durationMs: f.durationMs,
+        })),
       };
     }
   }
@@ -148,21 +160,34 @@ async function serializeMessage(m, media) {
   return base;
 }
 
+// ═══════════════════════════════════════════════
+// HANDLE SEND — modifié pour supporter mediaIds (multiple)
+// ═══════════════════════════════════════════════
 async function handleSend(ws, msg) {
-  const { convId, content, tempId, mediaId } = msg;
+  // MODIFICATION : ajoute mediaIds pour multi-médias
+  const { convId, content, tempId, mediaId, mediaIds } = msg;
   const type = msg.msgType ?? "TEXT";
   if (!convId) return;
   if (type === "TEXT" && (!content || !content.trim())) return;
-  if (type !== "TEXT" && !mediaId) return;
+
+  // MODIFICATION : collecte tous les media IDs (simple + multiple)
+  const allMediaIds = [];
+  if (mediaId) allMediaIds.push(mediaId);
+  if (Array.isArray(mediaIds)) allMediaIds.push(...mediaIds);
+  const uniqueMediaIds = [...new Set(allMediaIds)];
+
+  if (type !== "TEXT" && uniqueMediaIds.length === 0) return;
+
   if (!(await isParticipant(convId, ws.userId))) {
     ws.send(JSON.stringify({ type: "error", message: "Conversation interdite", tempId }));
     return;
   }
 
-  if (mediaId) {
-    const media = await prisma.mediaFile.findUnique({ where: { id: mediaId }, select: { ownerId: true } });
-    if (!media || media.ownerId !== ws.userId) {
-      ws.send(JSON.stringify({ type: "error", message: "Média invalide", tempId }));
+  // MODIFICATION : vérifie tous les médias
+  for (const mid of uniqueMediaIds) {
+    const m = await prisma.mediaFile.findUnique({ where: { id: mid }, select: { ownerId: true } });
+    if (!m || m.ownerId !== ws.userId) {
+      ws.send(JSON.stringify({ type: "error", message: "Media invalide", tempId }));
       return;
     }
   }
@@ -175,10 +200,14 @@ async function handleSend(ws, msg) {
       type,
       status: "SENT",
       replyToId: msg.replyToId ?? null,
-      ...(mediaId ? { media: { connect: { id: mediaId } } } : {}),
+      // MODIFICATION : connecte plusieurs médias
+      ...(uniqueMediaIds.length > 0
+        ? { media: { connect: uniqueMediaIds.map((id) => ({ id })) } }
+        : {}),
     },
     include: { media: true },
   });
+
   // F10 + F11 : met à jour le dernier message dénormalisé + incrémente unreadCount
   await prisma.conversation.update({
     where: { id: convId },
@@ -256,7 +285,6 @@ async function handleRead(ws, msg) {
     data: { lastReadAt: now, unreadCount: 0 },
   });
 
-  // FIX: met à jour le statut des messages de cette conversation (envoyés par d'autres) à READ
   const updated = await prisma.message.updateMany({
     where: {
       convId,
@@ -266,12 +294,10 @@ async function handleRead(ws, msg) {
     data: { status: "READ" },
   });
 
-  // Notifie les autres participants que les messages ont été lus
   const recipients = await participantsOf(convId);
   for (const uid of recipients) {
     if (uid === ws.userId) continue;
     sendTo(uid, { type: "read", convId, userId: ws.userId, at: now });
-    // Envoie aussi un message_status pour chaque message mis à jour
     if (updated.count > 0) {
       sendTo(uid, { type: "message_status", convId, status: "READ", userId: ws.userId });
     }
@@ -499,7 +525,6 @@ async function handleForwardMessage(ws, msg) {
 // MEETINGS — salles de réunion (Google Meet style)
 // ---------------------------------------------------------------------------
 
-// meetingId (int) -> Map<userId, ws>
 const meetingRooms = new Map();
 
 function meetingParticipants(meetingId) {
@@ -521,7 +546,6 @@ async function handleMeetingJoin(ws, msg) {
   const { meetingId } = msg;
   if (!meetingId) return;
 
-  // Vérifie que le meeting existe en base
   const meeting = await prisma.meeting.findUnique({
     where: { idMeeting: meetingId },
     select: { idMeeting: true, isEnd: true, idOrganiser: true },
@@ -535,7 +559,6 @@ async function handleMeetingJoin(ws, msg) {
     return;
   }
 
-  // Met à jour le participant en base
   const participant = await prisma.meetingParticipant.findUnique({
     where: { idMeeting_IDparticipant: { idMeeting: meetingId, IDparticipant: ws.userId } },
   });
@@ -545,7 +568,6 @@ async function handleMeetingJoin(ws, msg) {
       data: { status: 1, connecte: 1, start_time: new Date() },
     });
   } else {
-    // L'organisateur peut rejoindre même s'il n'est pas dans la liste de participants
     if (meeting.idOrganiser !== ws.userId) {
       ws.send(JSON.stringify({ type: "error", message: "Vous n'êtes pas invité", meetingId }));
       return;
@@ -555,23 +577,19 @@ async function handleMeetingJoin(ws, msg) {
     });
   }
 
-  // Ajoute à la salle en mémoire
   if (!meetingRooms.has(meetingId)) meetingRooms.set(meetingId, new Map());
   meetingRooms.get(meetingId).set(ws.userId, ws);
 
-  // Notifie les autres participants
   const user = await prisma.user.findUnique({ where: { id: ws.userId }, select: { pseudo: true, publicNumber: true } });
   const displayName = user?.pseudo ?? user?.publicNumber ?? "Participant";
   const existing = meetingParticipants(meetingId);
 
-  // Envoie la liste des participants déjà connectés au nouveau
   ws.send(JSON.stringify({
     type: "meeting_joined",
     meetingId,
     participants: existing.filter((id) => id !== ws.userId),
   }));
 
-  // Notifie les autres
   sendToMeeting(meetingId, {
     type: "meeting_user_joined",
     meetingId,
@@ -590,7 +608,6 @@ async function handleMeetingLeave(ws, msg) {
     if (room.size === 0) meetingRooms.delete(meetingId);
   }
 
-  // Met à jour le participant en base
   const participant = await prisma.meetingParticipant.findUnique({
     where: { idMeeting_IDparticipant: { idMeeting: meetingId, IDparticipant: ws.userId } },
   });
@@ -604,7 +621,6 @@ async function handleMeetingLeave(ws, msg) {
     });
   }
 
-  // Notifie les autres
   sendToMeeting(meetingId, {
     type: "meeting_user_left",
     meetingId,
@@ -698,7 +714,6 @@ wss.on("connection", (ws, req) => {
 
   ws.on("close", () => {
     removeClient(userId, ws);
-    // Retire l'utilisateur de toutes les réunions actives
     for (const [meetingId, room] of meetingRooms) {
       if (room.has(userId)) {
         room.delete(userId);
