@@ -110,4 +110,5 @@ export const createMeetingSchema = z.object({
   duree: z.number().int().min(1).max(86400).default(3600),
   room: z.string().trim().max(200).optional(),
   participantIds: z.array(z.string().uuid()).optional(),
+  participantNumbers: z.array(publicNumberSchema).optional(),
 });
