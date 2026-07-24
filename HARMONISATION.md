@@ -1,4 +1,4 @@
-# Harmonisation base de données Alanya — Plan & Mapping
+ # Harmonisation base de données Alanya — Plan & Mapping
 
 **Objectif** : aligner la base Neon (PostgreSQL) de ce membre sur le schéma de référence
 de l'équipe (`alanya.sql`, MySQL), pour la **cohérence structurelle et sémantique**.
