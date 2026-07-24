@@ -31,18 +31,19 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     hmac.update(username);
     const credential = hmac.digest('base64');
 
-    // Génération de la liste des iceServers pour chaque domaine Coturn
-    const iceServers = coturnDomains.map(domain => ({
-      urls: [
-        `stun:${domain}:3478`,
-        `turns:${domain}:5349?transport=udp`,
-        `turns:${domain}:5349?transport=tcp`,
-        `turn:${domain}:3478?transport=udp`,
-        `turn:${domain}:3478?transport=tcp`
-      ],
-      username: username,
-      credential: credential,
-    }));
+    // Génération de la liste des iceServers : UN SEUL url par entrée, et les
+    // identifiants UNIQUEMENT sur les entrées TURN/TURNS (jamais sur STUN).
+    // Mélanger stun/turn + credentials dans un même objet casse le TURN sur
+    // plusieurs implémentations WebRTC (dont flutter_webrtc).
+    const iceServers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      ...coturnDomains.flatMap((domain) => [
+        { urls: `stun:${domain}:3478` },
+        { urls: `turn:${domain}:3478?transport=udp`, username, credential },
+        { urls: `turn:${domain}:3478?transport=tcp`, username, credential },
+        { urls: `turns:${domain}:5349?transport=tcp`, username, credential },
+      ]),
+    ];
 
     // Log structuré pour le suivi
     console.log(JSON.stringify({
@@ -67,11 +68,14 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     hmac.update(fallbackUsername);
     const fallbackCredential = hmac.digest('base64');
 
-    const fallbackIceServers = coturnDomains.map(domain => ({
-      urls: [`stun:${domain}:3478`, `turn:${domain}:3478?transport=udp`],
-      username: fallbackUsername,
-      credential: fallbackCredential,
-    }));
+    const fallbackIceServers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      ...coturnDomains.flatMap((domain) => [
+        { urls: `stun:${domain}:3478` },
+        { urls: `turn:${domain}:3478?transport=udp`, username: fallbackUsername, credential: fallbackCredential },
+        { urls: `turn:${domain}:3478?transport=tcp`, username: fallbackUsername, credential: fallbackCredential },
+      ]),
+    ];
 
     return ok({ iceServers: fallbackIceServers });
   }

@@ -89,50 +89,12 @@ export const env = {
     },
   },
 
+  // Serveurs ICE : uniquement via Coturn avec identifiants HMAC éphémères
+  // (route /api/calls/ice). C'est suffisant et plus sûr que des identifiants
+  // statiques. Les anciennes variables TURN_URL/TURN_USERNAME/TURN_CREDENTIAL et
+  // le helper env.webrtc.iceServers() (code mort) ont été retirés.
   coturn: {
     secret: () => optional("COTURN_SECRET", "alanya1960-Secure"),
     domains: () => optional("COTURN_DOMAINS", "alanya226.com,kemita.eu").split(",").map(d => d.trim()),
-  },
-
-  webrtc: {
-    iceServers(): Array<{ urls: string | string[]; username?: string; credential?: string }> {
-      const servers: Array<{ urls: string | string[]; username?: string; credential?: string }> =
-        [];
-
-      // STUN servers (plusieurs pour la redondance)
-      const stunRaw = optional(
-        "STUN_URLS",
-        "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun.cloudflare.com:3478",
-      );
-      for (const url of stunRaw.split(",").map((s) => s.trim()).filter(Boolean)) {
-        servers.push({ urls: url });
-      }
-
-      // TURN server via Metered
-      const meteredKey = optional("METERED_API_KEY");
-      const meteredDomainRaw = optional("METERED_DOMAIN");
-
-      if (meteredKey && meteredDomainRaw) {
-        // Enlève l'éventuel https:// pour construire les URI "turn:"
-        const meteredDomain = meteredDomainRaw.replace(/^https?:\/\//, "");
-        // On n'injecte plus manuellement openrelayproject ici si on a fourni TURN_USERNAME/CREDENTIAL
-        // On préfère laisser l'API dynamique (route.ts) s'en charger. Si on passe par le fallback,
-        // les valeurs manuelles TURN_URL, TURN_USERNAME, TURN_CREDENTIAL seront utilisées ci-dessous.
-        void meteredDomain;
-      }
-
-      // TURN server manuel (optionnel, utilisé en fallback)
-      const turnUrl = optional("TURN_URL");
-      if (turnUrl) {
-        const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
-        const user = optional("TURN_USERNAME");
-        const cred = optional("TURN_CREDENTIAL");
-        if (user) entry.username = user;
-        if (cred) entry.credential = cred;
-        servers.push(entry);
-      }
-
-      return servers;
-    },
   },
 } as const;
