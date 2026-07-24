@@ -16,10 +16,10 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   if (part.call.initiatorId === userId) return fail("L'appelant ne peut pas accepter", 400, "BAD_STATE");
   if (part.joinedAt && !part.leftAt) return fail("Déjà dans l'appel", 409, "ALREADY_JOINED");
 
-  const { isGroup } = await conversationMeta(part.call.convId);
   const status = part.call.status;
-  if (!isGroup && status !== "RINGING") return fail("Appel non disponible", 409, "BAD_STATE");
-  if (isGroup && (status === "ENDED" || status === "REJECTED")) {
+  // Autorise à rejoindre un appel RINGING ou ONGOING (invitation / transfert en
+  // cours d'appel inclus). Le doublon est déjà bloqué par ALREADY_JOINED ci-dessus.
+  if (status === "ENDED" || status === "REJECTED" || status === "MISSED") {
     return fail("Appel terminé", 409, "BAD_STATE");
   }
 

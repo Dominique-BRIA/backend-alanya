@@ -12,9 +12,9 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     include: { call: { include: { participants: true } } },
   });
   if (!part) return fail("Appel introuvable", 404, "NOT_FOUND");
-  if (part.call.initiatorId === userId) {
-    return fail("L'initiateur doit utiliser /end pour raccrocher le groupe", 400, "BAD_STATE");
-  }
+  // NB : l'initiateur PEUT quitter (transfert d'appel) sans terminer pour les
+  // autres. Si plus personne n'est en ligne après son départ, l'appel se clôt
+  // (voir stillActiveCount plus bas). En hangUp normal, le frontend appelle /end.
   if (part.call.status !== "ONGOING" && part.call.status !== "RINGING") {
     return fail("Appel non actif", 409, "BAD_STATE");
   }

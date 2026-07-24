@@ -411,6 +411,76 @@ async function handleCallState(ws, msg) {
   }
 }
 
+// Invite un nouvel utilisateur dans un appel EN COURS (transfert / ajout groupe).
+// Ajoute l'invité aux participants et lui envoie un incoming_call ; informe les
+// participants existants de l'identité de l'invité (call_state "inviting").
+// Purement additif : n'affecte aucun flux d'appel existant.
+async function handleCallInvite(ws, msg) {
+  const { callId, publicNumber } = msg;
+  if (!callId || !publicNumber) return;
+
+  // Le demandeur doit lui-même être participant de l'appel.
+  const ids = await callParticipantIds(callId);
+  if (!ids.includes(ws.userId)) return;
+
+  const call = await prisma.call.findUnique({ where: { id: callId } });
+  if (!call || (call.status !== "RINGING" && call.status !== "ONGOING")) return;
+
+  const invitee = await prisma.user.findUnique({ where: { publicNumber } });
+  if (!invitee) {
+    ws.send(JSON.stringify({ type: "call_invite_result", ok: false, reason: "NOT_FOUND", publicNumber }));
+    return;
+  }
+  if (invitee.id === ws.userId || ids.includes(invitee.id)) {
+    ws.send(JSON.stringify({ type: "call_invite_result", ok: false, reason: "ALREADY_IN", publicNumber }));
+    return;
+  }
+
+  // Ajoute l'invité aux participants (pas encore "joined").
+  await prisma.callParticipant.upsert({
+    where: { callId_userId: { callId, userId: invitee.id } },
+    update: { leftAt: null },
+    create: { callId, userId: invitee.id, joinedAt: null },
+  });
+
+  // Fait sonner l'invité (même charge utile que handleCallRing).
+  const inviter = await prisma.user.findUnique({ where: { id: ws.userId } });
+  const callerName = inviter?.pseudo ?? inviter?.publicNumber ?? "Quelqu'un";
+  let groupName = null;
+  let memberCount = 0;
+  if (call.convId) {
+    const conv = await prisma.conversation.findUnique({
+      where: { id: call.convId },
+      include: { participants: true },
+    });
+    groupName = conv?.name ?? null;
+    memberCount = conv?.participants.length ?? 0;
+  }
+  sendTo(invitee.id, {
+    type: "incoming_call",
+    callId,
+    convId: call.convId,
+    callType: call.type,
+    callerId: ws.userId,
+    callerName,
+    isGroup: true, // multi-partie tant que l'invité rejoint
+    groupName,
+    memberCount: memberCount + 1,
+  });
+
+  // Informe l'inviteur ET les autres participants de l'identité de l'invité.
+  const payload = {
+    type: "call_state",
+    callId,
+    state: "inviting",
+    from: ws.userId,
+    userId: invitee.id,
+    displayName: invitee.pseudo ?? invitee.publicNumber ?? null,
+  };
+  for (const uid of ids) sendTo(uid, payload);
+  ws.send(JSON.stringify({ type: "call_invite_result", ok: true, userId: invitee.id, publicNumber }));
+}
+
 async function handleDeleteMessage(ws, msg) {
   const { messageId, scope } = msg;
   if (!messageId) return;
@@ -701,6 +771,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_ring") await handleCallRing(ws, msg);
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
       else if (msg.type === "call_state") await handleCallState(ws, msg);
+      else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
       else if (msg.type === "forward_message") await handleForwardMessage(ws, msg);
       else if (msg.type === "meeting_join") await handleMeetingJoin(ws, msg);
