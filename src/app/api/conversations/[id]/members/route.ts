@@ -49,9 +49,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
   if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
 
-  // Tout membre peut ajouter des membres
   const me = conv.participants.find((p) => p.userId === userId);
   if (!me) return fail("Accès refusé", 403, "FORBIDDEN");
+  if (me.role !== "ADMIN") return fail("Seul un admin peut ajouter des membres", 403, "NOT_ADMIN");
 
   // Trouve les utilisateurs par numéro public
   const users = await prisma.user.findMany({
@@ -74,6 +74,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     })),
   });
 
+  await prisma.message.create({ data: { convId, senderId: userId, type: "SYSTEM", content: `${toAdd.map((u) => u.publicNumber).join(", ")} a été ajouté au groupe` } });
   return ok({
     message: `${toAdd.length} membre(s) ajouté(s)`,
     added: toAdd.map((u) => u.publicNumber),
@@ -115,9 +116,8 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   const target = conv.participants.find((p) => p.userId === targetId);
   if (!target) return fail("Membre introuvable dans ce groupe", 404, "NOT_MEMBER");
 
-  await prisma.participant.delete({
-    where: { convId_userId: { convId, userId: targetId } },
-  });
+  await prisma.participant.delete({ where: { convId_userId: { convId, userId: targetId } } });
+  if (targetId !== userId) await prisma.message.create({ data: { convId, senderId: userId, type: "SYSTEM", content: "Un membre a été retiré du groupe" } });
 
   // Si c'est soi-même qui quitte, on peut aussi supprimer la conv si vide
   if (targetId === userId) {
@@ -129,3 +129,6 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
 
   return ok({ message: "Membre retiré", userId: targetId });
 });
+
+// PATCH /members — promotion ou retrait du droit admin.
+export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => { const { id: convId } = await ctx.params; const { userId: targetId, role } = await req.json(); if (!targetId || !["ADMIN","MEMBER"].includes(role)) return fail("Données invalides",400,"BAD_REQUEST"); const me=await prisma.participant.findUnique({where:{convId_userId:{convId,userId}}}); if(!me || me.role!=="ADMIN") return fail("Seul un admin peut gérer les rôles",403,"NOT_ADMIN"); const target=await prisma.participant.findUnique({where:{convId_userId:{convId,userId:targetId}}}); if(!target) return fail("Membre introuvable",404,"NOT_MEMBER"); await prisma.participant.update({where:{convId_userId:{convId,userId:targetId}},data:{role}}); await prisma.message.create({data:{convId,senderId:userId,type:"SYSTEM",content:role==="ADMIN"?"Un membre est maintenant administrateur":"Un administrateur est redevenu membre"}}); return ok({userId:targetId,role}); });

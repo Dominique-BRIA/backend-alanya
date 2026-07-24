@@ -17,7 +17,9 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const participant = conv.participants.find((p) => p.userId === userId);
   if (!participant) return fail("Vous n'êtes pas membre de ce groupe", 404, "NOT_MEMBER");
 
-  // Supprime le participant
+  // Message système conservé pour les membres restants.
+  await prisma.message.create({ data: { convId, senderId: userId, type: "SYSTEM", content: "Un membre a quitté le groupe" } });
+  // Supprime réellement le participant actif.
   await prisma.participant.delete({
     where: { convId_userId: { convId, userId } },
   });
