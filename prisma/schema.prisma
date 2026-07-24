@@ -34,7 +34,6 @@ model User {
 
   profile          Profile?
   refreshTokens    RefreshToken[]
-  deviceSessions   DeviceSession[]
   contacts         Contact[]       @relation("UserContacts")
   contactOf        Contact[]       @relation("ContactOf")
   participations   Participant[]
@@ -80,35 +79,16 @@ model EmailVerification {
   @@map("email_verifications")
 }
 
-model DeviceSession {
-  id          String   @id @db.VarChar(80)
-  userId      String   @db.Uuid
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  label       String   @db.VarChar(120)
-  platform    String   @db.VarChar(16)
-  browser     String?  @db.VarChar(80)
-  os          String?  @db.VarChar(80)
-  lastSeenAt  DateTime @default(now()) @db.Timestamptz
-  revokedAt   DateTime? @db.Timestamptz
-  createdAt   DateTime @default(now()) @db.Timestamptz
-  refreshTokens RefreshToken[]
-  @@index([userId, revokedAt])
-  @@map("device_sessions")
-}
-
 model RefreshToken {
   id        String   @id @default(uuid()) @db.Uuid
   userId    String   @db.Uuid
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceId  String?   @db.VarChar(80)
-  device    DeviceSession? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
   tokenHash String // hash du refresh token
   expiresAt DateTime @db.Timestamptz
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now()) @db.Timestamptz
 
   @@index([userId])
-  @@index([deviceId])
   @@map("refresh_tokens")
 }
 
