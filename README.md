@@ -354,7 +354,7 @@ npm run prisma:studio       # Interface graphique Prisma
 - [ ] Configurer un système de monitoring (Sentry, DataDog)
 - [ ] Ajouter des logs structurés
 - [ ] Implémenter le filtrage anti-spam / détection de contenu
-Merci
+Merci beaucoup
 ---
 
 ## 📄 Licence
