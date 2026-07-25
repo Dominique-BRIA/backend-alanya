@@ -314,6 +314,18 @@ async function handleTyping(ws, msg) {
   }
 }
 
+// Indicateur "en train d'enregistrer un vocal…" — miroir de handleTyping.
+// Événement éphémère (aucune persistance), relayé aux autres participants.
+async function handleRecording(ws, msg) {
+  const { convId, isRecording } = msg;
+  if (!convId || !(await isParticipant(convId, ws.userId))) return;
+  const recipients = await participantsOf(convId);
+  for (const uid of recipients) {
+    if (uid === ws.userId) continue;
+    sendTo(uid, { type: "recording", convId, userId: ws.userId, isRecording: Boolean(isRecording) });
+  }
+}
+
 async function callParticipantIds(callId) {
   const parts = await prisma.callParticipant.findMany({
     where: { callId },
@@ -778,6 +790,7 @@ wss.on("connection", (ws, req) => {
       if (msg.type === "send") await handleSend(ws, msg);
       else if (msg.type === "read") await handleRead(ws, msg);
       else if (msg.type === "typing") await handleTyping(ws, msg);
+      else if (msg.type === "recording") await handleRecording(ws, msg);
       else if (msg.type === "call_ring") await handleCallRing(ws, msg);
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
       else if (msg.type === "call_state") await handleCallState(ws, msg);
