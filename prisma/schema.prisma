@@ -178,6 +178,10 @@ model Conversation {
   // filtre à la lecture au besoin.
   pinnedMessageId String? @db.Uuid @map("pinned_message_id")
 
+  // Messages éphémères : durée de vie (en secondes) des NOUVEAUX messages.
+  // 0 = désactivé. Les valeurs usuelles : 86400 (24h), 604800 (7j), 7776000 (90j).
+  disappearingSeconds Int @default(0) @map("disappearing_seconds")
+
   @@map("conversation")
 }
 
@@ -241,6 +245,8 @@ model Message {
   media     MediaFile[]
   createdAt DateTime      @default(now()) @db.Timestamptz @map("sendAt")
   editedAt  DateTime?     @db.Timestamptz
+  // Message éphémère : instant d'expiration (null = permanent). Purgé après.
+  expiresAt DateTime?     @db.Timestamptz @map("expires_at")
   deletedAt DateTime?     @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
   hides     MessageHide[]
   reactions MessageReaction[]

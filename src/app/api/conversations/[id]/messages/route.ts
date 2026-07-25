@@ -22,6 +22,12 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const cursor = req.nextUrl.searchParams.get("cursor");
   const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? PAGE_SIZE), 100);
 
+  // Réglage « messages éphémères » de la conversation (exposé à l'app).
+  const convCfg = await prisma.conversation.findUnique({
+    where: { id: convId },
+    select: { disappearingSeconds: true },
+  });
+
   // Blocage : masque à la lecture les messages des utilisateurs avec qui je suis
   // bloqué (dans un sens ou l'autre) → le blocage est silencieux et effectif.
   const blockedRows = await prisma.blocked.findMany({
@@ -41,6 +47,9 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     // placeholder « Ce message a été supprimé ». On EXCLUT seulement les
     // messages que CET utilisateur a masqués (« supprimer pour moi »).
       hides: { none: { userId } },
+      // Messages éphémères arrivés à expiration : masqués à la lecture (la purge
+      // définitive est faite périodiquement par le serveur WS).
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       ...(blockedIds.length > 0 ? { senderId: { notIn: blockedIds } } : {}),
     },
     orderBy: { createdAt: "desc" },
@@ -95,6 +104,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         replyTo,
         deletedAt: m.deletedAt,
         editedAt: m.editedAt,
+        expiresAt: m.expiresAt,
         starred: m.stars.length > 0,
         reactions: m.reactions.map((r) => ({ userId: r.userId, emoji: r.emoji })),
         media: m.media.map((f) => ({
@@ -109,6 +119,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
       };
     }),
     nextCursor: hasMore ? page[page.length - 1]!.id : null,
+    disappearingSeconds: convCfg?.disappearingSeconds ?? 0,
   });
 });
 
@@ -119,6 +130,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   const body = sendMessageSchema.parse(await req.json());
 
+  // Messages éphémères : calcule l'expiration selon le réglage de la conversation.
+  const convCfg = await prisma.conversation.findUnique({
+    where: { id: convId },
+    select: { disappearingSeconds: true },
+  });
+  const ttl = convCfg?.disappearingSeconds ?? 0;
+  const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
+
   const message = await prisma.message.create({
     data: {
       convId,
@@ -127,6 +146,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       type: body.type,
       replyToId: body.replyToId,
       status: "SENT",
+      expiresAt,
       ...(body.mediaId ? { media: { connect: { id: body.mediaId } } } : {}),
     },
     include: { media: true },

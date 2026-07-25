@@ -162,6 +162,15 @@ async function purgeExpiredStatuses() {
   } catch (e) {
     console.error("[ws] purge des statuts expirés:", e);
   }
+  // Messages éphémères arrivés à expiration → suppression définitive.
+  try {
+    const res = await prisma.message.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    });
+    if (res.count > 0) console.log(`[ws] Messages éphémères purgés : ${res.count}`);
+  } catch (e) {
+    console.error("[ws] purge des messages éphémères:", e);
+  }
 }
 
 // FIX: buffer des trames "incoming_call" non délivrées.
@@ -239,6 +248,7 @@ async function serializeMessage(m, media) {
     reactions: (m.reactions ?? []).map((r) => ({ userId: r.userId, emoji: r.emoji })),
     createdAt: m.createdAt,
     editedAt: m.editedAt ?? null,
+    expiresAt: m.expiresAt ?? null,
   };
 
   // MODIFICATION : inclut les médias du message cité pour le preview reply
@@ -301,6 +311,14 @@ async function handleSend(ws, msg) {
     }
   }
 
+  // Messages éphémères : si la conversation a un minuteur, calcule l'expiration.
+  const convCfg = await prisma.conversation.findUnique({
+    where: { id: convId },
+    select: { disappearingSeconds: true },
+  });
+  const ttl = convCfg?.disappearingSeconds ?? 0;
+  const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
+
   const created = await prisma.message.create({
     data: {
       convId,
@@ -309,6 +327,7 @@ async function handleSend(ws, msg) {
       type,
       status: "SENT",
       replyToId: msg.replyToId ?? null,
+      expiresAt,
       // MODIFICATION : connecte plusieurs médias
       ...(uniqueMediaIds.length > 0
         ? { media: { connect: uniqueMediaIds.map((id) => ({ id })) } }
@@ -507,6 +526,23 @@ async function handlePinMessage(ws, msg) {
   const recipients = await participantsOf(convId);
   for (const uid of recipients) {
     sendTo(uid, { type: "message_pinned", convId, messageId });
+  }
+}
+
+// Messages éphémères : règle le minuteur de la conversation (0 = désactivé).
+// Diffuse { type:"disappearing_updated", convId, seconds } aux participants.
+async function handleSetDisappearing(ws, msg) {
+  const { convId } = msg;
+  const seconds = Number.isFinite(msg.seconds) ? Math.max(0, Math.floor(msg.seconds)) : 0;
+  if (!convId) return;
+  if (!(await isParticipant(convId, ws.userId))) return;
+  await prisma.conversation.update({
+    where: { id: convId },
+    data: { disappearingSeconds: seconds },
+  });
+  const recipients = await participantsOf(convId);
+  for (const uid of recipients) {
+    sendTo(uid, { type: "disappearing_updated", convId, seconds });
   }
 }
 
@@ -1048,6 +1084,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
       else if (msg.type === "edit_message") await handleEditMessage(ws, msg);
       else if (msg.type === "pin_message") await handlePinMessage(ws, msg);
+      else if (msg.type === "set_disappearing") await handleSetDisappearing(ws, msg);
       else if (msg.type === "forward_message") await handleForwardMessage(ws, msg);
       else if (msg.type === "meeting_join") await handleMeetingJoin(ws, msg);
       else if (msg.type === "meeting_leave") await handleMeetingLeave(ws, msg);
