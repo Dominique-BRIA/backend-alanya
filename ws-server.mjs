@@ -235,6 +235,8 @@ async function serializeMessage(m, media) {
       sizeBytes: f.sizeBytes,
       durationMs: f.durationMs,
     })),
+    // Réactions brutes { userId, emoji } ; le client agrège et repère les siennes.
+    reactions: (m.reactions ?? []).map((r) => ({ userId: r.userId, emoji: r.emoji })),
     createdAt: m.createdAt,
   };
 
@@ -439,6 +441,58 @@ async function handleRecording(ws, msg) {
   for (const uid of recipients) {
     if (uid === ws.userId) continue;
     sendTo(uid, { type: "recording", convId, userId: ws.userId, isRecording: Boolean(isRecording) });
+  }
+}
+
+// Réaction emoji à un message (style WhatsApp : une réaction par user/message).
+// - emoji fourni & différent de l'actuel → pose/remplace
+// - emoji identique à l'actuel, ou emoji vide/null → retire
+// Diffuse { type:"reaction", convId, messageId, userId, emoji|null } à tous.
+async function handleReaction(ws, msg) {
+  const { convId, messageId } = msg;
+  const emoji = typeof msg.emoji === "string" ? msg.emoji.trim().slice(0, 16) : "";
+  if (!convId || !messageId) return;
+  if (!(await isParticipant(convId, ws.userId))) return;
+
+  // Le message doit appartenir à cette conversation.
+  const target = await prisma.message.findFirst({
+    where: { id: messageId, convId },
+    select: { id: true },
+  });
+  if (!target) return;
+
+  const existing = await prisma.messageReaction.findUnique({
+    where: { messageId_userId: { messageId, userId: ws.userId } },
+    select: { emoji: true },
+  });
+
+  let finalEmoji = null;
+  if (!emoji || (existing && existing.emoji === emoji)) {
+    // Retrait (emoji vide, ou re-clic sur le même emoji = bascule).
+    if (existing) {
+      await prisma.messageReaction.delete({
+        where: { messageId_userId: { messageId, userId: ws.userId } },
+      });
+    }
+  } else {
+    // Pose ou remplacement.
+    await prisma.messageReaction.upsert({
+      where: { messageId_userId: { messageId, userId: ws.userId } },
+      create: { messageId, userId: ws.userId, emoji },
+      update: { emoji },
+    });
+    finalEmoji = emoji;
+  }
+
+  const recipients = await participantsOf(convId);
+  for (const uid of recipients) {
+    sendTo(uid, {
+      type: "reaction",
+      convId,
+      messageId,
+      userId: ws.userId,
+      emoji: finalEmoji,
+    });
   }
 }
 
@@ -924,6 +978,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "read") await handleRead(ws, msg);
       else if (msg.type === "typing") await handleTyping(ws, msg);
       else if (msg.type === "recording") await handleRecording(ws, msg);
+      else if (msg.type === "reaction") await handleReaction(ws, msg);
       else if (msg.type === "call_ring") await handleCallRing(ws, msg);
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
       else if (msg.type === "call_state") await handleCallState(ws, msg);

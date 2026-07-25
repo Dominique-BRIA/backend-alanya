@@ -76,6 +76,7 @@ model User {
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
   messageHides     MessageHide[]
+  messageReactions MessageReaction[]
 
   // --- Nouvelles relations (schéma PDF) ---
   organizedMeetings     Meeting[]            @relation("MeetingOrganizer")
@@ -236,10 +237,28 @@ model Message {
   editedAt  DateTime?     @db.Timestamptz
   deletedAt DateTime?     @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
   hides     MessageHide[]
+  reactions MessageReaction[]
 
   @@index([convId, createdAt])
   @@index([senderId])
   @@map("message")
+}
+
+// Réactions emoji (extra local). Une seule réaction par utilisateur et par
+// message (@@unique) : réagir à nouveau remplace l'emoji, réagir avec le même
+// emoji le retire (géré côté handler). onDelete: Cascade nettoie automatiquement.
+model MessageReaction {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @db.Uuid @map("message_id")
+  userId    String   @db.Uuid @map("user_id")
+  emoji     String   @db.VarChar(16)
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@map("message_reactions")
 }
 
 // Suppression « pour moi » : enregistre qu'un utilisateur a masqué un message

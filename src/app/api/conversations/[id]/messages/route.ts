@@ -46,7 +46,10 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     orderBy: { createdAt: "desc" },
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    include: { media: true },
+    include: {
+      media: true,
+      reactions: { select: { userId: true, emoji: true } },
+    },
   });
 
   const hasMore = messages.length > limit;
@@ -90,6 +93,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         replyToId: m.replyToId,
         replyTo,
         deletedAt: m.deletedAt,
+        reactions: m.reactions.map((r) => ({ userId: r.userId, emoji: r.emoji })),
         media: m.media.map((f) => ({
           id: f.id,
           url: `/api/media/${f.id}`,
