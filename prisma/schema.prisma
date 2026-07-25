@@ -173,6 +173,11 @@ model Conversation {
   lastMessageType    Int?      @db.SmallInt
   lastMessageStatus  Int?      @db.SmallInt
 
+  // Message épinglé (partagé à toute la conversation). Null = aucun. Pas de FK :
+  // si le message est supprimé pour tous il reste consultable (deletedAt), et on
+  // filtre à la lecture au besoin.
+  pinnedMessageId String? @db.Uuid @map("pinned_message_id")
+
   @@map("conversation")
 }
 

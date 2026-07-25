@@ -485,6 +485,31 @@ async function handleEditMessage(ws, msg) {
   }
 }
 
+// Épingler / détacher un message (partagé à toute la conversation).
+// messageId = id à épingler, ou null/absent pour détacher.
+// Diffuse { type:"message_pinned", convId, messageId|null } aux participants.
+async function handlePinMessage(ws, msg) {
+  const { convId } = msg;
+  const messageId = typeof msg.messageId === "string" ? msg.messageId : null;
+  if (!convId) return;
+  if (!(await isParticipant(convId, ws.userId))) return;
+  if (messageId) {
+    const m = await prisma.message.findFirst({
+      where: { id: messageId, convId },
+      select: { id: true },
+    });
+    if (!m) return;
+  }
+  await prisma.conversation.update({
+    where: { id: convId },
+    data: { pinnedMessageId: messageId },
+  });
+  const recipients = await participantsOf(convId);
+  for (const uid of recipients) {
+    sendTo(uid, { type: "message_pinned", convId, messageId });
+  }
+}
+
 async function handleReaction(ws, msg) {
   const { convId, messageId } = msg;
   const emoji = typeof msg.emoji === "string" ? msg.emoji.trim().slice(0, 16) : "";
@@ -1022,6 +1047,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
       else if (msg.type === "edit_message") await handleEditMessage(ws, msg);
+      else if (msg.type === "pin_message") await handlePinMessage(ws, msg);
       else if (msg.type === "forward_message") await handleForwardMessage(ws, msg);
       else if (msg.type === "meeting_join") await handleMeetingJoin(ws, msg);
       else if (msg.type === "meeting_leave") await handleMeetingLeave(ws, msg);
