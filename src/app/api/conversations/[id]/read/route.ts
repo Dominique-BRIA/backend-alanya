@@ -11,16 +11,24 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   await assertParticipant(convId, userId);
 
   const now = new Date();
-  await prisma.$transaction([
-    prisma.participant.update({
-      where: { convId_userId: { convId, userId } },
-      data: { lastReadAt: now, unreadCount: 0 },
-    }),
-    prisma.message.updateMany({
+  // Toujours mettre à jour le pointeur de lecture (non-lus).
+  await prisma.participant.update({
+    where: { convId_userId: { convId, userId } },
+    data: { lastReadAt: now, unreadCount: 0 },
+  });
+
+  // Confidentialité : ne passe les messages en READ que si l'utilisateur
+  // envoie les confirmations de lecture (sinon l'expéditeur ne les verra pas).
+  const me = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { readReceipts: true },
+  });
+  if (me && me.readReceipts !== 0) {
+    await prisma.message.updateMany({
       where: { convId, senderId: { not: userId }, status: { not: "READ" } },
       data: { status: "READ" },
-    }),
-  ]);
+    });
+  }
 
   return ok({ message: "Conversation marquée comme lue", readAt: now });
 });

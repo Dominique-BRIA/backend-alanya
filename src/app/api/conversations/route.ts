@@ -66,13 +66,18 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       isGroup: conv.isGroup,
       title,
       avatarUrl: conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null,
-      members: conv.participants.map((pp) => ({
-        id: pp.userId,
-        pseudo: pp.user.pseudo ?? null,
-        publicNumber: pp.user.publicNumber,
-        isOnline: pp.user.isOnline,
-        lastSeen: pp.user.lastSeen ?? null,
-      })),
+      members: conv.participants.map((pp) => {
+        // Confidentialité : masque la présence d'un pair qui a choisi « personne ».
+        const hidePresence =
+          pp.userId !== userId && pp.user.lastSeenVisibility === 0;
+        return {
+          id: pp.userId,
+          pseudo: pp.user.pseudo ?? null,
+          publicNumber: pp.user.publicNumber,
+          isOnline: hidePresence ? 0 : pp.user.isOnline,
+          lastSeen: hidePresence ? null : (pp.user.lastSeen ?? null),
+        };
+      }),
       lastMessage: lastContent != null
           ? {
               id: fallbackLast?.id ?? "",

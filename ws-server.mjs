@@ -97,16 +97,20 @@ async function conversationPeers(userId) {
 // de l'app laissait l'utilisateur « en ligne » indéfiniment.
 async function announcePresence(userId, online) {
   let lastSeen = null;
+  let visibility = 2;
   try {
     const updated = await prisma.user.update({
       where: { id: userId },
       data: online ? { isOnline: 1 } : { isOnline: 0, lastSeen: new Date() },
-      select: { lastSeen: true },
+      select: { lastSeen: true, lastSeenVisibility: true },
     });
     lastSeen = updated.lastSeen;
+    visibility = updated.lastSeenVisibility;
   } catch {
     return; // Utilisateur supprimé / course au démarrage : non bloquant.
   }
+  // Confidentialité : « personne » (0) → on n'annonce pas la présence.
+  if (visibility === 0) return;
   try {
     const payload = {
       type: "presence",
@@ -127,8 +131,16 @@ async function announcePresence(userId, online) {
 // qu'un contact change d'état).
 async function sendPresenceSnapshot(userId, ws) {
   try {
-    for (const uid of await conversationPeers(userId)) {
-      if (isUserOnline(uid)) {
+    const peers = await conversationPeers(userId);
+    if (peers.length === 0) return;
+    // Confidentialité : n'inclut que les pairs qui n'ont pas masqué leur présence.
+    const visible = await prisma.user.findMany({
+      where: { id: { in: peers }, lastSeenVisibility: { not: 0 } },
+      select: { id: true },
+    });
+    const visibleIds = new Set(visible.map((u) => u.id));
+    for (const uid of peers) {
+      if (visibleIds.has(uid) && isUserOnline(uid)) {
         ws.send(
           JSON.stringify({ type: "presence", userId: uid, isOnline: 1, lastSeen: null }),
         );
@@ -418,10 +430,21 @@ async function handleRead(ws, msg) {
   const { convId } = msg;
   if (!convId || !(await isParticipant(convId, ws.userId))) return;
   const now = new Date();
+  // Toujours mettre à jour le pointeur de lecture local (non-lus), même si les
+  // confirmations de lecture sont désactivées.
   await prisma.participant.update({
     where: { convId_userId: { convId, userId: ws.userId } },
     data: { lastReadAt: now, unreadCount: 0 },
   });
+
+  // Confidentialité : si l'utilisateur a désactivé les confirmations de lecture,
+  // on NE marque PAS les messages comme "READ" et on ne prévient personne
+  // (l'expéditeur ne verra donc jamais la double coche bleue).
+  const me = await prisma.user.findUnique({
+    where: { id: ws.userId },
+    select: { readReceipts: true },
+  });
+  if (me && me.readReceipts === 0) return;
 
   const updated = await prisma.message.updateMany({
     where: {

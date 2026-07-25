@@ -50,6 +50,12 @@ model User {
   // --- F5 : Présence en ligne ---
   isOnline      Int      @default(0) @db.SmallInt @map("is_online")
 
+  // --- Confidentialité (Phase 3.1) ---
+  // readReceipts : 1 = envoie/reçoit les confirmations de lecture, 0 = off.
+  // lastSeenVisibility : 0 = personne, 1 = mes contacts, 2 = tout le monde.
+  readReceipts       Int  @default(1) @db.SmallInt @map("read_receipts")
+  lastSeenVisibility Int  @default(2) @db.SmallInt @map("last_seen_visibility")
+
   // --- F6 : Exclusion de compte ---
   exclus        Int      @default(0) @db.SmallInt
   excludeAt     DateTime? @db.Timestamptz     @map("exclude_at")

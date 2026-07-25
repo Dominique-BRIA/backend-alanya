@@ -27,7 +27,11 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       pseudo: p.user.pseudo ?? null,
       publicNumber: p.user.publicNumber,
       avatarUrl: p.user.avatarUrl ?? null,
-      isOnline: p.user.isOnline,
+      // Confidentialité : masque la présence d'un membre qui a choisi « personne ».
+      isOnline:
+        p.userId !== userId && p.user.lastSeenVisibility === 0
+          ? 0
+          : p.user.isOnline,
       role: p.role,
       joinedAt: p.joinedAt,
     })),
