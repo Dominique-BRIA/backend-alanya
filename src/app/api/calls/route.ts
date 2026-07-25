@@ -141,6 +141,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       userId: p.userId,
       pseudo: p.user.pseudo ?? null,
       publicNumber: p.user.publicNumber,
+      avatarUrl: p.user.avatarUrl ?? null,
     }));
 
   const meta = await conversationMeta(call.convId);

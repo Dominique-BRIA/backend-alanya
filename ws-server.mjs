@@ -668,6 +668,7 @@ async function handleCallRing(ws, msg) {
   if (call.status !== "RINGING") return;
 
   const callerName = call.initiator.pseudo ?? call.initiator.publicNumber;
+  const callerAvatarUrl = call.initiator.avatarUrl ?? null;
   let isGroup = false;
   let groupName = null;
   let memberCount = 0;
@@ -692,6 +693,7 @@ async function handleCallRing(ws, msg) {
       callType: call.type,
       callerId: ws.userId,
       callerName,
+      callerAvatarUrl,
       isGroup,
       groupName,
       memberCount,
