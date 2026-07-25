@@ -58,6 +58,30 @@ function isUserOnline(userId) {
   return false;
 }
 
+// Présence fiable : met à jour User.isOnline (+ lastSeen à la déconnexion).
+// Auparavant isOnline n'était touché qu'au login/logout REST → un crash / kill
+// de l'app laissait l'utilisateur « en ligne » indéfiniment. On le pilote donc
+// désormais sur le cycle de vie réel de la socket WS.
+async function setPresence(userId, online) {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: online ? { isOnline: 1 } : { isOnline: 0, lastSeen: new Date() },
+    });
+  } catch {
+    // Utilisateur supprimé / course au démarrage : non bloquant.
+  }
+}
+
+// À appeler quand une socket disparaît (close/error). Passe l'utilisateur
+// hors-ligne uniquement si PLUS AUCUNE de ses sockets n'est ouverte (multi-device).
+function markOfflineIfGone(userId, ws) {
+  removeClient(userId, ws);
+  if (!clients.has(userId)) {
+    setPresence(userId, false).catch(() => {});
+  }
+}
+
 // FIX: buffer des trames "incoming_call" non délivrées.
 const pendingCalls = new Map();
 
@@ -751,6 +775,15 @@ wss.on("error", (err) => {
 
 wss.on("listening", () => {
   console.log(`[ws] Serveur WebSocket Alanya à l'écoute sur ws://localhost:${PORT}`);
+  // Au démarrage, aucune socket n'est encore connectée : on remet tout le monde
+  // hors-ligne pour éviter les « en ligne » fantômes survivant à un restart.
+  // Les utilisateurs repasseront en ligne à leur reconnexion WS.
+  prisma.user
+    .updateMany({ where: { isOnline: 1 }, data: { isOnline: 0 } })
+    .then((r) => {
+      if (r.count > 0) console.log(`[ws] Présence réinitialisée (${r.count} users)`);
+    })
+    .catch((e) => console.error("[ws] reset présence au démarrage:", e));
 });
 
 wss.on("connection", (ws, req) => {
@@ -769,6 +802,7 @@ wss.on("connection", (ws, req) => {
   ws.userId = userId;
   ws.isAlive = true;
   addClient(userId, ws);
+  setPresence(userId, true).catch(() => {}); // en ligne dès la connexion WS
   ws.send(JSON.stringify({ type: "ready" }));
 
   flushPendingCalls(userId, ws).catch((e) =>
@@ -807,7 +841,7 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    removeClient(userId, ws);
+    markOfflineIfGone(userId, ws); // hors-ligne + lastSeen si dernière socket
     for (const [meetingId, room] of meetingRooms) {
       if (room.has(userId)) {
         room.delete(userId);
@@ -820,7 +854,7 @@ wss.on("connection", (ws, req) => {
       }
     }
   });
-  ws.on("error", () => removeClient(userId, ws));
+  ws.on("error", () => markOfflineIfGone(userId, ws));
 });
 
 const heartbeat = setInterval(() => {
