@@ -77,6 +77,7 @@ model User {
   pushDevices      PushDevice[]
   messageHides     MessageHide[]
   messageReactions MessageReaction[]
+  messageStars     MessageStar[]
 
   // --- Nouvelles relations (schéma PDF) ---
   organizedMeetings     Meeting[]            @relation("MeetingOrganizer")
@@ -238,10 +239,26 @@ model Message {
   deletedAt DateTime?     @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
   hides     MessageHide[]
   reactions MessageReaction[]
+  stars     MessageStar[]
 
   @@index([convId, createdAt])
   @@index([senderId])
   @@map("message")
+}
+
+// Messages favoris (étoile). Privé à chaque utilisateur (comme WhatsApp) :
+// une ligne = « cet utilisateur a mis ce message en favori ». onDelete Cascade.
+model MessageStar {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @db.Uuid @map("message_id")
+  userId    String   @db.Uuid @map("user_id")
+  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_stars")
 }
 
 // Réactions emoji (extra local). Une seule réaction par utilisateur et par

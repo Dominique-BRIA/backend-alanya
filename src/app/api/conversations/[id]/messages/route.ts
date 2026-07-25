@@ -49,6 +49,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     include: {
       media: true,
       reactions: { select: { userId: true, emoji: true } },
+      stars: { where: { userId }, select: { id: true } },
     },
   });
 
@@ -94,6 +95,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         replyTo,
         deletedAt: m.deletedAt,
         editedAt: m.editedAt,
+        starred: m.stars.length > 0,
         reactions: m.reactions.map((r) => ({ userId: r.userId, emoji: r.emoji })),
         media: m.media.map((f) => ({
           id: f.id,
