@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { parse } from "node:url";
-import { isPushEnabled, pushIncomingCall, pushNewMessage } from "./push.mjs";
+import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled } from "./push.mjs";
 
 const prisma = new PrismaClient();
 // Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
@@ -408,6 +408,16 @@ async function handleCallState(ws, msg) {
   };
   for (const uid of ids) {
     sendTo(uid, payload);
+  }
+
+  // Appel terminé/refusé/annulé → push data-only pour retirer la notif d'appel
+  // plein écran chez les destinataires dont l'app est fermée (le WS ne les
+  // atteint pas). Ciblé par le callId partagé.
+  if (["ended", "rejected", "declined", "cancelled"].includes(state) && isPushEnabled()) {
+    for (const uid of ids) {
+      if (uid === ws.userId) continue;
+      await pushCallCancelled(prisma, { recipientId: uid, callId });
+    }
   }
 }
 

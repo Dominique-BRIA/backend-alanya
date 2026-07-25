@@ -165,3 +165,15 @@ export async function pushIncomingCall(prisma, {
     },
   });
 }
+
+/** Notifie (data-only) que l'appel est terminé/annulé → le client retire la
+ *  notif d'appel plein écran, même app fermée. Ciblé par le callId partagé. */
+export async function pushCallCancelled(prisma, { recipientId, callId }) {
+  if (!isPushEnabled()) return;
+  await sendPushToUser(prisma, recipientId, {
+    title: "",
+    body: "",
+    dataOnly: true,
+    data: { type: "call_cancelled", callId: callId ?? "" },
+  });
+}
