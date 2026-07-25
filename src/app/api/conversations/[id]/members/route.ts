@@ -17,6 +17,12 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   });
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
 
+  // Répare les anciens groupes créés avant les rôles explicites : le premier
+  // participant chronologique devient admin, une seule fois.
+  if (!conv.participants.some((p) => p.role === "ADMIN")) {
+    const first = [...conv.participants].sort((a,b) => a.joinedAt.getTime()-b.joinedAt.getTime())[0];
+    if (first) { await prisma.participant.update({ where: { convId_userId: { convId, userId: first.userId } }, data: { role: "ADMIN" } }); first.role = "ADMIN"; }
+  }
   const isMember = conv.participants.some((p) => p.userId === userId);
   if (!isMember) return fail("Accès refusé", 403, "FORBIDDEN");
 
