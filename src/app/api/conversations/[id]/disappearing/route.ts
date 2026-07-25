@@ -4,6 +4,19 @@ import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
 
+// GET /api/conversations/:id/disappearing — réglage courant du minuteur.
+export const GET = withAuth(
+  async (_req: NextRequest, userId: string, ctx: { params: Promise<Record<string, string>> }) => {
+    const { id: convId } = await ctx.params;
+    await assertParticipant(convId, userId);
+    const conv = await prisma.conversation.findUnique({
+      where: { id: convId },
+      select: { disappearingSeconds: true },
+    });
+    return ok({ disappearingSeconds: conv?.disappearingSeconds ?? 0 });
+  },
+);
+
 // POST /api/conversations/:id/disappearing — body { seconds: number }
 // Règle le minuteur des messages éphémères (0 = désactivé). Repli REST ;
 // la diffusion temps réel est gérée par le serveur WS.
