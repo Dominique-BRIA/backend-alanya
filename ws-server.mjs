@@ -73,18 +73,69 @@ async function areBlocked(userA, userB) {
   return row !== null;
 }
 
-// Présence fiable : met à jour User.isOnline (+ lastSeen à la déconnexion).
+// Personnes qui partagent au moins une conversation avec `userId` (= celles qui
+// voient sa présence dans l'app). Cible de la diffusion temps réel.
+async function conversationPeers(userId) {
+  const myConvs = await prisma.participant.findMany({
+    where: { userId },
+    select: { convId: true },
+  });
+  const convIds = myConvs.map((p) => p.convId);
+  if (convIds.length === 0) return [];
+  const peers = await prisma.participant.findMany({
+    where: { convId: { in: convIds }, userId: { not: userId } },
+    select: { userId: true },
+    distinct: ["userId"],
+  });
+  return peers.map((p) => p.userId);
+}
+
+// Présence fiable : met à jour User.isOnline (+ lastSeen à la déconnexion) ET la
+// DIFFUSE en temps réel (event WS `presence`) aux personnes qui partagent une
+// conversation → remplace le polling toutes les 5 s côté app.
 // Auparavant isOnline n'était touché qu'au login/logout REST → un crash / kill
-// de l'app laissait l'utilisateur « en ligne » indéfiniment. On le pilote donc
-// désormais sur le cycle de vie réel de la socket WS.
-async function setPresence(userId, online) {
+// de l'app laissait l'utilisateur « en ligne » indéfiniment.
+async function announcePresence(userId, online) {
+  let lastSeen = null;
   try {
-    await prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id: userId },
       data: online ? { isOnline: 1 } : { isOnline: 0, lastSeen: new Date() },
+      select: { lastSeen: true },
     });
+    lastSeen = updated.lastSeen;
   } catch {
-    // Utilisateur supprimé / course au démarrage : non bloquant.
+    return; // Utilisateur supprimé / course au démarrage : non bloquant.
+  }
+  try {
+    const payload = {
+      type: "presence",
+      userId,
+      isOnline: online ? 1 : 0,
+      lastSeen: lastSeen ? lastSeen.toISOString() : null,
+    };
+    for (const uid of await conversationPeers(userId)) {
+      if (isUserOnline(uid)) sendTo(uid, payload);
+    }
+  } catch (e) {
+    console.error("[ws] diffusion présence:", e);
+  }
+}
+
+// À la connexion : envoie à l'utilisateur l'état EN LIGNE de ses interlocuteurs
+// déjà connectés, pour que son UI soit correcte immédiatement (sans attendre
+// qu'un contact change d'état).
+async function sendPresenceSnapshot(userId, ws) {
+  try {
+    for (const uid of await conversationPeers(userId)) {
+      if (isUserOnline(uid)) {
+        ws.send(
+          JSON.stringify({ type: "presence", userId: uid, isOnline: 1, lastSeen: null }),
+        );
+      }
+    }
+  } catch (e) {
+    console.error("[ws] snapshot présence:", e);
   }
 }
 
@@ -93,7 +144,7 @@ async function setPresence(userId, online) {
 function markOfflineIfGone(userId, ws) {
   removeClient(userId, ws);
   if (!clients.has(userId)) {
-    setPresence(userId, false).catch(() => {});
+    announcePresence(userId, false).catch(() => {});
   }
 }
 
@@ -849,7 +900,8 @@ wss.on("connection", (ws, req) => {
   ws.userId = userId;
   ws.isAlive = true;
   addClient(userId, ws);
-  setPresence(userId, true).catch(() => {}); // en ligne dès la connexion WS
+  announcePresence(userId, true).catch(() => {}); // en ligne + diffusion
+  sendPresenceSnapshot(userId, ws).catch(() => {}); // état des contacts en ligne
   ws.send(JSON.stringify({ type: "ready" }));
 
   flushPendingCalls(userId, ws).catch((e) =>
