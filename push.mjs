@@ -59,7 +59,7 @@ async function tokensForUser(prisma, userId) {
   return rows.map((r) => r.token);
 }
 
-export async function sendPushToUser(prisma, userId, { title, body, data = {} }) {
+export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false }) {
   const fb = await loadFirebase();
   if (!fb) return;
 
@@ -68,14 +68,17 @@ export async function sendPushToUser(prisma, userId, { title, body, data = {} })
 
   try {
     const messaging = fb.getMessaging(fb.app);
-    const res = await messaging.sendEachForMulticast({
+    // dataOnly : pas de bloc "notification" → le handler d'arrière-plan du
+    // client contrôle l'affichage (nécessaire pour la notif d'appel plein écran).
+    const payload = {
       tokens,
-      notification: { title, body },
       data,
       android: { priority: "high" },
       apns: { payload: { aps: { sound: "default" } } },
       webpush: { headers: { Urgency: "high" } },
-    });
+    };
+    if (!dataOnly) payload.notification = { title, body };
+    const res = await messaging.sendEachForMulticast(payload);
 
     const stale = [];
     res.responses.forEach((r, i) => {
@@ -147,6 +150,9 @@ export async function pushIncomingCall(prisma, {
   await sendPushToUser(prisma, recipientId, {
     title,
     body,
+    // data-only → déclenche le handler d'arrière-plan qui affiche la notif
+    // d'appel PLEIN ÉCRAN (full-screen intent) même app fermée.
+    dataOnly: true,
     data: {
       type: "incoming_call",
       callId,
@@ -154,6 +160,8 @@ export async function pushIncomingCall(prisma, {
       callerName,
       callType,
       isGroup: String(Boolean(isGroup)),
+      title,
+      body,
     },
   });
 }
