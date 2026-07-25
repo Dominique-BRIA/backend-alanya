@@ -70,6 +70,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
         id: pp.userId,
         pseudo: pp.user.pseudo ?? null,
         publicNumber: pp.user.publicNumber,
+        role: pp.role,
         isOnline: pp.user.isOnline,
         lastSeen: pp.user.lastSeen ?? null,
       })),
