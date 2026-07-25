@@ -97,6 +97,22 @@ function markOfflineIfGone(userId, ws) {
   }
 }
 
+// Purge des statuts (stories) expirés. Avant, ils étaient seulement masqués à la
+// lecture (expiresAt > now) mais jamais supprimés → accumulation infinie en base.
+// Les StatusView associées partent en cascade (onDelete: Cascade).
+// NB : les binaires média des statuts (Status.mediaUrl → MediaFile) ne sont pas
+// nettoyés ici — ce serait un GC média séparé.
+async function purgeExpiredStatuses() {
+  try {
+    const res = await prisma.status.deleteMany({
+      where: { expiresAt: { lt: new Date() } },
+    });
+    if (res.count > 0) console.log(`[ws] Statuts expirés purgés : ${res.count}`);
+  } catch (e) {
+    console.error("[ws] purge des statuts expirés:", e);
+  }
+}
+
 // FIX: buffer des trames "incoming_call" non délivrées.
 const pendingCalls = new Map();
 
@@ -811,6 +827,10 @@ wss.on("listening", () => {
       if (r.count > 0) console.log(`[ws] Présence réinitialisée (${r.count} users)`);
     })
     .catch((e) => console.error("[ws] reset présence au démarrage:", e));
+
+  // Purge des statuts expirés : une fois au démarrage, puis toutes les heures.
+  purgeExpiredStatuses();
+  setInterval(purgeExpiredStatuses, 60 * 60 * 1000);
 });
 
 wss.on("connection", (ws, req) => {
