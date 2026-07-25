@@ -58,6 +58,21 @@ function isUserOnline(userId) {
   return false;
 }
 
+// Blocage (source de vérité : table Blocked). Deux personnes sont bloquées si
+// l'une a bloqué l'autre → on ne délivre plus messages/appels entre elles.
+async function areBlocked(userA, userB) {
+  const row = await prisma.blocked.findFirst({
+    where: {
+      OR: [
+        { alanyaID: userA, idCallerBlock: userB },
+        { alanyaID: userB, idCallerBlock: userA },
+      ],
+    },
+    select: { idBlock: true },
+  });
+  return row !== null;
+}
+
 // Présence fiable : met à jour User.isOnline (+ lastSeen à la déconnexion).
 // Auparavant isOnline n'était touché qu'au login/logout REST → un crash / kill
 // de l'app laissait l'utilisateur « en ligne » indéfiniment. On le pilote donc
@@ -252,9 +267,18 @@ async function handleSend(ws, msg) {
   const serialized = await serializeMessage(created, created.media);
   const recipients = await participantsOf(convId);
 
-  const otherOnline = recipients.some(
-    (uid) => uid !== ws.userId && isUserOnline(uid),
-  );
+  // Blocage (conversation directe) : si l'un a bloqué l'autre, on ne délivre pas
+  // le message au correspondant (ni WS, ni push, ni statut DELIVERED). Le message
+  // reste chez l'émetteur ; il est aussi filtré à la lecture côté bloqueur.
+  let blockedDirect = false;
+  if (recipients.length === 2) {
+    const other = recipients.find((uid) => uid !== ws.userId);
+    if (other) blockedDirect = await areBlocked(ws.userId, other);
+  }
+
+  const otherOnline =
+    !blockedDirect &&
+    recipients.some((uid) => uid !== ws.userId && isUserOnline(uid));
   let finalStatus = created.status;
   if (otherOnline) {
     await prisma.message.update({ where: { id: created.id }, data: { status: "DELIVERED" } });
@@ -263,6 +287,7 @@ async function handleSend(ws, msg) {
 
   const messageWithStatus = { ...serialized, status: finalStatus };
   for (const uid of recipients) {
+    if (uid !== ws.userId && blockedDirect) continue; // pas de livraison au bloqué
     sendTo(uid, {
       type: "message",
       message: messageWithStatus,
@@ -270,7 +295,7 @@ async function handleSend(ws, msg) {
     });
   }
 
-  if (isPushEnabled()) {
+  if (isPushEnabled() && !blockedDirect) {
     const sender = await prisma.user.findUnique({
       where: { id: ws.userId },
     });
@@ -392,6 +417,8 @@ async function handleCallRing(ws, msg) {
   const targets = await callParticipantIds(callId);
   for (const uid of targets) {
     if (uid === ws.userId) continue;
+    // Blocage : ne fait pas sonner une personne bloquée (ou qui a bloqué l'appelant).
+    if (await areBlocked(ws.userId, uid)) continue;
     const payload = {
       type: "incoming_call",
       callId,

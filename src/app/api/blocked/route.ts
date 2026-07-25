@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { blockUserSchema } from "@/lib/validation";
+import { mirrorContactBlock } from "@/lib/blocking";
 
 // GET /api/blocked — liste des utilisateurs bloqués par l'utilisateur connecté.
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -49,6 +50,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       idCallerBlock: target.id,
     },
   });
+
+  // Miroir : reflète sur Contact.isBlocked si la personne est dans le répertoire.
+  await mirrorContactBlock(userId, target.id, true);
 
   return ok(
     {

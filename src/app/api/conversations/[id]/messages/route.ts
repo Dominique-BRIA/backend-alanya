@@ -22,6 +22,18 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const cursor = req.nextUrl.searchParams.get("cursor");
   const limit = Math.min(Number(req.nextUrl.searchParams.get("limit") ?? PAGE_SIZE), 100);
 
+  // Blocage : masque à la lecture les messages des utilisateurs avec qui je suis
+  // bloqué (dans un sens ou l'autre) → le blocage est silencieux et effectif.
+  const blockedRows = await prisma.blocked.findMany({
+    where: { OR: [{ alanyaID: userId }, { idCallerBlock: userId }] },
+    select: { alanyaID: true, idCallerBlock: true },
+  });
+  const blockedIds = [
+    ...new Set(
+      blockedRows.map((b) => (b.alanyaID === userId ? b.idCallerBlock : b.alanyaID)),
+    ),
+  ];
+
   const messages = await prisma.message.findMany({
     where: {
       convId,
@@ -29,6 +41,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     // placeholder « Ce message a été supprimé ». On EXCLUT seulement les
     // messages que CET utilisateur a masqués (« supprimer pour moi »).
       hides: { none: { userId } },
+      ...(blockedIds.length > 0 ? { senderId: { notIn: blockedIds } } : {}),
     },
     orderBy: { createdAt: "desc" },
     take: limit + 1,

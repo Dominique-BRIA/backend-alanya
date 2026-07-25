@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { updateContactSchema } from "@/lib/validation";
+import { setBlockRow } from "@/lib/blocking";
 
 // PATCH /api/contacts/:id — met à jour un contact (alias, blocage).
 export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
@@ -21,6 +22,14 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
       isBlocked: data.isBlocked ?? undefined,
     },
   });
+
+  // Unification : le flag Contact.isBlocked est un miroir ; la source de vérité
+  // est la table Blocked. On synchronise pour que la fiche contact et l'écran
+  // Réglages > Bloqués restent cohérents et que le blocage soit appliqué.
+  if (data.isBlocked !== undefined) {
+    await setBlockRow(userId, contact.contactId, data.isBlocked);
+  }
+
   return ok({ id: updated.id, alias: updated.alias, isBlocked: updated.isBlocked });
 });
 

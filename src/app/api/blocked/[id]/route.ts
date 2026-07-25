@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { mirrorContactBlock } from "@/lib/blocking";
 
 // DELETE /api/blocked/:id — débloque un utilisateur (id = idBlock).
 export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -18,6 +19,9 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) =>
   }
 
   await prisma.blocked.delete({ where: { idBlock } });
+
+  // Miroir : lève aussi le flag Contact.isBlocked si la personne est un contact.
+  await mirrorContactBlock(blocked.alanyaID, blocked.idCallerBlock, false);
 
   return ok({ message: "Utilisateur débloqué", idBlock });
 });
