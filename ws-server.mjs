@@ -563,9 +563,33 @@ async function handleSetDisappearing(ws, msg) {
     where: { id: convId },
     data: { disappearingSeconds: seconds },
   });
+
+  // Message système persistant dans le fil (façon WhatsApp). Non éphémère.
+  const label =
+    seconds <= 0 ? "Messages éphémères désactivés"
+    : seconds >= 7776000 ? "Messages éphémères activés · 90 jours"
+    : seconds >= 604800 ? "Messages éphémères activés · 7 jours"
+    : "Messages éphémères activés · 24 heures";
+  const sys = await prisma.message.create({
+    data: { convId, senderId: ws.userId, content: label, type: "SYSTEM", status: "SENT" },
+    include: { media: true },
+  });
+  await prisma.conversation.update({
+    where: { id: convId },
+    data: {
+      lastMessage: label,
+      lastMessageAt: new Date(),
+      lastMessageSenderID: ws.userId,
+      lastMessageType: 2,
+      lastMessageStatus: 0,
+    },
+  });
+  const serialized = await serializeMessage(sys, sys.media);
+
   const recipients = await participantsOf(convId);
   for (const uid of recipients) {
     sendTo(uid, { type: "disappearing_updated", convId, seconds });
+    sendTo(uid, { type: "message", message: serialized });
   }
 }
 
