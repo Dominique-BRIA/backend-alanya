@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { isGroupAdmin } from "@/lib/groups";
 
 // GET /api/conversations/:id/members — liste les membres du groupe.
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -49,9 +50,12 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
   if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
 
-  // Tout membre peut ajouter des membres
+  // Seul un admin peut ajouter des membres (symétrique du retrait).
   const me = conv.participants.find((p) => p.userId === userId);
   if (!me) return fail("Accès refusé", 403, "FORBIDDEN");
+  if (!isGroupAdmin(conv.participants, userId)) {
+    return fail("Seul un admin peut ajouter des membres", 403, "NOT_ADMIN");
+  }
 
   // Trouve les utilisateurs par numéro public
   const users = await prisma.user.findMany({
@@ -104,11 +108,7 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   const me = conv.participants.find((p) => p.userId === userId);
   if (!me) return fail("Accès refusé", 403, "FORBIDDEN");
 
-  const hasAdmin = conv.participants.some((p) => p.role === "ADMIN");
-  const isFirst = conv.participants[0]?.userId === userId;
-  const isAdmin = me.role === "ADMIN" || (!hasAdmin && isFirst);
-
-  if (targetId !== userId && !isAdmin) {
+  if (targetId !== userId && !isGroupAdmin(conv.participants, userId)) {
     return fail("Seul un admin peut retirer des membres", 403, "NOT_ADMIN");
   }
 
@@ -128,4 +128,40 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   }
 
   return ok({ message: "Membre retiré", userId: targetId });
+});
+
+// PATCH /api/conversations/:id/members — change le rôle d'un membre.
+// Body : { userId: string, role: "ADMIN" | "MEMBER" }. Réservé aux admins.
+export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
+  const { id: convId } = await ctx.params;
+  const { userId: targetId, role } = await req.json();
+
+  if (typeof targetId !== "string" || (role !== "ADMIN" && role !== "MEMBER")) {
+    return fail("Paramètres invalides", 400, "BAD_PARAMS");
+  }
+
+  const conv = await prisma.conversation.findUnique({
+    where: { id: convId },
+    include: { participants: true },
+  });
+  if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
+  if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
+
+  if (!isGroupAdmin(conv.participants, userId)) {
+    return fail("Seul un admin peut changer les rôles", 403, "NOT_ADMIN");
+  }
+
+  const target = conv.participants.find((p) => p.userId === targetId);
+  if (!target) return fail("Membre introuvable dans ce groupe", 404, "NOT_MEMBER");
+
+  await prisma.participant.update({
+    where: { convId_userId: { convId, userId: targetId } },
+    data: { role },
+  });
+
+  return ok({
+    message: role === "ADMIN" ? "Promu administrateur" : "Rétrogradé membre",
+    userId: targetId,
+    role,
+  });
 });
