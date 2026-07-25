@@ -238,6 +238,7 @@ async function serializeMessage(m, media) {
     // Réactions brutes { userId, emoji } ; le client agrège et repère les siennes.
     reactions: (m.reactions ?? []).map((r) => ({ userId: r.userId, emoji: r.emoji })),
     createdAt: m.createdAt,
+    editedAt: m.editedAt ?? null,
   };
 
   // MODIFICATION : inclut les médias du message cité pour le preview reply
@@ -448,6 +449,42 @@ async function handleRecording(ws, msg) {
 // - emoji fourni & différent de l'actuel → pose/remplace
 // - emoji identique à l'actuel, ou emoji vide/null → retire
 // Diffuse { type:"reaction", convId, messageId, userId, emoji|null } à tous.
+// Édition d'un message : seul l'expéditeur, uniquement du TEXTE non supprimé.
+// Diffuse { type:"message_edited", convId, messageId, content, editedAt } à tous.
+async function handleEditMessage(ws, msg) {
+  const { messageId } = msg;
+  const content = typeof msg.content === "string" ? msg.content.trim() : "";
+  if (!messageId || !content) return;
+
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message) {
+    ws.send(JSON.stringify({ type: "error", message: "Message introuvable" }));
+    return;
+  }
+  if (message.senderId !== ws.userId) {
+    ws.send(JSON.stringify({ type: "error", message: "Seul l'expéditeur peut modifier ce message" }));
+    return;
+  }
+  if (message.deletedAt || message.type !== "TEXT") return;
+
+  const editedAt = new Date();
+  await prisma.message.update({
+    where: { id: messageId },
+    data: { content, editedAt },
+  });
+
+  const recipients = await participantsOf(message.convId);
+  for (const uid of recipients) {
+    sendTo(uid, {
+      type: "message_edited",
+      convId: message.convId,
+      messageId,
+      content,
+      editedAt,
+    });
+  }
+}
+
 async function handleReaction(ws, msg) {
   const { convId, messageId } = msg;
   const emoji = typeof msg.emoji === "string" ? msg.emoji.trim().slice(0, 16) : "";
@@ -984,6 +1021,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_state") await handleCallState(ws, msg);
       else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
+      else if (msg.type === "edit_message") await handleEditMessage(ws, msg);
       else if (msg.type === "forward_message") await handleForwardMessage(ws, msg);
       else if (msg.type === "meeting_join") await handleMeetingJoin(ws, msg);
       else if (msg.type === "meeting_leave") await handleMeetingLeave(ws, msg);

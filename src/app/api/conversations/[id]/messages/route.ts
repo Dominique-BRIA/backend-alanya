@@ -93,6 +93,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         replyToId: m.replyToId,
         replyTo,
         deletedAt: m.deletedAt,
+        editedAt: m.editedAt,
         reactions: m.reactions.map((r) => ({ userId: r.userId, emoji: r.emoji })),
         media: m.media.map((f) => ({
           id: f.id,
