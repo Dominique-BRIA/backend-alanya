@@ -889,9 +889,27 @@ async function handleForwardMessage(ws, msg) {
       include: { media: true },
     });
 
+    // Fait remonter la conversation cible (dernier message dénormalisé) et
+    // incrémente les non-lus — un message transféré est un vrai nouveau message.
     await prisma.conversation.update({
       where: { id: targetConvId },
-      data: { updatedAt: new Date() },
+      data: {
+        updatedAt: new Date(),
+        lastMessage: (original.content ?? "").slice(0, 500) || null,
+        lastMessageAt: new Date(),
+        lastMessageSenderID: ws.userId,
+        lastMessageType:
+          original.type === "TEXT" ? 0
+          : original.type === "IMAGE" ? 1
+          : original.type === "AUDIO" ? 3
+          : original.type === "VIDEO" ? 4
+          : 2,
+        lastMessageStatus: 0,
+      },
+    });
+    await prisma.participant.updateMany({
+      where: { convId: targetConvId, userId: { not: ws.userId } },
+      data: { unreadCount: { increment: 1 } },
     });
 
     const serialized = await serializeMessage(created, created.media);
