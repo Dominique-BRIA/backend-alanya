@@ -1,0 +1,2 @@
+import{prisma}from"@/lib/prisma";import{withAuth}from"@/lib/auth-context";import{ok,fail}from"@/lib/http";
+export const DELETE=withAuth(async(_r,u,c)=>{const id=(await c.params).id;const x=await prisma.deviceSession.updateMany({where:{id,userId:u,revokedAt:null},data:{revokedAt:new Date()}});if(!x.count)return fail("Session introuvable",404,"NOT_FOUND");await prisma.refreshToken.updateMany({where:{userId:u,deviceId:id,revoked:false},data:{revoked:true}});return ok({revoked:true});});
