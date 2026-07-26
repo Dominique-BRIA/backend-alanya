@@ -117,6 +117,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     data: {
       isGroup: true,
       name: body.name!,
+      creatorId: userId,
       participants: {
         create: Array.from(memberIds).map((id) => ({
           userId: id,

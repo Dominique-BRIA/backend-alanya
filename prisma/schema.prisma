@@ -158,6 +158,7 @@ model Conversation {
   isGroup   Boolean  @default(false)
   name      String?  @db.VarChar(150) @map("GroupName") // nom du groupe (null pour les conversations directes)
   avatarUrl String?  @map("groupPhoto")
+  creatorId String? @db.Uuid @map("creatorId")
   createdAt DateTime @default(now()) @db.Timestamptz // extra local
   updatedAt DateTime @updatedAt @db.Timestamptz       // extra local
 
