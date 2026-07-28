@@ -741,13 +741,28 @@ async function handleCallState(ws, msg) {
     sendTo(uid, payload);
   }
 
-  // Appel terminé/refusé/annulé → push data-only pour retirer la notif d'appel
-  // plein écran chez les destinataires dont l'app est fermée (le WS ne les
-  // atteint pas). Ciblé par le callId partagé.
-  if (["ended", "rejected", "declined", "cancelled"].includes(state) && isPushEnabled()) {
-    for (const uid of ids) {
-      if (uid === ws.userId) continue;
-      await pushCallCancelled(prisma, { recipientId: uid, callId });
+  // Push data-only pour retirer la notification d'appel plein écran chez les
+  // destinataires dont l'application est FERMÉE : le WebSocket ne les atteint
+  // pas. Ciblé par le callId partagé.
+  //
+  // Deux situations distinctes, et c'est ce que l'ancienne version manquait :
+  //
+  //  - appel terminé/refusé/annulé : tout le monde doit retirer sa notification,
+  //    y compris les AUTRES appareils de celui qui vient d'agir. L'ancien
+  //    `if (uid === ws.userId) continue` les sautait, si bien que refuser un
+  //    appel sur le web laissait sonner un téléphone dont l'app était fermée ;
+  //
+  //  - appel décroché : seuls les autres appareils de celui qui a décroché sont
+  //    concernés. Envoyer une annulation aux autres participants serait un
+  //    contresens — pour eux, l'appel commence.
+  if (isPushEnabled()) {
+    const termine = ["ended", "rejected", "declined", "cancelled"].includes(state);
+    const decroche = ["joined", "accepted"].includes(state);
+    if (termine || decroche) {
+      for (const uid of ids) {
+        if (decroche && uid !== ws.userId) continue;
+        await pushCallCancelled(prisma, { recipientId: uid, callId });
+      }
     }
   }
 }
