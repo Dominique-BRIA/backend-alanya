@@ -5,6 +5,7 @@ import { loginSchema } from "@/lib/validation";
 import { verifyPassword } from "@/lib/password";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { recordAccess } from "@/lib/user-access";
 
 // POST /api/auth/login
 // Connexion par email OU par numéro public (6 ou 8 chiffres) + mot de passe.
@@ -43,6 +44,9 @@ export async function POST(req: NextRequest) {
       where: { id: user.id },
       data: { isOnline: 1, lastSeen: new Date() },
     });
+
+    // Journal des connexions : trace horodatee, jamais bloquante.
+    await recordAccess(prisma, { userId: user.id, req });
 
     const tokens = await issueTokenPair(user.id);
     return ok({

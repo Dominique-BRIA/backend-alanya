@@ -5,6 +5,7 @@ import { setupSchema } from "@/lib/validation";
 import { hashPassword } from "@/lib/password";
 import { verifyAccessToken } from "@/lib/jwt";
 import { issueTokenPair } from "@/modules/auth/tokens";
+import { recordAccess } from "@/lib/user-access";
 
 // POST /api/auth/setup
 // Étape finale d'inscription : choix du pseudo + mot de passe + pays.
@@ -47,6 +48,9 @@ export async function POST(req: NextRequest) {
         typeCompte: 0,
       },
     });
+
+    // Premiere connexion du compte : elle merite sa ligne au journal.
+    await recordAccess(prisma, { userId: user.id, req });
 
     const tokens = await issueTokenPair(user.id);
     return ok(

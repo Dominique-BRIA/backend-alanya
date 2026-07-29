@@ -579,6 +579,10 @@ model UserAccess {
   ipAdress  String   @default("INDEFINI") @db.VarChar(255)
   osSystem  String   @default("INDEFINI") @map("os_system") @db.VarChar(255)
 
+  /// Répond directement à la lecture de l'historique d'un compte
+  /// (filtre sur l'utilisateur, tri par date).
+  @@index([alanyaId, dateLogin(sort: Desc)], map: "userAccess_alanyaID_dateLogin_idx")
+  /// Conservé pour une purge par ancienneté.
   @@index([dateLogin])
   @@map("userAccess")
 }
