@@ -64,6 +64,7 @@ model User {
   // --- F7 : Biométrie / état d'appel / device (colonnes du référentiel) ---
   inCall            Int       @default(0) @map("in_call") @db.SmallInt
   biometric         Int       @default(0) @db.SmallInt
+  appareilTotal     Int       @default(1) @map("appareil_total") @db.SmallInt
   fcmToken          String?   @map("fcm_token") @db.VarChar(255)
   deviceId          String?   @map("device_ID") @db.VarChar(255)
   resetOtp          String?   @map("reset_otp") @db.VarChar(6)
@@ -98,6 +99,7 @@ model User {
   reservedPhones ReservedAlanyaPhone[]
   appareils      Appareil[]
   customerChats  CustomerChat[]
+  rapportsAgent  RapportChat[]
 
   // --- Organisation / centre d'appels (référentiel équipe) ---
   // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
@@ -135,22 +137,28 @@ model Appareil {
   typeDevice   Int       @default(0) @db.SmallInt
   lastLogin    DateTime? @db.Timestamptz
   system       String?   @db.VarChar(45)
-  /// Agent associé à l'appareil. Nullable : les lignes créées avant ce champ
-  /// n'en ont pas, et le remplir de force par un défaut inventé donnerait une
+  /// Nom de l'agent associé à l'appareil. Nullable : les lignes existantes n'en
+  /// ont pas, et le remplir de force par un défaut inventé donnerait une
   /// information fausse plutôt qu'absente.
-  agent        String?   @db.VarChar(50)
-  alanyaId     String    @map("alanyaID") @db.Uuid
-  user         User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  nomAgent     String?   @db.VarChar(50)
+  /// Agent propriétaire de l'appareil — un utilisateur. La colonne s'appelait
+  /// `alanyaID` ; le renommage en `idAgent` dit ce qu'elle désigne vraiment
+  /// depuis que ce registre sert le centre d'appels.
+  ///
+  /// ⚠️ Cette colonne n'est PAS unique : un agent a plusieurs appareils. Aucune
+  /// clé étrangère ne peut donc la cibler — pointer vers `users.alanyaID`.
+  idAgent      String    @db.Uuid
+  user         User      @relation(fields: [idAgent], references: [id], onDelete: Cascade)
   destroy      Int       @default(0) @db.SmallInt
 
   customerChats CustomerChat[]
 
-  /// Unicité sur le COUPLE (navigateur, compte) : deux comptes utilisés tour à
+  /// Unicité sur le COUPLE (navigateur, agent) : deux comptes utilisés tour à
   /// tour dans le même navigateur gardent chacun leur entrée.
-  @@unique([cookiesWebId, alanyaId], map: "Appareil_cookies_alanyaID_key")
-  /// Couvre aussi les recherches sur le seul `alanyaId` (préfixe gauche) : pas
+  @@unique([cookiesWebId, idAgent], map: "Appareil_cookies_idAgent_key")
+  /// Couvre aussi les recherches sur le seul `idAgent` (préfixe gauche) : pas
   /// besoin d'un second index sur cette colonne.
-  @@index([alanyaId, destroy, lastLogin(sort: Desc)], map: "Appareil_alanyaID_destroy_idx")
+  @@index([idAgent, destroy, lastLogin(sort: Desc)], map: "Appareil_idAgent_destroy_idx")
   @@map("Appareil")
 }
 
@@ -167,19 +175,63 @@ model CustomerChat {
   id         Int       @id @default(autoincrement()) @map("ID")
   appareilId Int       @map("appareilID")
   appareil   Appareil  @relation(fields: [appareilId], references: [appareilId], onDelete: Cascade)
-  alanyaId   String    @map("AlanyaID") @db.Uuid
-  user       User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  /// Le client de la session. La colonne s'appelait `AlanyaID` ; `customerID`
+  /// la distingue de l'agent, qui est à l'autre bout de la discussion.
+  customerId String    @map("customerID") @db.Uuid
+  user       User      @relation(fields: [customerId], references: [id], onDelete: Cascade)
   startTime  DateTime  @default(now()) @map("start_time") @db.Timestamptz
   endTime    DateTime? @map("end_time") @db.Timestamptz
   isFree     Int       @default(1) @db.SmallInt
+  /// Vrai BOOLEAN, contrairement à `isFree` qui suit la convention SMALLINT 0/1
+  /// du référentiel. Écart assumé : demandé explicitement en booléen.
+  isResolved Boolean   @default(false)
 
-  /// Les sessions d'un compte, la plus récente d'abord. Le préfixe gauche
-  /// couvre aussi les recherches sur le seul `alanyaId`.
-  @@index([alanyaId, startTime(sort: Desc)], map: "customerChat_AlanyaID_start_idx")
+  rapports RapportChat[]
+
+  /// Les sessions d'un client, la plus récente d'abord. Le préfixe gauche
+  /// couvre aussi les recherches sur le seul `customerId`.
+  @@index([customerId, startTime(sort: Desc)], map: "customerChat_customerID_start_idx")
   /// PostgreSQL n'indexe pas automatiquement les clés étrangères : sans cet
   /// index, toute suppression d'appareil imposerait un parcours complet.
   @@index([appareilId], map: "customerChat_appareilID_idx")
   @@map("customerChat")
+}
+
+/// Compte rendu d'une session de discussion client.
+///
+/// `idAgent` pointe vers `users.alanyaID` et NON vers `Appareil.idAgent` :
+/// cette dernière n'est pas unique (un agent a plusieurs appareils), donc
+/// aucune clé étrangère ne peut la cibler. La valeur est la même, prise à sa
+/// source — et le rapport reste rattaché à l'agent même s'il change de poste.
+model RapportChat {
+  idRapport    Int          @id @default(autoincrement())
+  idCustomer   Int
+  customerChat CustomerChat @relation(fields: [idCustomer], references: [id], onDelete: Cascade)
+  idAgent      String       @db.Uuid
+  agent        User         @relation(fields: [idAgent], references: [id], onDelete: Cascade)
+  resume       String?      @db.Text
+  subject      String?      @db.VarChar(200)
+  date         DateTime     @default(now()) @db.Timestamptz
+  type         Int?         @db.SmallInt
+
+  docs DocRapport[]
+
+  @@index([idCustomer], map: "rapportChat_idCustomer_idx")
+  /// Les rapports d'un agent, du plus récent au plus ancien.
+  @@index([idAgent, date(sort: Desc)], map: "rapportChat_idAgent_date_idx")
+  @@map("rapportChat")
+}
+
+/// Pièce jointe d'un rapport (document, capture, enregistrement).
+model DocRapport {
+  idDoc     Int         @id @default(autoincrement())
+  idRapport Int
+  rapport   RapportChat @relation(fields: [idRapport], references: [idRapport], onDelete: Cascade)
+  url       String      @db.Text
+  type      Int?        @db.SmallInt
+
+  @@index([idRapport], map: "docRapport_idRapport_idx")
+  @@map("docRapport")
 }
 
 // Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.

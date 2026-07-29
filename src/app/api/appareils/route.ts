@@ -21,7 +21,7 @@ const upsertSchema = z.object({
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   try {
     const rows = await prisma.appareil.findMany({
-      where: { alanyaId: userId },
+      where: { idAgent: userId },
       orderBy: [{ destroy: "asc" }, { lastLogin: "desc" }],
     });
     return ok({ appareils: rows.map(serializeAppareil) });
@@ -39,11 +39,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
 
     const appareil = await prisma.appareil.upsert({
       where: {
-        cookiesWebId_alanyaId: { cookiesWebId: body.cookiesWebId, alanyaId: userId },
+        cookiesWebId_idAgent: { cookiesWebId: body.cookiesWebId, idAgent: userId },
       },
       create: {
         cookiesWebId: body.cookiesWebId,
-        alanyaId: userId,
+        idAgent: userId,
         libelle: body.libelle ?? "Appareil",
         typeDevice: body.typeDevice ?? 0,
         system: body.system ?? null,

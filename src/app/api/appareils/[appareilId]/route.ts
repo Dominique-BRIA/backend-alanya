@@ -21,7 +21,7 @@ const updateSchema = z.object({
 async function ownedAppareil(appareilId: number, userId: string) {
   const appareil = await prisma.appareil.findUnique({ where: { appareilId } });
   if (!appareil) return { error: fail("Appareil introuvable", 404, "NOT_FOUND") };
-  if (appareil.alanyaId !== userId) {
+  if (appareil.idAgent !== userId) {
     // Même réponse que pour un appareil inexistant : distinguer les deux cas
     // révélerait quels identifiants sont attribués.
     return { error: fail("Appareil introuvable", 404, "NOT_FOUND") };
