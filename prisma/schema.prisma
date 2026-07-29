@@ -38,8 +38,10 @@ model User {
   idPays Int?    @map("idPays") @db.SmallInt
   pays   Pays?   @relation(fields: [idPays], references: [idPays])
 
-  // --- F3 : Type de compte ---
-  typeCompte Int @default(0) @map("type_compte") @db.SmallInt
+  // --- F3 : Type de compte & statut actif ---
+  typeCompte Int     @default(0) @map("type_compte") @db.SmallInt
+  actif      Int     @default(1) @db.SmallInt
+  mobile     String? @db.VarChar(20)
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
   pseudo    String?   @map("pseudo") @db.VarChar(100)
@@ -106,8 +108,8 @@ model User {
   // des relations inverses, sans existence en base.
   idCompany       Int?             @map("idcompany")
   company         Company?         @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull)
-  fonctions       Fonction[]
-  gestionCompany  GestionCompany[]
+  Fonctions       Fonction[]
+  GestionCompany  GestionCompany[]
   centerUsers     Center[]         @relation("centerUser")
   assignedCenters Center[]         @relation("assignedUser")
 
@@ -613,6 +615,9 @@ model AiMessage {
 model Pays {
   idPays          Int    @id @default(autoincrement()) @db.SmallInt // MySQL smallint → PG SMALLINT
   libelle         String @db.VarChar(200) // MySQL varchar(200)
+  /// Libellé anglais du pays. NOT NULL avec défaut vide : les lignes déjà
+  /// semées n'en ont pas, et la colonne s'ajoute sans réécrire la table.
+  libelleAnglais  String @default("") @db.VarChar(100)
   prefix          String @db.VarChar(10) // indicatif téléphonique (+237, +33…)
   timeZone        String @db.VarChar(200) // ex: "Africa/Douala"
   decalageHoraire Int
@@ -710,18 +715,21 @@ model UserAccess {
 // ---------------------------------------------------------------------------
 
 model CallHistory {
-  idCall     BigInt    @id @default(autoincrement()) @map("IDcall")
-  idCaller   String    @db.Uuid
-  caller     User      @relation("CallCaller", fields: [idCaller], references: [id], onDelete: Cascade)
-  idReceiver String    @db.Uuid
-  receiver   User      @relation("CallReceiver", fields: [idReceiver], references: [id], onDelete: Cascade)
-  type       Int       @default(0) @db.SmallInt // 0=audio 1=video
-  status     Int       @default(0) @db.SmallInt // 0=missed 1=answered 2=rejected
-  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
-  startTime  DateTime? @map("start_time") @db.Timestamptz
-  duree      Int       @default(0)
-  mode       Int?      @db.SmallInt
-  ip         String?   @db.VarChar(45)
+  idCall       BigInt    @id @default(autoincrement()) @map("IDcall")
+  idCaller     String    @db.Uuid
+  caller       User      @relation("CallCaller", fields: [idCaller], references: [id], onDelete: Cascade)
+  idReceiver   String    @db.Uuid
+  receiver     User      @relation("CallReceiver", fields: [idReceiver], references: [id], onDelete: Cascade)
+  type         Int       @default(0) @db.SmallInt // 0=audio 1=video
+  status       Int       @default(0) @db.SmallInt // 0=missed 1=answered 2=rejected
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  startTime    DateTime? @map("start_time") @db.Timestamptz
+  duree        Int       @default(0)
+  mode         Int?      @db.SmallInt
+  ip           String?   @db.VarChar(45)
+  /// « relay » (acheminé par Coturn) ou « p2p » (direct). Nul tant que
+  /// l'information n'est pas remontée par le client.
+  transmission String?   @db.VarChar(10)
 
   @@index([idCaller, createdAt])
   @@index([idReceiver, createdAt])
@@ -763,8 +771,8 @@ model Ville {
   idPays  Int?   @map("idpays")
   pays    Pays?  @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
 
-  companies Company[]
-  agences   Agence[]
+  Companies Company[]
+  Agences   Agence[]
 
   @@map("ville")
 }
@@ -783,11 +791,11 @@ model AdminRoot {
   endPrefix   Int?    @map("endprefix")
   pays        Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
 
-  abonnements Abonnement[]
-  companies   Company[]
-  centerComs  CenterCom[]
-  accesAdmins AccesAdmin[]
-  admins      Admin[]
+  Abonnements Abonnement[]
+  Companies   Company[]
+  CenterComs  CenterCom[]
+  AccesAdmins AccesAdmin[]
+  Admins      Admin[]
 
   @@map("adminroot")
 }
@@ -809,7 +817,7 @@ model Abonnement {
   rootID       Int?       @map("rootid")
   adminRoot    AdminRoot? @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
 
-  companies Company[]
+  Companies Company[]
 
   @@map("abonnement")
 }
@@ -834,18 +842,18 @@ model Company {
   abonnement Abonnement? @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
   adminRoot  AdminRoot?  @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
 
-  createdAt          DateTime? @default(dbgenerated("CURRENT_DATE")) @map("created_at") @db.Date
+  created_at         DateTime? @default(dbgenerated("CURRENT_DATE")) @db.Date
   lat                Float?
   lon                Float?
   maxAgents          Int?      @default(20) @map("maxagents")
   maxAgentsPerCenter Int?      @default(5) @map("maxagentspercenter")
 
-  users      User[]
-  admins     Admin[]
-  agences    Agence[]
-  services   Service[]
-  centerComs CenterCom[]
-  centers    Center[]
+  Users      User[]
+  Admins     Admin[]
+  Agences    Agence[]
+  Services   Service[]
+  CenterComs CenterCom[]
+  Centers    Center[]
 
   @@map("company")
 }
@@ -865,8 +873,8 @@ model Admin {
   adminRoot AdminRoot? @relation(fields: [idRoot], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
   company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
 
-  gestions    GestionCompany[]
-  accesAdmins AccesAdmin[]
+  Gestions    GestionCompany[]
+  AccesAdmins AccesAdmin[]
 
   @@map("admin")
 }
@@ -883,7 +891,7 @@ model Agence {
   ville   Ville?   @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
   company Company? @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
 
-  fonctions Fonction[]
+  Fonctions Fonction[]
 
   @@map("agence")
 }
@@ -895,7 +903,7 @@ model Service {
   idCompany Int?   @map("idcompany")
 
   company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
-  fonctions Fonction[]
+  Fonctions Fonction[]
 
   @@map("service")
 }
@@ -919,7 +927,7 @@ model GestionCompany {
   idGestion Int       @id @default(autoincrement()) @map("idgestion")
   alanyaID  String?   @map("alanyaid") @db.Uuid
   action    String    @db.VarChar(100)
-  dateAt    DateTime? @default(now()) @map("date_at") @db.Timestamp(6)
+  date_at   DateTime? @default(now()) @db.Timestamp(6)
   ip        String?   @db.VarChar(20)
   idAdmin   Int?      @map("idadmin")
 
@@ -946,29 +954,29 @@ model CenterCom {
 }
 
 model Center {
-  idCenter       Int      @id @default(autoincrement()) @map("idcenter")
-  libelle        String   @db.VarChar(45)
-  centerAlanyaId String?  @map("center_alanyaid") @db.Uuid
-  usersAlanyaId  String?  @map("users_alanyaid") @db.Uuid
-  idCompany      Int?     @map("idcompany")
-  menuNro        Int?     @map("menunro")
-  inCall         Boolean? @default(false) @map("in_call")
+  idCenter        Int      @id @default(autoincrement()) @map("idcenter")
+  libelle         String   @db.VarChar(45)
+  center_alanyaID String?  @map("center_alanyaid") @db.Uuid
+  users_alanyaID  String?  @map("users_alanyaid") @db.Uuid
+  idCompany       Int?     @map("idcompany")
+  menuNro         Int?     @map("menunro")
+  in_call         Boolean? @default(false)
 
-  centerUser   User?    @relation("centerUser", fields: [centerAlanyaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  assignedUser User?    @relation("assignedUser", fields: [usersAlanyaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  centerUser   User?    @relation("centerUser", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  assignedUser User?    @relation("assignedUser", fields: [users_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   company      Company? @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
 
-  @@index([centerAlanyaId], map: "center_center_alanyaid_idx")
-  @@index([usersAlanyaId], map: "center_users_alanyaid_idx")
+  @@index([center_alanyaID], map: "center_center_alanyaid_idx")
+  @@index([users_alanyaID], map: "center_users_alanyaid_idx")
   @@index([idCompany], map: "center_idcompany_idx")
   @@map("center")
 }
 
 model AccesAdmin {
-  idAccesAdmin Int       @id @default(autoincrement()) @map("idaccesadmin")
+  idaccesAdmin Int       @id @default(autoincrement()) @map("idaccesadmin")
   idAdmin      Int?      @map("idadmin")
   idRoot       Int?      @map("idroot")
-  accesAt      DateTime? @default(now()) @map("acces_at") @db.Timestamp(6)
+  acces_at     DateTime? @default(now()) @db.Timestamp(6)
   ipAdress     String    @map("ipadress") @db.VarChar(30)
 
   admin     Admin?     @relation(fields: [idAdmin], references: [idAdmin], onDelete: Cascade, onUpdate: Cascade)
