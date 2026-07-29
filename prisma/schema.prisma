@@ -173,7 +173,19 @@ model RefreshToken {
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now()) @db.Timestamptz
 
+  /// Appareil ayant obtenu cette session — même identifiant que
+  /// `Appareil.cookies_WebID`. C'est ce lien qui rend la déconnexion à
+  /// distance possible : sans lui, on sait à quel utilisateur appartient un
+  /// jeton, pas depuis quel appareil il a été émis.
+  ///
+  /// Nul pour les sessions ouvertes avant cette évolution, et pour les clients
+  /// qui ne l'envoient pas : elles restent valides, simplement non révocables
+  /// individuellement.
+  deviceId String? @map("device_id") @db.VarChar(255)
+
   @@index([userId])
+  /// Sert la révocation : retrouver les sessions d'un appareil donné.
+  @@index([userId, deviceId], map: "refresh_tokens_user_device_idx")
   @@map("refresh_tokens")
 }
 

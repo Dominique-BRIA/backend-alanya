@@ -11,16 +11,31 @@ export const verifySchema = z.object({
   code: z.string().trim().regex(/^\d{6}$/, "Le code doit comporter 6 chiffres"),
 });
 
+/**
+ * Identifiant stable de l'appareil, tel que le client le conserve
+ * (`cookies_WebID` en localStorage sur le web, SharedPreferences sur mobile).
+ *
+ * Il rattache la session emise a une ligne du registre `Appareil`, ce qui rend
+ * la revocation a distance possible : sans lui, le serveur sait quel
+ * utilisateur possede un jeton, mais pas depuis quel appareil il a ete obtenu.
+ *
+ * Facultatif a dessein — un client plus ancien continue de se connecter, sa
+ * session ne sera simplement pas revocable individuellement.
+ */
+const deviceIdSchema = z.string().trim().min(8).max(255).optional();
+
 export const setupSchema = z.object({
   pseudo: z.string().trim().min(2, "Pseudo trop court").max(100),
   password: z.string().min(8, "Le mot de passe doit faire au moins 8 caractères").max(128),
   nom: z.string().trim().min(1, "Le nom est requis").max(100).optional(),
   idPays: z.number().int().positive().optional(),
+  deviceId: deviceIdSchema,
 });
 
 export const loginSchema = z.object({
   identifier: z.string().trim().min(1, "Identifiant requis"),
   password: z.string().min(1, "Mot de passe requis"),
+  deviceId: deviceIdSchema,
 });
 
 export const refreshSchema = z.object({

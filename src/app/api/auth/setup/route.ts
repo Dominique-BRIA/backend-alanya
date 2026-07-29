@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
       return fail("setupToken invalide ou expiré", 401, "BAD_TOKEN");
     }
 
-    const { pseudo, password, nom, idPays } = setupSchema.parse(await req.json());
+    const { pseudo, password, nom, idPays, deviceId } = setupSchema.parse(await req.json());
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.emailVerified) return fail("Compte non vérifié", 400, "NOT_VERIFIED");
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     // Premiere connexion du compte : elle merite sa ligne au journal.
     await recordAccess(prisma, { userId: user.id, req });
 
-    const tokens = await issueTokenPair(user.id);
+    const tokens = await issueTokenPair(user.id, deviceId);
     return ok(
       {
         user: {

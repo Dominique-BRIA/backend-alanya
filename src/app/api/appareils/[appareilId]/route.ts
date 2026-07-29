@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { revokeDeviceSessions } from "@/modules/auth/tokens";
 import { serializeAppareil } from "@/lib/appareils";
 
 const updateSchema = z.object({
@@ -80,7 +81,23 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) =>
       data: { destroy: 1, isOnline: 0 },
     });
 
-    return ok({ appareil: serializeAppareil(updated) });
+    // Le cœur de l'opération : couper l'accès. Retirer la ligne du registre
+    // sans révoquer les sessions laissait l'appareil pleinement connecté —
+    // une fausse assurance, précisément dans le cas où l'on s'en sert.
+    //
+    // `cookiesWebId` peut être nul pour un appareil enregistré avant cette
+    // évolution : sa session n'est alors pas rattachable, et il faut recourir
+    // à « Se déconnecter partout ».
+    const revoquees = updated.cookiesWebId
+      ? await revokeDeviceSessions(userId, updated.cookiesWebId)
+      : 0;
+
+    return ok({
+      appareil: serializeAppareil(updated),
+      /// Nombre de sessions coupées. Zéro signale au client que l'appareil a
+      /// bien quitté la liste mais qu'aucun accès n'a pu être révoqué.
+      sessionsRevoquees: revoquees,
+    });
   } catch (err) {
     return handleError(err);
   }

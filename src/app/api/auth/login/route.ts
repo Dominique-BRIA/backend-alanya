@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const rl = rateLimit(`login:${clientIp(req)}`, 5, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
-    const { identifier, password } = loginSchema.parse(await req.json());
+    const { identifier, password, deviceId } = loginSchema.parse(await req.json());
 
     // Un identifiant est un publicNumber si c'est 6 OU 8 chiffres.
     // (Les nouveaux comptes ont 8 chiffres, cf. generateUniquePublicNumber.
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     // Journal des connexions : trace horodatee, jamais bloquante.
     await recordAccess(prisma, { userId: user.id, req });
 
-    const tokens = await issueTokenPair(user.id);
+    const tokens = await issueTokenPair(user.id, deviceId);
     return ok({
       user: {
         id: user.id,
