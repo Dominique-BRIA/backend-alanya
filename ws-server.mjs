@@ -475,6 +475,26 @@ async function handleTyping(ws, msg) {
   }
 }
 
+// Un appareil vient d'être déconnecté à distance : on prévient les autres
+// sessions du MÊME compte pour qu'elles réagissent sans attendre.
+//
+// Pourquoi le client déclenche l'annonce plutôt que l'API : l'API Next.js et ce
+// serveur sont deux process distincts, sans canal entre eux. Le client, lui,
+// tient déjà une connexion authentifiée — il suffit de la relayer.
+//
+// Aucun risque d'abus : la diffusion est limitée à `ws.userId`, donc au compte
+// de l'émetteur. On ne peut déconnecter que ses propres appareils, ce qui est
+// exactement le pouvoir recherché.
+//
+// La révocation en base (DELETE /api/appareils/:id) reste indispensable : elle
+// couvre l'appareil hors ligne au moment du clic, qui sera éjecté à son retour.
+// Cet événement ne fait qu'accélérer le cas courant.
+async function handleSessionRevoked(ws, msg) {
+  const deviceId = typeof msg.deviceId === "string" ? msg.deviceId.trim() : "";
+  if (!deviceId) return;
+  sendTo(ws.userId, { type: "session_revoked", deviceId });
+}
+
 // Indicateur "en train d'enregistrer un vocal…" — miroir de handleTyping.
 // Événement éphémère (aucune persistance), relayé aux autres participants.
 async function handleRecording(ws, msg) {
@@ -1158,6 +1178,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "read") await handleRead(ws, msg);
       else if (msg.type === "typing") await handleTyping(ws, msg);
       else if (msg.type === "recording") await handleRecording(ws, msg);
+      else if (msg.type === "session_revoked") await handleSessionRevoked(ws, msg);
       else if (msg.type === "reaction") await handleReaction(ws, msg);
       else if (msg.type === "call_ring") await handleCallRing(ws, msg);
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
