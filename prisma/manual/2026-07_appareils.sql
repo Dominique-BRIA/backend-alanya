@@ -33,20 +33,25 @@ CREATE TABLE IF NOT EXISTS "Appareil" (
   "typeDevice"    SMALLINT       NOT NULL DEFAULT 0,
   "lastLogin"     TIMESTAMPTZ(6),
   "system"        VARCHAR(45),
-  "alanyaID"      UUID           NOT NULL,
+  -- Renommée depuis « alanyaID » le 29/07/2026 : ce registre sert le centre
+  -- d'appels, la colonne désigne l'agent propriétaire. Voir
+  -- 2026-07_rapport_chat.sql, qui effectue le renommage sur les bases déjà
+  -- créées. CE FICHIER DÉCRIT L'ÉTAT CIBLE, pour qu'une base neuve soit
+  -- construite directement au bon nom.
+  "idAgent"       UUID           NOT NULL,
   "destroy"       SMALLINT       NOT NULL DEFAULT 0,
-  CONSTRAINT "Appareil_alanyaID_fkey"
-    FOREIGN KEY ("alanyaID") REFERENCES "users"("alanyaID") ON DELETE CASCADE
+  CONSTRAINT "Appareil_idAgent_fkey"
+    FOREIGN KEY ("idAgent") REFERENCES "users"("alanyaID") ON DELETE CASCADE
 );
 
--- Unicité sur le COUPLE (navigateur, compte) et non sur le seul navigateur :
+-- Unicité sur le COUPLE (navigateur, agent) et non sur le seul navigateur :
 -- deux comptes utilisés tour à tour dans le même navigateur conservent chacun
 -- leur entrée, au lieu de se voler la ligne à chaque connexion.
-CREATE UNIQUE INDEX IF NOT EXISTS "Appareil_cookies_alanyaID_key"
-  ON "Appareil"("cookies_WebID", "alanyaID");
+CREATE UNIQUE INDEX IF NOT EXISTS "Appareil_cookies_idAgent_key"
+  ON "Appareil"("cookies_WebID", "idAgent");
 
 -- Pour l'écran « Appareils connectés » : les actifs d'un compte, les plus
 -- récemment vus en premier. Son préfixe gauche couvre aussi les recherches sur
--- le seul « alanyaID » — un second index sur cette colonne serait redondant.
-CREATE INDEX IF NOT EXISTS "Appareil_alanyaID_destroy_idx"
-  ON "Appareil"("alanyaID", "destroy", "lastLogin" DESC);
+-- le seul « idAgent » — un second index sur cette colonne serait redondant.
+CREATE INDEX IF NOT EXISTS "Appareil_idAgent_destroy_idx"
+  ON "Appareil"("idAgent", "destroy", "lastLogin" DESC);
