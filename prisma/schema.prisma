@@ -97,6 +97,7 @@ model User {
   callsReceived  CallHistory[]         @relation("CallReceiver")
   reservedPhones ReservedAlanyaPhone[]
   appareils      Appareil[]
+  customerChats  CustomerChat[]
 
   @@index([publicNumber])
   @@map("users")
@@ -123,9 +124,15 @@ model Appareil {
   typeDevice   Int       @default(0) @db.SmallInt
   lastLogin    DateTime? @db.Timestamptz
   system       String?   @db.VarChar(45)
+  /// Agent associé à l'appareil. Nullable : les lignes créées avant ce champ
+  /// n'en ont pas, et le remplir de force par un défaut inventé donnerait une
+  /// information fausse plutôt qu'absente.
+  agent        String?   @db.VarChar(50)
   alanyaId     String    @map("alanyaID") @db.Uuid
   user         User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
   destroy      Int       @default(0) @db.SmallInt
+
+  customerChats CustomerChat[]
 
   /// Unicité sur le COUPLE (navigateur, compte) : deux comptes utilisés tour à
   /// tour dans le même navigateur gardent chacun leur entrée.
@@ -134,6 +141,34 @@ model Appareil {
   /// besoin d'un second index sur cette colonne.
   @@index([alanyaId, destroy, lastLogin(sort: Desc)], map: "Appareil_alanyaID_destroy_idx")
   @@map("Appareil")
+}
+
+/// Sessions de discussion client — une ligne par session, ouverte à
+/// `startTime` et refermée à `endTime`.
+///
+/// `endTime` nul signifie « session en cours » : c'est ce qui permet de
+/// retrouver les sessions ouvertes sans colonne d'état supplémentaire.
+///
+/// `isFree` suit la convention du projet pour les booléens (0/1 en SMALLINT,
+/// comme `isOnline` ou `destroy`) plutôt qu'un vrai BOOLEAN, pour rester
+/// homogène avec le référentiel.
+model CustomerChat {
+  id         Int       @id @default(autoincrement()) @map("ID")
+  appareilId Int       @map("appareilID")
+  appareil   Appareil  @relation(fields: [appareilId], references: [appareilId], onDelete: Cascade)
+  alanyaId   String    @map("AlanyaID") @db.Uuid
+  user       User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  startTime  DateTime  @default(now()) @map("start_time") @db.Timestamptz
+  endTime    DateTime? @map("end_time") @db.Timestamptz
+  isFree     Int       @default(1) @db.SmallInt
+
+  /// Les sessions d'un compte, la plus récente d'abord. Le préfixe gauche
+  /// couvre aussi les recherches sur le seul `alanyaId`.
+  @@index([alanyaId, startTime(sort: Desc)], map: "customerChat_AlanyaID_start_idx")
+  /// PostgreSQL n'indexe pas automatiquement les clés étrangères : sans cet
+  /// index, toute suppression d'appareil imposerait un parcours complet.
+  @@index([appareilId], map: "customerChat_appareilID_idx")
+  @@map("customerChat")
 }
 
 // Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
