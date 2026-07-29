@@ -1,7 +1,16 @@
 node_modules/
-.env
 .next/
-node_modules/
+
+# Variables d'environnement : contiennent les identifiants de la base, le
+# compte de service Firebase et les secrets Coturn. Jamais versionnées.
 .env
-.next/
-.env
+.env.*
+!.env.example
+
+# Comptes de service Google / Firebase. Le JSON téléchargé depuis la console
+# contient une clé privée RSA en clair : il ne doit jamais entrer dans le
+# dépôt, même déposé une minute le temps d'un encodage base64. Encoder depuis
+# le poste de travail, ne transmettre que la chaîne base64 vers .env.
+*-adminsdk*.json
+*serviceAccount*.json
+service-account*.json
