@@ -99,7 +99,18 @@ model User {
   appareils      Appareil[]
   customerChats  CustomerChat[]
 
+  // --- Organisation / centre d'appels (référentiel équipe) ---
+  // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
+  // des relations inverses, sans existence en base.
+  idCompany       Int?             @map("idcompany")
+  company         Company?         @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull)
+  fonctions       Fonction[]
+  gestionCompany  GestionCompany[]
+  centerUsers     Center[]         @relation("centerUser")
+  assignedCenters Center[]         @relation("assignedUser")
+
   @@index([publicNumber])
+  @@index([idCompany])
   @@map("users")
 }
 
@@ -556,6 +567,13 @@ model Pays {
 
   users User[]
 
+  // Relations inverses vers les tables du volet organisation. Purement
+  // virtuelles : aucune colonne ajoutée à `pays`.
+  villes          Ville[]
+  adminRoots      AdminRoot[]
+  companies       Company[]
+  prixAbonnements PrixAbonnement[]
+
   @@map("pays")
 }
 
@@ -671,4 +689,240 @@ model ReservedAlanyaPhone {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@map("reserved_alanya_phone")
+}
+
+// ===========================================================================
+// ORGANISATION & CENTRE D'APPELS — volet du référentiel équipe
+// ===========================================================================
+// Ajout strictement additif (juillet 2026) : ces treize modèles ne modifient
+// aucune table existante, à la seule exception de `users.idcompany`, colonne
+// nullable ajoutée pour rattacher un compte à une entreprise.
+//
+// Les autres écarts du référentiel — changement de type de la clé primaire de
+// `Message`, disparition de `expiresAt` et `deletedAt`, perte du `@unique` sur
+// `alanyaPhone` — ont été VOLONTAIREMENT écartés : ils casseraient la
+// messagerie et les messages éphémères déjà en production.
+//
+// C'est ce volet qui donne leur sens à `Appareil.agent` et à `CustomerChat`.
+
+model Ville {
+  idville Int    @id @default(autoincrement())
+  nom     String @db.VarChar(45)
+  idPays  Int?   @map("idpays")
+  pays    Pays?  @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+
+  companies Company[]
+  agences   Agence[]
+
+  @@map("ville")
+}
+
+model AdminRoot {
+  idRoot      Int     @id @default(autoincrement()) @map("idroot")
+  nom         String  @db.VarChar(60)
+  email       String  @unique @db.VarChar(100)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  mobile      String? @db.VarChar(15)
+  username    String  @unique @db.VarChar(30)
+  password    String  @db.VarChar(200)
+  idPays      Int?    @map("idpays")
+  type        Int?
+  startPrefix Int?    @map("startprefix")
+  endPrefix   Int?    @map("endprefix")
+  pays        Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+
+  abonnements Abonnement[]
+  companies   Company[]
+  centerComs  CenterCom[]
+  accesAdmins AccesAdmin[]
+  admins      Admin[]
+
+  @@map("adminroot")
+}
+
+model PrixAbonnement {
+  idAbonnement Int     @id @default(autoincrement()) @map("idabonnement")
+  libelle      String  @db.VarChar(45)
+  montant      Decimal @db.Decimal(10, 2)
+  idPays       Int?    @map("idpays")
+  pays         Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+
+  @@map("prixabonnement")
+}
+
+model Abonnement {
+  idAbonnement Int        @id @default(autoincrement()) @map("idabonnement")
+  prix         Decimal    @db.Decimal(10, 2)
+  libelle      String     @db.VarChar(45)
+  rootID       Int?       @map("rootid")
+  adminRoot    AdminRoot? @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+
+  companies Company[]
+
+  @@map("abonnement")
+}
+
+model Company {
+  idCompany     Int     @id @default(autoincrement()) @map("idcompany")
+  libelle       String  @db.VarChar(60)
+  description   String? @db.Text
+  motcles       String? @db.VarChar(150)
+  adresse       String? @db.VarChar(150)
+  mobile        String? @db.VarChar(15)
+  email         String? @db.VarChar(60)
+  actif         Int?    @default(1) @db.SmallInt
+  idVille       Int?    @map("idville")
+  idPays        Int?    @map("idpays")
+  idAbonnement  Int?    @map("idabonnement")
+  rootID        Int?    @map("rootid")
+  prefixeAlanya Int?    @map("prefixealanya")
+
+  ville      Ville?      @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
+  pays       Pays?       @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  abonnement Abonnement? @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
+  adminRoot  AdminRoot?  @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+
+  createdAt          DateTime? @default(dbgenerated("CURRENT_DATE")) @map("created_at") @db.Date
+  lat                Float?
+  lon                Float?
+  maxAgents          Int?      @default(20) @map("maxagents")
+  maxAgentsPerCenter Int?      @default(5) @map("maxagentspercenter")
+
+  users      User[]
+  admins     Admin[]
+  agences    Agence[]
+  services   Service[]
+  centerComs CenterCom[]
+  centers    Center[]
+
+  @@map("company")
+}
+
+model Admin {
+  idAdmin     Int     @id @default(autoincrement()) @map("idadmin")
+  nom         String  @db.VarChar(60)
+  email       String  @unique @db.VarChar(100)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  mobile      String? @db.VarChar(15)
+  username    String  @unique @db.VarChar(30)
+  password    String  @db.VarChar(200)
+  idRoot      Int?    @map("idroot")
+  idCompany   Int?    @map("idcompany")
+  type        Int?
+
+  adminRoot AdminRoot? @relation(fields: [idRoot], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+  company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
+
+  gestions    GestionCompany[]
+  accesAdmins AccesAdmin[]
+
+  @@map("admin")
+}
+
+model Agence {
+  idAgence    Int     @id @default(autoincrement()) @map("idagence")
+  libelle     String  @db.VarChar(100)
+  adresse     String? @db.VarChar(150)
+  mobile      String? @db.VarChar(15)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  idVille     Int?    @map("idville")
+  idCompany   Int?    @map("idcompany")
+
+  ville   Ville?   @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
+  company Company? @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
+
+  fonctions Fonction[]
+
+  @@map("agence")
+}
+
+model Service {
+  idService Int    @id @default(autoincrement()) @map("idservice")
+  libelle   String @db.VarChar(100)
+  deleted   Int?   @default(0) @db.SmallInt
+  idCompany Int?   @map("idcompany")
+
+  company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
+  fonctions Fonction[]
+
+  @@map("service")
+}
+
+model Fonction {
+  idFonction Int     @id @default(autoincrement()) @map("idfonction")
+  libelle    String  @db.VarChar(45)
+  idService  Int?    @map("idservice")
+  idAgence   Int?    @map("idagence")
+  alanyaID   String? @map("alanyaid") @db.Uuid
+
+  service Service? @relation(fields: [idService], references: [idService], onDelete: SetNull, onUpdate: Cascade)
+  agence  Agence?  @relation(fields: [idAgence], references: [idAgence], onDelete: SetNull, onUpdate: Cascade)
+  user    User?    @relation(fields: [alanyaID], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([alanyaID], map: "fonction_alanyaid_idx")
+  @@map("fonction")
+}
+
+model GestionCompany {
+  idGestion Int       @id @default(autoincrement()) @map("idgestion")
+  alanyaID  String?   @map("alanyaid") @db.Uuid
+  action    String    @db.VarChar(100)
+  dateAt    DateTime? @default(now()) @map("date_at") @db.Timestamp(6)
+  ip        String?   @db.VarChar(20)
+  idAdmin   Int?      @map("idadmin")
+
+  user  User?  @relation(fields: [alanyaID], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  admin Admin? @relation(fields: [idAdmin], references: [idAdmin], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([alanyaID], map: "gestioncompany_alanyaid_idx")
+  @@map("gestioncompany")
+}
+
+model CenterCom {
+  idCenterCom Int    @id @default(autoincrement()) @map("idcentercom")
+  libelle     String @db.VarChar(45)
+  total       Int?   @default(0)
+  maxAgents   Int?   @default(5) @map("maxagents")
+  idCompany   Int    @map("idcompany")
+  rootID      Int?   @map("rootid")
+
+  company   Company    @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  adminRoot AdminRoot? @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([idCompany], map: "centercom_idcompany_idx")
+  @@map("centercom")
+}
+
+model Center {
+  idCenter       Int      @id @default(autoincrement()) @map("idcenter")
+  libelle        String   @db.VarChar(45)
+  centerAlanyaId String?  @map("center_alanyaid") @db.Uuid
+  usersAlanyaId  String?  @map("users_alanyaid") @db.Uuid
+  idCompany      Int?     @map("idcompany")
+  menuNro        Int?     @map("menunro")
+  inCall         Boolean? @default(false) @map("in_call")
+
+  centerUser   User?    @relation("centerUser", fields: [centerAlanyaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  assignedUser User?    @relation("assignedUser", fields: [usersAlanyaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  company      Company? @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([centerAlanyaId], map: "center_center_alanyaid_idx")
+  @@index([usersAlanyaId], map: "center_users_alanyaid_idx")
+  @@index([idCompany], map: "center_idcompany_idx")
+  @@map("center")
+}
+
+model AccesAdmin {
+  idAccesAdmin Int       @id @default(autoincrement()) @map("idaccesadmin")
+  idAdmin      Int?      @map("idadmin")
+  idRoot       Int?      @map("idroot")
+  accesAt      DateTime? @default(now()) @map("acces_at") @db.Timestamp(6)
+  ipAdress     String    @map("ipadress") @db.VarChar(30)
+
+  admin     Admin?     @relation(fields: [idAdmin], references: [idAdmin], onDelete: Cascade, onUpdate: Cascade)
+  adminRoot AdminRoot? @relation(fields: [idRoot], references: [idRoot], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([idAdmin], map: "accesadmin_idadmin_idx")
+  @@index([idRoot], map: "accesadmin_idroot_idx")
+  @@map("accesadmin")
 }
