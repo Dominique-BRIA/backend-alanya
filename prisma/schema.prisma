@@ -25,59 +25,59 @@ model User {
   // Colonnes physiques alignées sur le référentiel équipe (alanya.sql).
   // Les noms de champ Prisma restent inchangés → code applicatif et contrat API intacts ;
   // seuls les noms de colonnes Postgres changent via @map (UUID conservés).
-  id            String   @id @default(uuid()) @db.Uuid @map("alanyaID")
+  id            String   @id @default(uuid()) @map("alanyaID") @db.Uuid
   email         String   @unique
   passwordHash  String?  @map("password")
-  publicNumber  String   @unique @db.VarChar(8) @map("alanyaPhone")
+  publicNumber  String   @unique @map("alanyaPhone") @db.VarChar(8)
   emailVerified Boolean  @default(false)
-  createdAt     DateTime @default(now()) @db.Timestamptz @map("created_at")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime @updatedAt @db.Timestamptz
 
   // --- F1 : Inscription avec pays ---
-  nom           String?  @db.VarChar(100)
-  idPays        Int?     @db.SmallInt @map("idPays")
-  pays          Pays?    @relation(fields: [idPays], references: [idPays])
+  nom    String? @db.VarChar(100)
+  idPays Int?    @map("idPays") @db.SmallInt
+  pays   Pays?   @relation(fields: [idPays], references: [idPays])
 
   // --- F3 : Type de compte ---
-  typeCompte    Int      @default(0) @db.SmallInt @map("type_compte")
+  typeCompte Int @default(0) @map("type_compte") @db.SmallInt
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
-  pseudo        String?  @db.VarChar(100)     @map("pseudo")
-  avatarUrl     String?  @db.VarChar(2048)    @map("avatar_url")
-  statusMsg     String?  @db.VarChar(255)     @map("status_msg")
-  lastSeen      DateTime? @db.Timestamptz     @map("last_seen")
+  pseudo    String?   @map("pseudo") @db.VarChar(100)
+  avatarUrl String?   @map("avatar_url") @db.VarChar(2048)
+  statusMsg String?   @map("status_msg") @db.VarChar(255)
+  lastSeen  DateTime? @map("last_seen") @db.Timestamptz
 
   // --- F5 : Présence en ligne ---
-  isOnline      Int      @default(0) @db.SmallInt @map("is_online")
+  isOnline Int @default(0) @map("is_online") @db.SmallInt
 
   // --- Confidentialité (Phase 3.1) ---
   // readReceipts : 1 = envoie/reçoit les confirmations de lecture, 0 = off.
   // lastSeenVisibility : 0 = personne, 1 = mes contacts, 2 = tout le monde.
-  readReceipts       Int  @default(1) @db.SmallInt @map("read_receipts")
-  lastSeenVisibility Int  @default(2) @db.SmallInt @map("last_seen_visibility")
+  readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
+  lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
 
   // --- F6 : Exclusion de compte ---
-  exclus        Int      @default(0) @db.SmallInt
-  excludeAt     DateTime? @db.Timestamptz     @map("exclude_at")
-  excludeReason String?  @db.VarChar(255)     @map("exclude_reason")
+  exclus        Int       @default(0) @db.SmallInt
+  excludeAt     DateTime? @map("exclude_at") @db.Timestamptz
+  excludeReason String?   @map("exclude_reason") @db.VarChar(255)
 
   // --- F7 : Biométrie / état d'appel / device (colonnes du référentiel) ---
-  inCall        Int      @default(0) @db.SmallInt @map("in_call")
-  biometric     Int      @default(0) @db.SmallInt
-  fcmToken      String?  @db.VarChar(255)     @map("fcm_token")
-  deviceId      String?  @db.VarChar(255)     @map("device_ID")
-  resetOtp      String?  @db.VarChar(6)       @map("reset_otp")
-  resetOtpExpiresAt DateTime? @db.Timestamptz @map("reset_otp_expires_at")
+  inCall            Int       @default(0) @map("in_call") @db.SmallInt
+  biometric         Int       @default(0) @db.SmallInt
+  fcmToken          String?   @map("fcm_token") @db.VarChar(255)
+  deviceId          String?   @map("device_ID") @db.VarChar(255)
+  resetOtp          String?   @map("reset_otp") @db.VarChar(6)
+  resetOtpExpiresAt DateTime? @map("reset_otp_expires_at") @db.Timestamptz
 
   refreshTokens    RefreshToken[]
-  contacts         Contact[]       @relation("UserContacts")
-  contactOf        Contact[]       @relation("ContactOf")
+  contacts         Contact[]         @relation("UserContacts")
+  contactOf        Contact[]         @relation("ContactOf")
   participations   Participant[]
-  sentMessages     Message[]       @relation("MessageSender")
+  sentMessages     Message[]         @relation("MessageSender")
   ownedMedia       MediaFile[]
   statuses         Status[]
   statusViews      StatusView[]
-  callsInitiated   Call[]          @relation("CallInitiator")
+  callsInitiated   Call[]            @relation("CallInitiator")
   callParticipants CallParticipant[]
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
@@ -92,13 +92,48 @@ model User {
   blockedByUsers        Blocked[]            @relation("BlockedUser")
 
   // --- Relations vers les nouvelles tables du référentiel ---
-  accessLogs            UserAccess[]
-  callsMade             CallHistory[]        @relation("CallCaller")
-  callsReceived         CallHistory[]        @relation("CallReceiver")
-  reservedPhones        ReservedAlanyaPhone[]
+  accessLogs     UserAccess[]
+  callsMade      CallHistory[]         @relation("CallCaller")
+  callsReceived  CallHistory[]         @relation("CallReceiver")
+  reservedPhones ReservedAlanyaPhone[]
+  appareils      Appareil[]
 
   @@index([publicNumber])
   @@map("users")
+}
+
+/// Registre des appareils d'un compte — une ligne par appareil, mise à jour au
+/// fil de l'eau. Alimente l'écran « Appareils connectés ».
+///
+/// À distinguer de [UserAccess], qui est un journal (une ligne par connexion,
+/// jamais modifiée), et de [PushDevice], qui ne porte qu'un jeton FCM sans état
+/// présentable à l'utilisateur.
+///
+/// Conventions : `typeDevice` 0=web 1=Android 2=iOS 3=bureau ;
+/// `isOnline` 0/1 ; `destroy` 1 = déconnecté à distance (effacement logique,
+/// la ligne est conservée pour l'historique).
+model Appareil {
+  appareilId   Int       @id @default(autoincrement()) @map("appareilID")
+  /// Identifiant stable du navigateur, généré côté client et gardé en
+  /// localStorage. Nul pour les appareils mobiles.
+  cookiesWebId String?   @map("cookies_WebID") @db.VarChar(255)
+  libelle      String    @default("Appareil") @db.VarChar(45)
+  isOnline     Int       @default(0) @map("is_online") @db.SmallInt
+  createAt     DateTime  @default(now()) @map("create_at") @db.Timestamptz
+  typeDevice   Int       @default(0) @db.SmallInt
+  lastLogin    DateTime? @db.Timestamptz
+  system       String?   @db.VarChar(45)
+  alanyaId     String    @map("alanyaID") @db.Uuid
+  user         User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  destroy      Int       @default(0) @db.SmallInt
+
+  /// Unicité sur le COUPLE (navigateur, compte) : deux comptes utilisés tour à
+  /// tour dans le même navigateur gardent chacun leur entrée.
+  @@unique([cookiesWebId, alanyaId], map: "Appareil_cookies_alanyaID_key")
+  /// Couvre aussi les recherches sur le seul `alanyaId` (préfixe gauche) : pas
+  /// besoin d'un second index sur cette colonne.
+  @@index([alanyaId, destroy, lastLogin(sort: Desc)], map: "Appareil_alanyaID_destroy_idx")
+  @@map("Appareil")
 }
 
 // Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
@@ -143,14 +178,14 @@ model RefreshToken {
 }
 
 model Contact {
-  id        String   @id @default(uuid()) @db.Uuid @map("idPrefContact")
-  userId    String   @db.Uuid @map("alanyaID")
-  contactId String   @db.Uuid @map("idFriend")
+  id        String   @id @default(uuid()) @map("idPrefContact") @db.Uuid
+  userId    String   @map("alanyaID") @db.Uuid
+  contactId String   @map("idFriend") @db.Uuid
   user      User     @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
   contact   User     @relation("ContactOf", fields: [contactId], references: [id], onDelete: Cascade)
   alias     String?  @db.VarChar(100) // extra local : nom donné par l'utilisateur dans son répertoire
-  isBlocked Boolean  @default(false)  // extra local
-  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  isBlocked Boolean  @default(false) // extra local
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@unique([userId, contactId])
   @@index([userId])
@@ -162,27 +197,27 @@ model Contact {
 // ---------------------------------------------------------------------------
 
 model Conversation {
-  id        String   @id @default(uuid()) @db.Uuid @map("conversID")
+  id        String   @id @default(uuid()) @map("conversID") @db.Uuid
   isGroup   Boolean  @default(false)
-  name      String?  @db.VarChar(150) @map("GroupName") // nom du groupe (null pour les conversations directes)
+  name      String?  @map("GroupName") @db.VarChar(150) // nom du groupe (null pour les conversations directes)
   avatarUrl String?  @map("groupPhoto")
   createdAt DateTime @default(now()) @db.Timestamptz // extra local
-  updatedAt DateTime @updatedAt @db.Timestamptz       // extra local
+  updatedAt DateTime @updatedAt @db.Timestamptz // extra local
 
   participants Participant[]
   messages     Message[]
 
   // --- F11 : Dernier message dénormalisé ---
-  lastMessage        String?   @db.Text
-  lastMessageAt      DateTime? @db.Timestamptz
-  lastMessageSenderID String?  @db.Uuid
-  lastMessageType    Int?      @db.SmallInt
-  lastMessageStatus  Int?      @db.SmallInt
+  lastMessage         String?   @db.Text
+  lastMessageAt       DateTime? @db.Timestamptz
+  lastMessageSenderID String?   @db.Uuid
+  lastMessageType     Int?      @db.SmallInt
+  lastMessageStatus   Int?      @db.SmallInt
 
   // Message épinglé (partagé à toute la conversation). Null = aucun. Pas de FK :
   // si le message est supprimé pour tous il reste consultable (deletedAt), et on
   // filtre à la lecture au besoin.
-  pinnedMessageId String? @db.Uuid @map("pinned_message_id")
+  pinnedMessageId String? @map("pinned_message_id") @db.Uuid
 
   // Messages éphémères : durée de vie (en secondes) des NOUVEAUX messages.
   // 0 = désactivé. Les valeurs usuelles : 86400 (24h), 604800 (7j), 7776000 (90j).
@@ -197,18 +232,18 @@ enum ParticipantRole {
 }
 
 model Participant {
-  id       String          @id @default(uuid()) @db.Uuid
-  convId   String          @db.Uuid @map("conversID")
-  userId   String          @db.Uuid @map("alanyaID")
-  conv     Conversation    @relation(fields: [convId], references: [id], onDelete: Cascade)
-  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role     ParticipantRole @default(MEMBER) // extra local
-  joinedAt DateTime        @default(now()) @db.Timestamptz
+  id         String          @id @default(uuid()) @db.Uuid
+  convId     String          @map("conversID") @db.Uuid
+  userId     String          @map("alanyaID") @db.Uuid
+  conv       Conversation    @relation(fields: [convId], references: [id], onDelete: Cascade)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       ParticipantRole @default(MEMBER) // extra local
+  joinedAt   DateTime        @default(now()) @db.Timestamptz
   // Pointeur de lecture pour calculer les non-lus (extra local)
-  lastReadAt DateTime?     @db.Timestamptz
+  lastReadAt DateTime?       @db.Timestamptz
 
   // --- F8 : Épingler ---
-  isPinned  Int  @default(0) @db.SmallInt
+  isPinned Int @default(0) @db.SmallInt
 
   // --- F9 : Archiver ---
   isArchived Int @default(0) @db.SmallInt
@@ -237,23 +272,23 @@ enum MessageStatus {
 }
 
 model Message {
-  id        String        @id @default(uuid()) @db.Uuid @map("msgID")
-  convId    String        @db.Uuid @map("conversationID")
-  senderId  String        @db.Uuid @map("senderID")
-  conv      Conversation  @relation(fields: [convId], references: [id], onDelete: Cascade)
-  sender    User          @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-  content   String?       // texte (null pour médias purs)
-  type      MessageType   @default(TEXT)
-  status    MessageStatus @default(SENT)
-  replyToId String?       @db.Uuid @map("replyToID")
-  replyTo   Message?      @relation("MessageReplies", fields: [replyToId], references: [id])
-  replies   Message[]     @relation("MessageReplies")
+  id        String            @id @default(uuid()) @map("msgID") @db.Uuid
+  convId    String            @map("conversationID") @db.Uuid
+  senderId  String            @map("senderID") @db.Uuid
+  conv      Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
+  sender    User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content   String? // texte (null pour médias purs)
+  type      MessageType       @default(TEXT)
+  status    MessageStatus     @default(SENT)
+  replyToId String?           @map("replyToID") @db.Uuid
+  replyTo   Message?          @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies   Message[]         @relation("MessageReplies")
   media     MediaFile[]
-  createdAt DateTime      @default(now()) @db.Timestamptz @map("sendAt")
-  editedAt  DateTime?     @db.Timestamptz
+  createdAt DateTime          @default(now()) @map("sendAt") @db.Timestamptz
+  editedAt  DateTime?         @db.Timestamptz
   // Message éphémère : instant d'expiration (null = permanent). Purgé après.
-  expiresAt DateTime?     @db.Timestamptz @map("expires_at")
-  deletedAt DateTime?     @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
+  expiresAt DateTime?         @map("expires_at") @db.Timestamptz
+  deletedAt DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
   hides     MessageHide[]
   reactions MessageReaction[]
   stars     MessageStar[]
@@ -267,9 +302,9 @@ model Message {
 // une ligne = « cet utilisateur a mis ce message en favori ». onDelete Cascade.
 model MessageStar {
   id        String   @id @default(uuid()) @db.Uuid
-  messageId String   @db.Uuid @map("message_id")
-  userId    String   @db.Uuid @map("user_id")
-  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -283,10 +318,10 @@ model MessageStar {
 // emoji le retire (géré côté handler). onDelete: Cascade nettoie automatiquement.
 model MessageReaction {
   id        String   @id @default(uuid()) @db.Uuid
-  messageId String   @db.Uuid @map("message_id")
-  userId    String   @db.Uuid @map("user_id")
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
   emoji     String   @db.VarChar(16)
-  createdAt DateTime @default(now()) @db.Timestamptz @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -346,15 +381,15 @@ enum StatusType {
 }
 
 model Status {
-  id        String       @id @default(uuid()) @db.Uuid @map("ID")
-  userId    String       @db.Uuid @map("alanyaID")
-  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      StatusType   @default(TEXT)
-  text      String?      @db.VarChar(700)
+  id        String     @id @default(uuid()) @map("ID") @db.Uuid
+  userId    String     @map("alanyaID") @db.Uuid
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      StatusType @default(TEXT)
+  text      String?    @db.VarChar(700)
   mediaUrl  String?
-  bgColor   String?      @db.VarChar(9) @map("backgroundColor") // couleur de fond pour les statuts texte
-  createdAt DateTime     @default(now()) @db.Timestamptz
-  expiresAt DateTime     @db.Timestamptz @map("expiredAt") // createdAt + 24 h
+  bgColor   String?    @map("backgroundColor") @db.VarChar(9) // couleur de fond pour les statuts texte
+  createdAt DateTime   @default(now()) @db.Timestamptz
+  expiresAt DateTime   @map("expiredAt") @db.Timestamptz // createdAt + 24 h
 
   views StatusView[]
 
@@ -365,11 +400,11 @@ model Status {
 
 model StatusView {
   id       String   @id @default(uuid()) @db.Uuid
-  statusId String   @db.Uuid @map("statutID")
-  viewerId String   @db.Uuid @map("alanyaID")
+  statusId String   @map("statutID") @db.Uuid
+  viewerId String   @map("alanyaID") @db.Uuid
   status   Status   @relation(fields: [statusId], references: [id], onDelete: Cascade)
   viewer   User     @relation(fields: [viewerId], references: [id], onDelete: Cascade)
-  viewedAt DateTime @default(now()) @db.Timestamptz @map("seenAt")
+  viewedAt DateTime @default(now()) @map("seenAt") @db.Timestamptz
 
   @@unique([statusId, viewerId])
   @@map("statut_views")
@@ -393,15 +428,15 @@ enum CallStatus {
 }
 
 model Call {
-  id        String     @id @default(uuid()) @db.Uuid
-  initiatorId String   @db.Uuid
-  initiator User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
-  convId    String?    @db.Uuid
-  type      CallType   @default(AUDIO)
-  status    CallStatus @default(RINGING)
-  startedAt DateTime   @default(now()) @db.Timestamptz
-  answeredAt DateTime? @db.Timestamptz
-  endedAt   DateTime?  @db.Timestamptz
+  id          String     @id @default(uuid()) @db.Uuid
+  initiatorId String     @db.Uuid
+  initiator   User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  convId      String?    @db.Uuid
+  type        CallType   @default(AUDIO)
+  status      CallStatus @default(RINGING)
+  startedAt   DateTime   @default(now()) @db.Timestamptz
+  answeredAt  DateTime?  @db.Timestamptz
+  endedAt     DateTime?  @db.Timestamptz
 
   participants CallParticipant[]
 
@@ -432,12 +467,12 @@ enum AiRole {
 }
 
 model AiThread {
-  id        String      @id @default(uuid()) @db.Uuid
-  userId    String      @db.Uuid
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  title     String?     @db.VarChar(150)
-  createdAt DateTime    @default(now()) @db.Timestamptz
-  updatedAt DateTime    @updatedAt @db.Timestamptz
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?  @db.VarChar(150)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
 
   messages AiMessage[]
 
@@ -466,13 +501,13 @@ model AiMessage {
 // ---------------------------------------------------------------------------
 
 model Pays {
-  idPays          Int    @id @default(autoincrement()) @db.SmallInt  // MySQL smallint → PG SMALLINT
-  libelle         String @db.VarChar(200)                            // MySQL varchar(200)
-  prefix          String @db.VarChar(10)                             // indicatif téléphonique (+237, +33…)
-  timeZone        String @db.VarChar(200)                            // ex: "Africa/Douala"
+  idPays          Int    @id @default(autoincrement()) @db.SmallInt // MySQL smallint → PG SMALLINT
+  libelle         String @db.VarChar(200) // MySQL varchar(200)
+  prefix          String @db.VarChar(10) // indicatif téléphonique (+237, +33…)
+  timeZone        String @db.VarChar(200) // ex: "Africa/Douala"
   decalageHoraire Int
 
-  users           User[]
+  users User[]
 
   @@map("pays")
 }
@@ -482,15 +517,15 @@ model Pays {
 // ---------------------------------------------------------------------------
 
 model Meeting {
-  idMeeting   Int      @id @default(autoincrement())            // MySQL int → PG INTEGER
+  idMeeting   Int      @id @default(autoincrement()) // MySQL int → PG INTEGER
   idOrganiser String   @db.Uuid
   organiser   User     @relation("MeetingOrganizer", fields: [idOrganiser], references: [id], onDelete: Cascade)
-  start_time  DateTime @db.Timestamptz                          // MySQL datetime → PG TIMESTAMPTZ
-  duree       Int                                              // MySQL int → PG INTEGER (secondes)
-  objet       String   @db.VarChar(200)                        // MySQL varchar(200)
-  room        String   @db.VarChar(200)                        // MySQL varchar(200)
-  isEnd       Int      @default(0) @db.SmallInt                // MySQL tinyint → PG SMALLINT
-  type_media  Int      @db.SmallInt                            // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
+  start_time  DateTime @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
+  duree       Int // MySQL int → PG INTEGER (secondes)
+  objet       String   @db.VarChar(200) // MySQL varchar(200)
+  room        String   @db.VarChar(200) // MySQL varchar(200)
+  isEnd       Int      @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT
+  type_media  Int      @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
 
   participants MeetingParticipant[]
 
@@ -499,15 +534,15 @@ model Meeting {
 }
 
 model MeetingParticipant {
-  ID            Int       @id @default(autoincrement())        // MySQL int → PG INTEGER
-  idMeeting     Int                                           // MySQL int → PG INTEGER
+  ID            Int       @id @default(autoincrement()) // MySQL int → PG INTEGER
+  idMeeting     Int // MySQL int → PG INTEGER
   meeting       Meeting   @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
   IDparticipant String    @db.Uuid
   user          User      @relation("MeetingParticipantUser", fields: [IDparticipant], references: [id], onDelete: Cascade)
-  status        Int       @default(0) @db.SmallInt             // MySQL tinyint → PG SMALLINT (0=invité, 1=accepté, 2=décliné)
-  start_time    DateTime? @db.Timestamptz                      // MySQL datetime → PG TIMESTAMPTZ
-  connecte      Int       @default(0) @db.SmallInt             // MySQL tinyint → PG SMALLINT (0=déconnecté, 1=connecté)
-  duree         Int?                                           // MySQL int → PG INTEGER (secondes)
+  status        Int       @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT (0=invité, 1=accepté, 2=décliné)
+  start_time    DateTime? @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
+  connecte      Int       @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT (0=déconnecté, 1=connecté)
+  duree         Int? // MySQL int → PG INTEGER (secondes)
 
   @@unique([idMeeting, IDparticipant])
   @@index([IDparticipant])
@@ -519,12 +554,12 @@ model MeetingParticipant {
 // ---------------------------------------------------------------------------
 
 model Blocked {
-  idBlock       Int      @id @default(autoincrement())         // MySQL int → PG INTEGER
+  idBlock       Int      @id @default(autoincrement()) // MySQL int → PG INTEGER
   alanyaID      String   @db.Uuid
   owner         User     @relation("BlockOwner", fields: [alanyaID], references: [id], onDelete: Cascade)
   idCallerBlock String   @db.Uuid
   blockedUser   User     @relation("BlockedUser", fields: [idCallerBlock], references: [id], onDelete: Cascade)
-  dateBlock     DateTime @default(now()) @db.Timestamptz       // MySQL datetime → PG TIMESTAMPTZ
+  dateBlock     DateTime @default(now()) @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
 
   @@unique([alanyaID, idCallerBlock])
   @@index([alanyaID])
@@ -536,13 +571,13 @@ model Blocked {
 // ---------------------------------------------------------------------------
 
 model UserAccess {
-  idLogin  BigInt   @id @default(autoincrement())
-  alanyaId String   @db.Uuid @map("alanyaID")
-  user     User     @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
-  device   String   @default("INDEFINI") @db.VarChar(255)
+  idLogin   BigInt   @id @default(autoincrement())
+  alanyaId  String   @map("alanyaID") @db.Uuid
+  user      User     @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  device    String   @default("INDEFINI") @db.VarChar(255)
   dateLogin DateTime @default(now()) @db.Timestamptz
-  ipAdress String   @default("INDEFINI") @db.VarChar(255)
-  osSystem String   @default("INDEFINI") @db.VarChar(255) @map("os_system")
+  ipAdress  String   @default("INDEFINI") @db.VarChar(255)
+  osSystem  String   @default("INDEFINI") @map("os_system") @db.VarChar(255)
 
   @@index([dateLogin])
   @@map("userAccess")
@@ -554,18 +589,18 @@ model UserAccess {
 // ---------------------------------------------------------------------------
 
 model CallHistory {
-  idCall     BigInt   @id @default(autoincrement()) @map("IDcall")
-  idCaller   String   @db.Uuid
-  caller     User     @relation("CallCaller", fields: [idCaller], references: [id], onDelete: Cascade)
-  idReceiver String   @db.Uuid
-  receiver   User     @relation("CallReceiver", fields: [idReceiver], references: [id], onDelete: Cascade)
-  type       Int      @default(0) @db.SmallInt // 0=audio 1=video
-  status     Int      @default(0) @db.SmallInt // 0=missed 1=answered 2=rejected
-  createdAt  DateTime @default(now()) @db.Timestamptz @map("created_at")
-  startTime  DateTime? @db.Timestamptz @map("start_time")
-  duree      Int      @default(0)
-  mode       Int?     @db.SmallInt
-  ip         String?  @db.VarChar(45)
+  idCall     BigInt    @id @default(autoincrement()) @map("IDcall")
+  idCaller   String    @db.Uuid
+  caller     User      @relation("CallCaller", fields: [idCaller], references: [id], onDelete: Cascade)
+  idReceiver String    @db.Uuid
+  receiver   User      @relation("CallReceiver", fields: [idReceiver], references: [id], onDelete: Cascade)
+  type       Int       @default(0) @db.SmallInt // 0=audio 1=video
+  status     Int       @default(0) @db.SmallInt // 0=missed 1=answered 2=rejected
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  startTime  DateTime? @map("start_time") @db.Timestamptz
+  duree      Int       @default(0)
+  mode       Int?      @db.SmallInt
+  ip         String?   @db.VarChar(45)
 
   @@index([idCaller, createdAt])
   @@index([idReceiver, createdAt])
@@ -578,11 +613,11 @@ model CallHistory {
 
 model ReservedAlanyaPhone {
   id             Int      @id @default(autoincrement())
-  phoneCanonical String   @unique @db.VarChar(8) @map("phone_canonical")
+  phoneCanonical String   @unique @map("phone_canonical") @db.VarChar(8)
   label          String   @db.VarChar(100)
-  createdBy      String?  @db.Uuid @map("created_by")
+  createdBy      String?  @map("created_by") @db.Uuid
   creator        User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
-  createdAt      DateTime @default(now()) @db.Timestamptz @map("created_at")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@map("reserved_alanya_phone")
 }
