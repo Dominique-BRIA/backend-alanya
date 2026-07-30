@@ -1,6 +1,20 @@
 import { z } from "zod";
 
-export const emailSchema = z.string().trim().toLowerCase().email("Email invalide");
+/// `max(100)` est aligné sur la colonne `users.email`, ramenée à VARCHAR(100)
+/// pour suivre le référentiel équipe. Sans cette borne, un email plus long
+/// passerait la validation puis ferait échouer l'insertion : erreur 500 au lieu
+/// d'un message clair.
+///
+/// ⚠️ La RFC 5321 autorise jusqu'à 254 caractères. 100 suffit largement en
+/// pratique — la plus longue adresse en base fait 49 caractères — mais une
+/// adresse légitime très longue serait désormais refusée. C'est une contrainte
+/// du référentiel, pas un choix de ce dépôt.
+export const emailSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .email("Email invalide")
+  .max(100, "Email trop long (100 caractères maximum)");
 
 export const registerSchema = z.object({
   email: emailSchema,
