@@ -98,12 +98,17 @@ BEGIN
 END $$;
 
 -- -------------------------------------------------------------
--- 4. customerChat.isResolved
+-- 4. customerChat.isResolved — RETIRÉ, la colonne a été DÉPLACÉE
 -- -------------------------------------------------------------
--- Vrai BOOLEAN, contrairement à « isFree » qui suit la convention SMALLINT 0/1
--- du référentiel. Écart assumé : le booléen a été demandé explicitement.
-ALTER TABLE "customerChat"
-  ADD COLUMN IF NOT EXISTS "isResolved" BOOLEAN NOT NULL DEFAULT false;
+-- Elle vit désormais sur rapportChat sous le nom `is_resolve` (modèle tidesk,
+-- voir 2026-07_tidesk_workflow.sql) : la résolution est un état du ticket, pas
+-- de la session de discussion.
+--
+-- Le `ADD COLUMN IF NOT EXISTS "isResolved"` qui se trouvait ici a été
+-- supprimé et NON commenté par paresse : apply-manual-sql.sh rejoue tout
+-- l'historique à chaque déploiement, et ce fichier s'exécute AVANT
+-- tidesk_workflow. Il aurait donc recréé la colonne juste avant que l'autre ne
+-- la supprime, à chaque fois.
 
 -- -------------------------------------------------------------
 -- 5. users.appareil_total
@@ -122,14 +127,17 @@ ALTER TABLE "users"
 -- la même, prise à sa source — et le rapport reste rattaché à l'agent même
 -- lorsqu'il change de poste.
 --
--- « date » est entre guillemets : c'est aussi un nom de type SQL.
+-- ÉTAT CIBLE : « idRap » et « start_time », noms du modèle tidesk. Les
+-- renommages qui les produisent sur une base déjà créée vivent dans
+-- 2026-07_tidesk_workflow.sql ; ici on décrit ce qu'une base NEUVE doit avoir
+-- directement, si bien que ces renommages ne trouvent alors rien à faire.
 CREATE TABLE IF NOT EXISTS "rapportChat" (
-  "idRapport"  SERIAL PRIMARY KEY,
+  "idRap"      SERIAL PRIMARY KEY,
   "idCustomer" INTEGER        NOT NULL,
   "idAgent"    UUID           NOT NULL,
   "resume"     TEXT,
   "subject"    VARCHAR(200),
-  "date"       TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
+  "start_time" TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
   "type"       SMALLINT,
   CONSTRAINT "rapportChat_idCustomer_fkey"
     FOREIGN KEY ("idCustomer") REFERENCES "customerChat"("ID") ON DELETE CASCADE,
@@ -141,8 +149,27 @@ CREATE INDEX IF NOT EXISTS "rapportChat_idCustomer_idx"
   ON "rapportChat"("idCustomer");
 
 -- Les rapports d'un agent, du plus récent au plus ancien.
-CREATE INDEX IF NOT EXISTS "rapportChat_idAgent_date_idx"
-  ON "rapportChat"("idAgent", "date" DESC);
+--
+-- ⚠️ GARDE INDISPENSABLE, et la raison n'est pas évidente. PostgreSQL résout
+-- les COLONNES d'un « CREATE INDEX IF NOT EXISTS » AVANT de vérifier que le
+-- nom d'index existe : citer une colonne absente lève une erreur même quand
+-- l'index est déjà là et que la commande aurait dû être sautée.
+--
+-- Or ce fichier passe AVANT 2026-07_tidesk_workflow.sql dans l'ordre
+-- alphabétique, donc sur une base déjà créée la colonne s'appelle encore
+-- « date » à ce moment-là. Le renommage la transformera juste après, et
+-- l'index suivra automatiquement — un index survit au renommage de sa colonne.
+--
+-- Sur une base NEUVE, la table vient d'être créée avec « start_time » : la
+-- garde est vraie et l'index se crée normalement.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'rapportChat' AND column_name = 'start_time') THEN
+    CREATE INDEX IF NOT EXISTS "rapportChat_idAgent_date_idx"
+      ON "rapportChat"("idAgent", "start_time" DESC);
+  END IF;
+END $$;
 
 -- -------------------------------------------------------------
 -- 7. docRapport  →  rapportChat
@@ -153,9 +180,9 @@ CREATE TABLE IF NOT EXISTS "docRapport" (
   "idDoc"     SERIAL PRIMARY KEY,
   "idRapport" INTEGER NOT NULL,
   "url"       TEXT    NOT NULL,
-  "type"      SMALLINT,
+  "typeMedia" SMALLINT,
   CONSTRAINT "docRapport_idRapport_fkey"
-    FOREIGN KEY ("idRapport") REFERENCES "rapportChat"("idRapport") ON DELETE CASCADE
+    FOREIGN KEY ("idRapport") REFERENCES "rapportChat"("idRap") ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS "docRapport_idRapport_idx"
