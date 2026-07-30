@@ -294,20 +294,37 @@ async function serializeMessage(m, media) {
 // ═══════════════════════════════════════════════
 // HANDLE SEND — modifié pour supporter mediaIds (multiple)
 // ═══════════════════════════════════════════════
+/// Déduit le type d'un message à partir du MIME de son premier média.
+///
+/// Le type était jusqu'ici pris tel quel du client. Le client web omettait
+/// « video » dans sa table de conversion : une vidéo partait donc étiquetée
+/// TEXT, et le mobile affichait « [TEXT] » au lieu du lecteur. Le serveur est
+/// le seul point commun aux trois clients — c'est ici que la règle tient.
+function typeDepuisMime(mime) {
+  if (!mime) return "FILE";
+  if (mime.startsWith("image/")) return "IMAGE";
+  if (mime.startsWith("video/")) return "VIDEO";
+  if (mime.startsWith("audio/")) return "AUDIO";
+  return "FILE";
+}
+
 async function handleSend(ws, msg) {
   // MODIFICATION : ajoute mediaIds pour multi-médias
   const { convId, content, tempId, mediaId, mediaIds } = msg;
-  const type = msg.msgType ?? "TEXT";
+  let type = msg.msgType ?? "TEXT";
   if (!convId) return;
-  if (type === "TEXT" && (!content || !content.trim())) return;
 
   // MODIFICATION : collecte tous les media IDs (simple + multiple)
+  // Déplacée AVANT le contrôle du TEXT vide : sans cela, une vidéo mal
+  // étiquetée TEXT était rejetée ici en silence, sans le moindre message
+  // d'erreur au client.
   const allMediaIds = [];
   if (mediaId) allMediaIds.push(mediaId);
   if (Array.isArray(mediaIds)) allMediaIds.push(...mediaIds);
   const uniqueMediaIds = [...new Set(allMediaIds)];
 
   if (type !== "TEXT" && uniqueMediaIds.length === 0) return;
+  if (type === "TEXT" && uniqueMediaIds.length === 0 && (!content || !content.trim())) return;
 
   if (!(await isParticipant(convId, ws.userId))) {
     ws.send(JSON.stringify({ type: "error", message: "Conversation interdite", tempId }));
@@ -315,12 +332,21 @@ async function handleSend(ws, msg) {
   }
 
   // MODIFICATION : vérifie tous les médias
+  let premierMime = null;
   for (const mid of uniqueMediaIds) {
-    const m = await prisma.mediaFile.findUnique({ where: { id: mid }, select: { ownerId: true } });
+    const m = await prisma.mediaFile.findUnique({ where: { id: mid }, select: { ownerId: true, mimeType: true } });
     if (!m || m.ownerId !== ws.userId) {
       ws.send(JSON.stringify({ type: "error", message: "Media invalide", tempId }));
       return;
     }
+    if (premierMime === null) premierMime = m.mimeType;
+  }
+
+  // Filet de sécurité : un message porteur de médias ne peut pas être un TEXT.
+  // On corrige au lieu de faire confiance au client, sinon la donnée est
+  // enregistrée fausse et le reste de la chaîne n'y peut plus rien.
+  if (uniqueMediaIds.length > 0 && type === "TEXT") {
+    type = typeDepuisMime(premierMime);
   }
 
   // Messages éphémères : si la conversation a un minuteur, calcule l'expiration.
