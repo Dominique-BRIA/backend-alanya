@@ -169,10 +169,14 @@ CREATE TABLE IF NOT EXISTS "agence" (
 -- -------------------------------------------------------------
 -- 9. service  →  company
 -- -------------------------------------------------------------
+-- « isDelete » et non « deleted » : état cible, aligné sur les six autres
+-- tables. Le renommage sur une base déjà créée vit dans
+-- 2026-07_service_isdelete.sql, qui passe APRÈS ce fichier dans l'ordre
+-- alphabétique — ici on décrit ce qu'une base NEUVE doit avoir directement.
 CREATE TABLE IF NOT EXISTS "service" (
   "idservice" SERIAL PRIMARY KEY,
   "libelle"   VARCHAR(100) NOT NULL,
-  "deleted"   SMALLINT DEFAULT 0,
+  "isDelete"  BOOLEAN NOT NULL DEFAULT false,
   "idcompany" INTEGER,
   CONSTRAINT "service_idcompany_fkey"
     FOREIGN KEY ("idcompany") REFERENCES "company"("idcompany") ON DELETE SET NULL ON UPDATE CASCADE

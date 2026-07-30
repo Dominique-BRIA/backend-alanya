@@ -1085,10 +1085,14 @@ model Agence {
 }
 
 model Service {
-  idService Int    @id @default(autoincrement()) @map("idservice")
-  libelle   String @db.VarChar(100)
-  deleted   Int?   @default(0) @db.SmallInt
-  idCompany Int?   @map("idcompany")
+  idService Int     @id @default(autoincrement()) @map("idservice")
+  libelle   String  @db.VarChar(100)
+  /// Renommé depuis `deleted` et passé en BOOLEAN, pour rejoindre la
+  /// convention des six autres tables. `service` avait sa propre notion de
+  /// suppression logique, sous un autre nom et un autre type — deux façons de
+  /// dire la même chose dans un même schéma.
+  isDelete  Boolean @default(false) @map("isDelete")
+  idCompany Int?    @map("idcompany")
 
   company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
   Fonctions Fonction[]
