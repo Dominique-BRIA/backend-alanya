@@ -80,6 +80,22 @@ END $$;
 ALTER TABLE "users" ALTER COLUMN "avatar_url" TYPE TEXT;
 
 ---------------------------------------------------------------
+-- 4 bis. users.mobile : VARCHAR(15) -> VARCHAR(20)
+---------------------------------------------------------------
+-- ⚠️ LEÇON. Cette colonne existait déjà en VARCHAR(15) quand
+-- 2026-07_champs_referentiel.sql a voulu la créer en VARCHAR(20). Son
+-- « ADD COLUMN IF NOT EXISTS » l'a donc SAUTÉE EN SILENCE : cette garde
+-- vérifie l'existence de la colonne, jamais son type.
+--
+-- Résultat : le schéma Prisma annonçait 20, la base tenait 15, et un numéro de
+-- 16 à 20 caractères aurait passé la validation avant d'échouer à l'insertion.
+-- Détecté en comparant les onze colonnes VarChar de `users` à leurs
+-- déclarations — c'était la seule qui divergeait.
+--
+-- Élargissement, donc sans risque ni réécriture.
+ALTER TABLE "users" ALTER COLUMN "mobile" TYPE VARCHAR(20);
+
+---------------------------------------------------------------
 -- 5. Valeurs par défaut
 ---------------------------------------------------------------
 -- Aucune ligne existante n'est touchée : un DEFAULT ne s'applique qu'aux
