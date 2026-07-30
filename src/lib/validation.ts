@@ -25,7 +25,11 @@ export const verifySchema = z.object({
 const deviceIdSchema = z.string().trim().min(8).max(255).optional();
 
 export const setupSchema = z.object({
-  pseudo: z.string().trim().min(2, "Pseudo trop court").max(100),
+  // 50 et non 100 : c'est la longueur de la colonne users.pseudo depuis le
+  // 30/07/2026. Laisser 100 ici ferait passer la validation puis échouer
+  // l'insertion en base, et l'utilisateur récupérerait une erreur 500 au lieu
+  // d'un message clair.
+  pseudo: z.string().trim().min(2, "Pseudo trop court").max(50, "Pseudo trop long (50 caractères maximum)"),
   password: z.string().min(8, "Le mot de passe doit faire au moins 8 caractères").max(128),
   nom: z.string().trim().min(1, "Le nom est requis").max(100).optional(),
   idPays: z.number().int().positive().optional(),
@@ -45,7 +49,8 @@ export const refreshSchema = z.object({
 export const publicNumberSchema = z.string().trim().regex(/^(\d{6}|\d{8})$/, "Le numero doit comporter 6 ou 8 chiffres");
 
 export const updateProfileSchema = z.object({
-  pseudo: z.string().trim().min(2).max(100).optional(),
+  // Aligné sur la longueur de la colonne — voir setupSchema.
+  pseudo: z.string().trim().min(2).max(50, "Pseudo trop long (50 caractères maximum)").optional(),
   avatarUrl: z.string().trim().max(2048).regex(/^(https?:\/\/[^\s]+|\/api\/media\/[a-zA-Z0-9-]+)$/, "avatarUrl invalide").nullable().optional(),
   statusMsg: z.string().trim().max(255).nullable().optional(),
 });

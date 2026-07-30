@@ -28,7 +28,12 @@ model User {
   id            String   @id @default(uuid()) @map("alanyaID") @db.Uuid
   email         String   @unique
   passwordHash  String?  @map("password")
-  publicNumber  String   @unique @map("alanyaPhone") @db.VarChar(8)
+  /// VarChar(20) depuis le 30/07/2026, pour suivre le référentiel équipe.
+  /// L'unicité est CONSERVÉE, contrairement à leur fichier : sans elle, deux
+  /// comptes pourraient porter le même Alanya ID.
+  /// La génération reste à 8 chiffres (src/lib/publicNumber.ts) et la
+  /// validation n'accepte que 6 ou 8 (src/lib/validation.ts).
+  publicNumber  String   @unique @map("alanyaPhone") @db.VarChar(20)
   emailVerified Boolean  @default(false)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt     DateTime @updatedAt @db.Timestamptz
@@ -44,7 +49,7 @@ model User {
   mobile     String? @db.VarChar(20)
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
-  pseudo    String?   @map("pseudo") @db.VarChar(100)
+  pseudo    String?   @map("pseudo") @db.VarChar(50)
   avatarUrl String?   @map("avatar_url") @db.VarChar(2048)
   statusMsg String?   @map("status_msg") @db.VarChar(255)
   lastSeen  DateTime? @map("last_seen") @db.Timestamptz
