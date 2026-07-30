@@ -1,221 +1,91 @@
-# Écarts entre le dépôt et le schéma Prisma du référentiel équipe
+# Schéma Alanya — ce qu'on a repris de ton fichier, et ce qu'on n'a pas repris
 
-**Date :** 30 juillet 2026 (mis à jour en fin de journée)
-**Fichier de référence :** `schema(1).prisma` transmis le 29/07/2026
-**Comparé à :** `prisma/schema.prisma`, branche `backup/pre-harmonisation-2026-07-24`
+**30 juillet 2026** · à propos de `schema.prisma` que tu nous as transmis
 
-La base est **partagée entre plusieurs développeurs**. Chaque écart entre le
-schéma du dépôt et le référentiel est donc une source de surprise pour les
-autres, pas seulement une dette interne. Tout ce qui pouvait être aligné sans
-casser la production l'a été.
+Salut,
 
-Ce document liste ce qui reste, et pourquoi.
+On a comparé ton schéma au nôtre et aligné tout ce qui pouvait l'être. Voici où
+on en est, et **trois questions** qui nous bloquent.
 
 ---
 
-## 1. Aligné
+## Ce qu'on a repris
 
-### 1.1 Les 13 modèles du volet organisation
+Tout le volet organisation : les 13 tables `ville`, `adminroot`, `company`,
+`admin`, `agence`, `service`, `fonction`, `gestioncompany`, `centercom`,
+`center`, `accesadmin`, `abonnement`, `prixabonnement`.
 
-| Modèle | Table |
+Les colonnes que tu ajoutais : `users.idcompany`, `users.appareil_total`,
+`users.actif`, `users.mobile`, `pays.libelleAnglais`,
+`callHistory.transmission`.
+
+Les longueurs de colonnes : `pseudo` en 50, `alanyaPhone` en 20, `email` en 100,
+`password` en 255, `pays.libelle` en 100, `avatar_url` en `TEXT`.
+
+Les valeurs par défaut sur `pays` et `meeting`, et les noms de champs
+(`center_alanyaID`, `date_at`, `acces_at`, les relations en majuscule…).
+
+**C'est en production, ça tourne.**
+
+---
+
+## ⚠️ Trois choses qu'on pense être des oublis chez toi
+
+Ce sont nos vraies questions. On n'a pas repris ces points, mais si c'est
+volontaire, dis-le-nous et on s'aligne.
+
+### 1. `alanyaPhone` n'a plus de contrainte d'unicité
+
+Dans ton fichier, la colonne est déclarée sans `@unique`. **Deux comptes
+pourraient alors avoir le même Alanya ID.** On a gardé l'unicité.
+
+### 2. La colonne `expires_at` de `message` a disparu
+
+C'est elle qui porte les **messages éphémères** (le minuteur 24 h / 7 j / 90 j).
+La retirer désactive la fonctionnalité sans que rien ne le signale.
+
+### 3. Les dates de `message` perdent le fuseau horaire
+
+`sendAt`, `readAt` et `editedAt` passent de `Timestamptz` à `Timestamp`. Comme
+on a des utilisateurs sur plusieurs fuseaux, l'ordre des messages deviendrait
+faux dès qu'un téléphone et le serveur ne sont pas dans la même zone.
+
+---
+
+## Ce qu'on ne peut pas faire tout de suite
+
+### La refonte de `message`
+
+Tu passes sa clé primaire d'`UUID` à `BigInt`. Ça touche aussi les quatre tables
+qui la référencent : `message_stars`, `message_reactions`, `message_hides`,
+`media_files`.
+
+Ce n'est pas un renommage : il faut une table de correspondance, reprendre
+chaque table enfant, et couper le service. Côté code, ça représente environ
+**340 références** à modifier dans l'API, le serveur temps réel et les trois
+clients (mobile, web, backend).
+
+On est d'accord sur le principe, mais **c'est un chantier à planifier**, pas un
+lot courant. Quand tu veux qu'on en parle.
+
+### Quatre petits points
+
+| Ce que ton fichier propose | Pourquoi on ne l'a pas pris |
 |---|---|
-| `Ville` | `ville` |
-| `AdminRoot` | `adminroot` |
-| `PrixAbonnement` | `prixabonnement` |
-| `Abonnement` | `abonnement` |
-| `Company` | `company` |
-| `Admin` | `admin` |
-| `Agence` | `agence` |
-| `Service` | `service` |
-| `Fonction` | `fonction` |
-| `GestionCompany` | `gestioncompany` |
-| `CenterCom` | `centercom` |
-| `Center` | `center` |
-| `AccesAdmin` | `accesadmin` |
+| `alanyaPhone` avec une valeur par défaut `"100000"` | Un défaut sur une colonne unique est un piège : le premier qui omet le champ obtient `100000`, le deuxième plante |
+| `Meeting.idOrganiser` peut être vide | Une réunion sans organisateur ne veut rien dire |
+| `MeetingParticipant.IDparticipant` peut être vide | Idem, un participant sans utilisateur |
+| Retirer l'unicité sur `(idMeeting, IDparticipant)` | Le même utilisateur pourrait s'inscrire deux fois à une réunion |
 
-### 1.2 Colonnes ajoutées
-
-`users.idcompany`, `users.appareil_total`, `users.actif`, `users.mobile`,
-`pays.libelleAnglais`, `callHistory.transmission`.
-
-### 1.3 Longueurs de colonnes
-
-| Colonne | Avant | Après | Maximum constaté |
-|---|---|---|---|
-| `users.pseudo` | `VARCHAR(100)` | `VARCHAR(50)` | 17 |
-| `users.alanyaPhone` | `VARCHAR(8)` | `VARCHAR(20)` | — |
-| `users.email` | `TEXT` | `VARCHAR(100)` | 49 |
-| `users.password` | `TEXT` | `VARCHAR(255)` | 60 (bcrypt) |
-| `users.avatar_url` | `VARCHAR(2048)` | `TEXT` | **1955** |
-| `pays.libelle` | `VARCHAR(200)` | `VARCHAR(100)` | 19 |
-
-`avatar_url` méritait l'élargissement bien plus qu'un alignement cosmétique :
-la plus longue valeur en base occupait déjà 96 % de la limite.
-
-### 1.4 Valeurs par défaut
-
-`users.updatedAt` → `now()` · `pays.prefix` → `''` · `pays.timeZone` →
-`'Africa/Dakar'` · `pays.decalageHoraire` → `0` · `meeting.start_time` →
-`now()` · `meeting.duree` → `0` · `meeting.objet` → `'Réunion'` ·
-`meeting.room` → `'default-room'` · `meeting.type_media` → `1`.
-
-Un `DEFAULT` ne modifie aucune ligne existante : il ne s'applique qu'aux
-insertions futures qui omettent la colonne.
-
-### 1.5 Noms de champs Prisma
-
-`center_alanyaID`, `users_alanyaID`, `in_call`, `date_at`, `acces_at`,
-`idaccesAdmin`, `created_at`, et les relations en majuscule (`Companies`,
-`Agences`, `Fonctions`, `Admins`, `CenterComs`, `AccesAdmins`, `Abonnements`,
-`Gestions`, `Users`, `Services`, `Centers`, `GestionCompany`).
-
-Aucune migration : les noms **physiques** étaient déjà ceux du référentiel,
-obtenus par `@map`. Seuls changent les noms exposés par le client TypeScript.
-
-### 1.6 Validations applicatives réalignées
-
-Trois rétrécissements de colonnes auraient produit des **erreurs 500** au lieu
-de messages clairs, parce que la validation `zod` était plus permissive que la
-base :
-
-| Schéma | Avant | Après |
-|---|---|---|
-| `setupSchema.pseudo` | `max(100)` | `max(50)` |
-| `updateProfileSchema.pseudo` | `max(100)` | `max(50)` |
-| `emailSchema` | aucune borne | `max(100)` |
-
-C'est le piège récurrent de ce genre d'alignement : rétrécir une colonne sans
-toucher à la validation déplace simplement l'erreur, de l'utilisateur vers la
-base.
+Petite remarque au passage : l'index `@@index([idMeeting])` que tu ajoutes est
+déjà couvert par la contrainte d'unicité existante. Il ferait double emploi.
 
 ---
 
-## 2. 🔴 Écarts volontaires — les reprendre casserait la production
+## En résumé
 
-### 2.1 `Message` : clé primaire `UUID` → `BigInt`
+**On a tout aligné sauf ce qui casse la production.** Il nous faut juste ta
+réponse sur les trois points du milieu — surtout le premier, l'unicité de
+l'Alanya ID, qui nous semble le plus important.
 
-Le référentiel remplace `msgID UUID` par `msgID BigInt @default(autoincrement())`.
-
-Ce n'est pas un renommage mais un changement de type sur la clé primaire d'une
-table qui contient tout l'historique des messages. Il se propage à quatre tables
-enfants dont la colonne `message_id` devrait changer en même temps :
-`message_stars`, `message_reactions`, `message_hides`, `media_files`.
-
-Une telle migration demande une table de correspondance UUID → BigInt, une
-reprise de chaque table enfant, et une coupure de service.
-
-### 2.2 Disparition de `Message.expires_at`
-
-Cette colonne porte les **messages éphémères** (lot 2.6, en production). Le code
-s'en sert en quatre points de `src/app/api/conversations/[id]/messages/route.ts`
-(lignes 52, 107, 139, 149) et la purge périodique du serveur WebSocket s'y
-appuie. La retirer désactiverait silencieusement la fonctionnalité.
-
-### 2.3 Disparition de `Message.deletedAt`
-
-Remplacée par le couple `isDeleted` / `deletedForID`. La suppression « pour
-tous » repose sur `deletedAt` — **18 occurrences**. Migrer est possible, mais
-c'est une réécriture de la logique de suppression.
-
-### 2.4 `users.alanyaPhone` perd sa contrainte `@unique`
-
-Le référentiel déclare la colonne sans `@unique`. **Deux comptes pourraient
-alors porter le même Alanya ID.**
-
-La longueur `VARCHAR(20)` a été reprise, l'unicité **non**. C'est l'écart le
-plus probablement issu d'un oubli.
-
-### 2.5 `users.alanyaPhone` prend `@default("100000")`
-
-Non repris, et pas seulement par prudence : **poser une valeur par défaut sur
-une colonne unique est un piège**. La première insertion qui omet le champ
-obtient `100000` ; la deuxième viole la contrainte d'unicité et échoue avec un
-message obscur.
-
-Le code fournit toujours la valeur (`src/lib/publicNumber.ts`), donc ce défaut
-serait inerte chez nous — mais sur une base partagée, il tendrait un piège aux
-autres.
-
-### 2.6 Horodatages de `message` en `Timestamp(6)`
-
-Le référentiel passe `sendAt`, `readAt` et `editedAt` de `Timestamptz` à
-`Timestamp(6)`, **sans fuseau horaire**. L'application sert des utilisateurs sur
-plusieurs fuseaux ; l'ordre des messages deviendrait incorrect dès qu'un client
-et le serveur ne sont pas dans la même zone.
-
-### 2.7 `message` perd ses deux index
-
-Le référentiel ne déclare plus `@@index([convId, createdAt])` ni
-`@@index([senderId])` — exactement les index qui servent le chargement d'une
-conversation.
-
-### 2.8 Renommages en cascade dans le code
-
-| Actuel | Référentiel | Occurrences dans `src/` |
-|---|---|---|
-| `convId` | `conversationID` | **190** |
-| `messageId` (type) | `BigInt` | 70 |
-| `senderId` | `senderID` | 29 |
-| `deletedAt` | `isDeleted` / `deletedForID` | 18 |
-| `replyToId` | `replyToID` | 14 |
-
-Environ **340 références**, réparties sur l'API, le serveur WebSocket et les
-trois clients.
-
-### 2.9 Suppression de `users.emailVerified`
-
-Commentée « à supprimer » dans le référentiel, mais encore utilisée par le flux
-de vérification d'adresse.
-
-### 2.10 `Meeting.idOrganiser` et `MeetingParticipant.IDparticipant` deviennent nullables
-
-Rendre une colonne nullable est sans risque pour les données, mais c'est une
-régression de sens : une réunion sans organisateur, ou un participant sans
-utilisateur, ne veulent rien dire. Le type TypeScript passerait de `string` à
-`string | null`, forçant des vérifications de nullité partout pour un cas qui ne
-devrait pas exister.
-
-### 2.11 `MeetingParticipant` perd son `@@unique([idMeeting, IDparticipant])`
-
-Le référentiel ne la déclare pas. Sans elle, **le même utilisateur pourrait être
-inscrit deux fois à la même réunion**.
-
-Le référentiel ajoute à la place un `@@index([idMeeting])` — qui serait de toute
-façon **redondant** : le préfixe gauche de la contrainte d'unicité existante
-couvre déjà les recherches sur `idMeeting` seul.
-
----
-
-## 3. Ce qu'il reste à décider
-
-Il ne reste **aucun écart sans risque**. Tout ce qui subsiste relève de la
-section 2, et se répartit en deux familles.
-
-**Trois points ressemblent à des oublis** plutôt qu'à des décisions, et méritent
-une question à l'équipe :
-
-- **2.4** — la perte de l'unicité sur `alanyaPhone`
-- **2.2** — la disparition de `expires_at`
-- **2.6** — la perte du fuseau horaire sur les horodatages de `message`
-
-**Le reste est un chantier réel** : la refonte de `Message` (2.1, 2.3, 2.7,
-2.8). À planifier avec une sauvegarde fraîche, une fenêtre de coupure et un
-déploiement coordonné des trois clients. Ce n'est pas quelque chose qui se
-glisse dans un lot courant.
-
----
-
-## 4. Migrations correspondantes
-
-| Fichier | Contenu |
-|---|---|
-| `prisma/manual/2026-07_organisation.sql` | les 13 tables + `users.idcompany` |
-| `prisma/manual/2026-07_rapport_chat.sql` | renommages centre d'appels, `rapportChat`, `docRapport` |
-| `prisma/manual/2026-07_champs_referentiel.sql` | `actif`, `mobile`, `libelleAnglais`, `transmission` |
-| `prisma/manual/2026-07_longueurs_colonnes.sql` | `pseudo` → 50, `alanyaPhone` → 20 |
-| `prisma/manual/2026-07_alignement_referentiel.sql` | `email`, `password`, `avatar_url`, et les 9 valeurs par défaut |
-
-Toutes sont idempotentes et rejouées à chaque déploiement par
-`scripts/apply-manual-sql.sh`. Les trois rétrécissements de colonnes
-revérifient les données à l'exécution et lèvent une exception lisible plutôt que
-de laisser le déploiement s'interrompre sans explication.
+Merci !
