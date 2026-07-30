@@ -89,9 +89,7 @@ CREATE TABLE IF NOT EXISTS "natureRapport" (
   "codeCouleur" VARCHAR(10)
 );
 
--- ⚠️ Aucune colonne ne référence encore `typeCompany` : le modèle la pose sans
--- relier `company` à elle. À confirmer avec l'équipe — il manque
--- vraisemblablement un `company.idTypeCompany`.
+-- Référencée par `company.idTypeCompany`, ajoutée plus bas (point 9).
 CREATE TABLE IF NOT EXISTS "typeCompany" (
   "idTypeCompany" SERIAL PRIMARY KEY,
   "libelle"       VARCHAR(45) NOT NULL,
@@ -217,3 +215,29 @@ CREATE TABLE IF NOT EXISTS "commentaire" (
 );
 CREATE INDEX IF NOT EXISTS "commentaire_idRapport_idx"   ON "commentaire"("idRapport", "created_at");
 CREATE INDEX IF NOT EXISTS "commentaire_idBordAgent_idx" ON "commentaire"("idBordAgent");
+
+-- -------------------------------------------------------------
+-- 9. company → typeCompany
+-- -------------------------------------------------------------
+-- Le lien qui manquait au diagramme : sans lui, la nomenclature des types
+-- d'entreprise existait mais aucune entreprise ne pouvait en désigner un.
+--
+-- Nom physique en camelCase, à la différence des autres clés étrangères de
+-- `company` (`idville`, `idpays`, `idabonnement`) : il suit celui de la
+-- colonne référencée. Les deux conventions se croisent ici — celle du
+-- référentiel équipe et celle du modèle tidesk.
+ALTER TABLE "company" ADD COLUMN IF NOT EXISTS "idTypeCompany" INTEGER;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'company_idTypeCompany_fkey') THEN
+    -- SET NULL comme les autres nomenclatures : retirer un type ne doit pas
+    -- emporter les entreprises qui s'y référaient.
+    ALTER TABLE "company" ADD CONSTRAINT "company_idTypeCompany_fkey"
+      FOREIGN KEY ("idTypeCompany") REFERENCES "typeCompany"("idTypeCompany") ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- PostgreSQL n'indexe pas les clés étrangères : sans cet index, supprimer un
+-- type d'entreprise imposerait un parcours complet de `company`.
+CREATE INDEX IF NOT EXISTS "company_idTypeCompany_idx" ON "company"("idTypeCompany");

@@ -320,15 +320,13 @@ model NatureRapport {
   @@map("natureRapport")
 }
 
-/// Nomenclature des types d'entreprise.
-///
-/// ⚠️ Rien ne la référence pour l'instant : le modèle la pose sans relier
-/// `Company` à elle. Il manque vraisemblablement un `company.idTypeCompany`,
-/// à confirmer avec l'équipe.
+/// Nomenclature des types d'entreprise, référencée par [Company].
 model TypeCompany {
   idTypeCompany Int     @id @default(autoincrement())
   libelle       String  @db.VarChar(45)
   libelleAn     String? @db.VarChar(45)
+
+  Companies Company[]
 
   @@map("typeCompany")
 }
@@ -1011,11 +1009,20 @@ model Company {
   idAbonnement  Int?    @map("idabonnement")
   rootID        Int?    @map("rootid")
   prefixeAlanya Int?    @map("prefixealanya")
+  /// Type d'entreprise. Nom physique en camelCase — il suit celui de la
+  /// colonne référencée, `typeCompany.idTypeCompany`, alors que les autres
+  /// clés étrangères de `company` sont en minuscules (`idville`, `idpays`).
+  /// Les deux conventions se croisent ici : celles du référentiel équipe et
+  /// celles du modèle tidesk.
+  idTypeCompany Int?    @map("idTypeCompany")
 
-  ville      Ville?      @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
-  pays       Pays?       @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
-  abonnement Abonnement? @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
-  adminRoot  AdminRoot?  @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+  ville       Ville?       @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
+  pays        Pays?        @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  abonnement  Abonnement?  @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
+  adminRoot   AdminRoot?   @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+  /// SetNull comme les autres nomenclatures : retirer un type d'entreprise ne
+  /// doit pas emporter les entreprises qui s'y référaient.
+  typeCompany TypeCompany? @relation(fields: [idTypeCompany], references: [idTypeCompany], onDelete: SetNull, onUpdate: Cascade)
 
   created_at         DateTime? @default(dbgenerated("CURRENT_DATE")) @db.Date
   lat                Float?
