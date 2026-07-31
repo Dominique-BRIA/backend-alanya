@@ -236,6 +236,10 @@ model RapportChat {
   agent        User         @relation(fields: [idAgent], references: [id], onDelete: Cascade)
   resume       String?      @db.Text
   subject      String?      @db.VarChar(200)
+  /// Numéro de rappel du client, saisi par l'agent. Ajouté directement en base
+  /// par l'équipe ; ce champ ne fait que refléter la colonne existante —
+  /// `character varying(20)`, nullable, relevée sur la prod le 31/07/2026.
+  mobile       String?      @db.VarChar(20)
 
   /// Gravité du problème — nomenclature, et non plus un entier libre.
   idDegreRapport Int?           @db.SmallInt

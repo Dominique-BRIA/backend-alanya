@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS "rapportChat" (
   "subject"    VARCHAR(200),
   "start_time" TIMESTAMPTZ(6) NOT NULL DEFAULT now(),
   "type"       SMALLINT,
+  "mobile"     VARCHAR(20),
   CONSTRAINT "rapportChat_idCustomer_fkey"
     FOREIGN KEY ("idCustomer") REFERENCES "customerChat"("ID") ON DELETE CASCADE,
   CONSTRAINT "rapportChat_idAgent_fkey"
@@ -147,6 +148,20 @@ CREATE TABLE IF NOT EXISTS "rapportChat" (
 
 CREATE INDEX IF NOT EXISTS "rapportChat_idCustomer_idx"
   ON "rapportChat"("idCustomer");
+
+-- « mobile » : numéro de rappel du client, ajouté À LA MAIN sur la prod par
+-- l'équipe le 31/07/2026 (relevé : character varying(20), nullable). Les deux
+-- écritures ci-dessus et ci-dessous sont volontairement redondantes et c'est
+-- la règle du dossier : le CREATE TABLE décrit l'état cible d'une base NEUVE,
+-- l'ALTER rattrape les bases DÉJÀ créées. Sans lui, une base reconstruite de
+-- zéro n'aurait pas la colonne et le client Prisma casserait à la première
+-- lecture. Sur la prod, la colonne existe : l'instruction est sautée.
+--
+-- ⚠️ ADD COLUMN IF NOT EXISTS ne contrôle PAS le type — si la colonne existait
+-- avec une autre longueur, elle serait sautée en silence. Le VARCHAR(20) écrit
+-- ici est celui relevé sur la prod, pas une valeur choisie.
+ALTER TABLE "rapportChat"
+  ADD COLUMN IF NOT EXISTS "mobile" VARCHAR(20);
 
 -- Les rapports d'un agent, du plus récent au plus ancien.
 --
