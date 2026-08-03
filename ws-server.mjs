@@ -9,6 +9,9 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { parse } from "node:url";
 import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled } from "./push.mjs";
+// Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
+// raison du JavaScript plutôt que du TypeScript.
+import { serialiseAppelPour, STATUTS_TERMINAUX } from "./src/lib/call-labels.mjs";
 
 const prisma = new PrismaClient();
 // Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
@@ -770,6 +773,51 @@ async function handleCallSignal(ws, msg) {
   sendTo(toUserId, { type: "call_signal", callId, from: ws.userId, signal });
 }
 
+/**
+ * Pousse l'enregistrement d'appel complet à chaque participant, une fois
+ * l'appel clos.
+ *
+ * Remplace le schéma « le serveur signale, le client recharge tout
+ * l'historique » : le client recevait `call_state`, attendait 800 ms, puis
+ * refaisait un `GET /api/calls` de 50 appels pour n'en découvrir qu'un.
+ *
+ * ⚠️ LA CHARGE EST CALCULÉE PAR DESTINATAIRE, et c'est ce qui distingue un
+ * appel d'un message. Un message est identique pour tout le monde et se diffuse
+ * tel quel ; un appel est sortant pour l'un, entrant pour l'autre, avec un
+ * libellé et un correspondant différents. Sérialiser une seule fois pour tous
+ * afficherait « Appel sortant » chez celui qui l'a reçu.
+ *
+ * Le délai de 800 ms côté client n'avait pas lieu d'être : `hangUp` attend la
+ * réponse de `POST /api/calls/:id/end` AVANT d'émettre `call_state`, donc la
+ * base est déjà à jour quand cet événement nous parvient.
+ */
+async function diffuseAppelTermine(callId, ids) {
+  try {
+    const call = await prisma.call.findUnique({
+      where: { id: callId },
+      include: { participants: { include: { user: true } } },
+    });
+    if (!call || !STATUTS_TERMINAUX.includes(call.status)) return;
+
+    const conv = call.convId
+      ? await prisma.conversation.findUnique({
+          where: { id: call.convId },
+          select: { isGroup: true, name: true },
+        })
+      : null;
+
+    for (const uid of ids) {
+      sendTo(uid, { type: "call_ended", call: serialiseAppelPour(call, conv, uid) });
+    }
+  } catch (e) {
+    // Le relais de `call_state` a déjà eu lieu : en cas d'échec ici, le client
+    // garde son ancien chemin de rattrapage (rechargement au retour au premier
+    // plan ou à la reconnexion). On ne fait pas tomber la signalisation pour
+    // autant.
+    console.error("[ws] diffuseAppelTermine:", e?.message ?? e);
+  }
+}
+
 async function handleCallState(ws, msg) {
   const { callId, state, userId: joinedUserId, displayName } = msg;
   if (!callId || !state) return;
@@ -786,6 +834,9 @@ async function handleCallState(ws, msg) {
   for (const uid of ids) {
     sendTo(uid, payload);
   }
+
+  // Si l'appel est clos, pousser l'enregistrement COMPLET dans la foulée.
+  await diffuseAppelTermine(callId, ids);
 
   // Push data-only pour retirer la notification d'appel plein écran chez les
   // destinataires dont l'application est FERMÉE : le WebSocket ne les atteint
