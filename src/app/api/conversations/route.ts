@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createConversationSchema } from "@/lib/validation";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
+import { serialiseAppelPour } from "@/lib/calls";
 
 // Convertit le type entier (BD) en string (API)
 function _typeToString(t: number | null): string {
@@ -36,6 +37,27 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       },
     },
   });
+
+  // Dernier appel de chaque conversation, en UNE requête.
+  //
+  // Le client chargeait jusqu'ici les 50 derniers appels par un second appel
+  // HTTP, puis reconstruisait lui-même la table « conversation → dernier
+  // appel ». Deux défauts : une requête de plus à chaque ouverture, et une
+  // fenêtre de 50 appels — au-delà, les conversations les moins actives
+  // perdaient leur aperçu d'appel sans que rien ne le signale.
+  //
+  // `distinct` sur convId APRÈS un tri décroissant : PostgreSQL ne garde que la
+  // première ligne de chaque groupe, donc l'appel le plus récent.
+  const convIds = parts.map((p) => p.conv.id);
+  const derniersAppels = convIds.length
+    ? await prisma.call.findMany({
+        where: { convId: { in: convIds } },
+        orderBy: { startedAt: "desc" },
+        distinct: ["convId"],
+        include: { participants: { include: { user: true } } },
+      })
+    : [];
+  const appelParConv = new Map(derniersAppels.map((c) => [c.convId as string, c]));
 
   // Trie : épinglés d'abord, puis par date du dernier message
   parts.sort((a, b) => {
@@ -87,6 +109,17 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
               createdAt: lastCreatedAt ?? conv.createdAt,
             }
           : null,
+      // Dernier appel, déjà formulé pour CE destinataire — même règle que dans
+      // `call_ended` : sortant pour l'un, entrant pour l'autre.
+      lastCall: (() => {
+        const appel = appelParConv.get(conv.id);
+        if (!appel) return null;
+        return serialiseAppelPour(
+          appel,
+          { isGroup: conv.isGroup, name: conv.name },
+          userId,
+        );
+      })(),
       unread: p.unreadCount,
       isPinned: p.isPinned === 1,
       isArchived: p.isArchived === 1,
