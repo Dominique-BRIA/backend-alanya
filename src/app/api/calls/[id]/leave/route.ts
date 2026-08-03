@@ -31,10 +31,17 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   });
 
   // Plus personne en ligne : on clôture l'appel.
+  //
+  // Même règle que dans `end` : `answeredAt` décide. Un appel que personne n'a
+  // décroché reste un NO_ANSWER même si le départ passe par ici — sinon il
+  // ressortirait comme ENDED sans durée, l'ambiguïté qu'on vient de retirer.
   if (stillActiveCount === 0) {
     await prisma.call.update({
       where: { id },
-      data: { status: "ENDED", endedAt: now },
+      data: {
+        status: part.call.answeredAt ? "ENDED" : "NO_ANSWER",
+        endedAt: now,
+      },
     });
   }
 

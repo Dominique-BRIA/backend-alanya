@@ -1,0 +1,37 @@
+-- =============================================================
+-- CallStatus : ajout de NO_ANSWER et BUSY
+-- =============================================================
+-- Le type ne décrivait que RINGING, ONGOING, ENDED, MISSED, REJECTED. Il
+-- manquait de quoi dire « personne n'a décroché » et « le correspondant était
+-- en ligne », si bien que le serveur écrivait ENDED dans le premier cas — la
+-- même valeur qu'un appel abouti. Le client devait alors départager les deux
+-- avec `durationSec == 0`, ce qui affichait régulièrement le mauvais libellé.
+--
+-- ⚠️ AJOUT DÉFINITIF. PostgreSQL ne sait pas RETIRER une valeur d'un enum :
+-- il faudrait recréer le type et réécrire toutes les colonnes qui l'utilisent,
+-- sur des données de production.
+--
+-- MISSED est conservé et n'est plus jamais écrit : les appels antérieurs le
+-- portent, et `libelleAppel()` le traite exactement comme NO_ANSWER. Le
+-- supprimer imposerait de migrer l'existant pour aucun gain.
+--
+-- Pourquoi PAS de valeur distincte pour « refusé » et « rejeté » : c'est le
+-- même fait vu des deux bouts. L'appelant lit « refusé », l'appelé « rejeté »,
+-- et cette formulation est calculée à la lecture selon le destinataire. Deux
+-- valeurs en base auraient redéplacé le problème au lieu de le résoudre.
+--
+-- Idempotent : `IF NOT EXISTS` rend le rejeu sans effet, ce qui est
+-- indispensable — apply-manual-sql.sh relance tous les fichiers à chaque
+-- déploiement.
+--
+-- ⚠️ NE PAS envelopper ces instructions dans une transaction qui les UTILISE
+-- ensuite : PostgreSQL autorise `ADD VALUE` dans une transaction, mais interdit
+-- de se servir de la valeur ajoutée avant le COMMIT. Les rejouer seules entre
+-- BEGIN et ROLLBACK pour vérification fonctionne ; y ajouter un UPDATE qui
+-- écrit 'NO_ANSWER' échouerait.
+--
+-- Application : psql -h localhost -U alanyavox -d alanya -v ON_ERROR_STOP=1 \
+--                    -f prisma/manual/2026-08_call_status.sql
+
+ALTER TYPE "CallStatus" ADD VALUE IF NOT EXISTS 'NO_ANSWER';
+ALTER TYPE "CallStatus" ADD VALUE IF NOT EXISTS 'BUSY';

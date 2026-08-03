@@ -19,7 +19,16 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const status = part.call.status;
   // Autorise à rejoindre un appel RINGING ou ONGOING (invitation / transfert en
   // cours d'appel inclus). Le doublon est déjà bloqué par ALREADY_JOINED ci-dessus.
-  if (status === "ENDED" || status === "REJECTED" || status === "MISSED") {
+  // NO_ANSWER et BUSY rejoignent la liste : sans eux, un appel expiré par le
+  // minuteur des 90 s restait acceptable, et décrocher l'aurait fait repasser
+  // en ONGOING alors qu'il était déjà clos.
+  if (
+    status === "ENDED" ||
+    status === "REJECTED" ||
+    status === "MISSED" ||
+    status === "NO_ANSWER" ||
+    status === "BUSY"
+  ) {
     return fail("Appel terminé", 409, "BAD_STATE");
   }
 

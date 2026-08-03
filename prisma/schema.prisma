@@ -698,12 +698,31 @@ enum CallType {
   VIDEO
 }
 
+/// Statuts d'appel. Chaque valeur décrit un FAIT objectif, jamais un point de
+/// vue : un refus est un seul événement, que l'appelant lit « refusé » et
+/// l'appelé « rejeté ». Cette formulation par destinataire est calculée à la
+/// lecture par `libelleAppel()`, elle n'est pas stockée — sinon il faudrait
+/// écrire deux lignes pour le même fait, et c'est exactement la confusion qui
+/// faisait afficher « Rejeté » des deux côtés.
+///
+/// ⚠️ Une valeur d'enum PostgreSQL ne se RETIRE pas : il faudrait recréer le
+/// type et réécrire toutes les colonnes qui l'utilisent, sur des données de
+/// prod. Tout ajout ici est définitif.
 enum CallStatus {
   RINGING
   ONGOING
   ENDED
+  /// Conservé pour l'historique : les appels créés avant l'ajout de NO_ANSWER
+  /// portent cette valeur. Le nouveau code écrit NO_ANSWER, jamais MISSED, et
+  /// `libelleAppel()` traite les deux à l'identique.
   MISSED
   REJECTED
+  /// Personne n'a décroché — ni raccroché par l'appelant, ni refusé par
+  /// l'appelé. Remplace le `ENDED` que posait `end/route.ts` quand l'appelant
+  /// abandonnait, et qui obligeait le client à deviner via `durationSec == 0`.
+  NO_ANSWER
+  /// L'appelé était déjà en ligne. L'appel n'a jamais sonné chez lui.
+  BUSY
 }
 
 model Call {
