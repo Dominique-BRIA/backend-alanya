@@ -44,7 +44,10 @@ export function libelleAppel(
   isOutgoing: boolean,
   durationSec: number | null,
 ): LibelleAppel {
-  const echec = (preciseStatus: string, detail: string | null = null): LibelleAppel => ({
+  // `preciseStatus` est le libellé complet des listes (« Appel manqué ») ;
+  // `detail` est sa forme courte pour la bulle du fil, où le type d'appel est
+  // déjà écrit au-dessus (« Appel vocal entrant » / « Manqué »).
+  const echec = (preciseStatus: string, detail: string): LibelleAppel => ({
     preciseStatus,
     detail,
     isFailed: true,
@@ -53,34 +56,42 @@ export function libelleAppel(
 
   switch (status) {
     case "REJECTED":
-      return isOutgoing ? echec("Appel refusé") : echec("Appel rejeté");
+      return isOutgoing
+        ? echec("Appel refusé", "Refusé")
+        : echec("Appel rejeté", "Rejeté");
 
     // MISSED est l'ancienne écriture de NO_ANSWER : même fait, même rendu.
     case "NO_ANSWER":
     case "MISSED":
-      return isOutgoing ? echec("Appel sans réponse") : echec("Appel manqué");
+      return isOutgoing
+        ? echec("Appel sans réponse", "Sans réponse")
+        : echec("Appel manqué", "Manqué");
 
     case "BUSY":
       // Côté appelé, l'appel n'a jamais sonné : il était en ligne. Le présenter
       // comme « manqué » est ce qui décrit le mieux ce qu'il a vécu.
-      return isOutgoing ? echec("Occupé") : echec("Appel manqué");
+      return isOutgoing
+        ? echec("Occupé", "Occupé")
+        : echec("Appel manqué", "Manqué");
 
     case "RINGING":
-      return { preciseStatus: "Sonnerie", detail: null, isFailed: false, colorHint: "neutral" };
+      return { preciseStatus: "Sonnerie", detail: "En cours", isFailed: false, colorHint: "neutral" };
 
     case "ONGOING":
-      return { preciseStatus: "En cours", detail: null, isFailed: false, colorHint: "neutral" };
+      return { preciseStatus: "En cours", detail: "En cours", isFailed: false, colorHint: "neutral" };
 
     case "ENDED":
       // Un ENDED sans durée est un appel que personne n'a décroché : c'est
       // l'ancien comportement de `end/route.ts`, encore présent dans les
       // données. Le nouveau code écrit NO_ANSWER dans ce cas.
       if (durationSec === null || durationSec <= 0) {
-        return isOutgoing ? echec("Appel sans réponse") : echec("Appel manqué");
+        return isOutgoing
+          ? echec("Appel sans réponse", "Sans réponse")
+          : echec("Appel manqué", "Manqué");
       }
       return {
         preciseStatus: isOutgoing ? "Appel sortant" : "Appel entrant",
-        detail: null,
+        detail: "Répondu",
         isFailed: false,
         colorHint: isOutgoing ? "positive" : "info",
       };
