@@ -59,12 +59,24 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     : [];
   const appelParConv = new Map(derniersAppels.map((c) => [c.convId as string, c]));
 
-  // Trie : épinglés d'abord, puis par date du dernier message
+  /// Date de la dernière ACTIVITÉ d'une conversation, appels compris.
+  ///
+  /// Le tri ne regardait que le dernier message : passer un appel ne faisait pas
+  /// remonter la conversation, alors qu'un appel est une activité au même titre
+  /// qu'un message. C'est le comportement de WhatsApp, et c'est aussi ce que la
+  /// liste affiche déjà — l'aperçu montre l'appel quand il est plus récent, mais
+  /// la conversation restait en bas.
+  const dateActivite = (p: (typeof parts)[number]) => {
+    const message =
+      p.conv.lastMessageAt ?? p.conv.messages[0]?.createdAt ?? p.conv.createdAt;
+    const appel = appelParConv.get(p.conv.id)?.startedAt;
+    return appel && appel > message ? appel : message;
+  };
+
+  // Trie : épinglés d'abord, puis par date de dernière activité.
   parts.sort((a, b) => {
     if (a.isPinned !== b.isPinned) return b.isPinned - a.isPinned;
-    const da = a.conv.lastMessageAt ?? a.conv.messages[0]?.createdAt ?? a.conv.createdAt;
-    const db = b.conv.lastMessageAt ?? b.conv.messages[0]?.createdAt ?? b.conv.createdAt;
-    return db.getTime() - da.getTime();
+    return dateActivite(b).getTime() - dateActivite(a).getTime();
   });
 
   const conversations = parts.map((p) => {
@@ -123,7 +135,9 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       unread: p.unreadCount,
       isPinned: p.isPinned === 1,
       isArchived: p.isArchived === 1,
-      updatedAt: lastCreatedAt ?? conv.createdAt,
+      // Même définition que celle qui a servi au tri : sinon la liste serait
+      // ordonnée sur une date et en afficherait une autre.
+      updatedAt: dateActivite(p),
     };
   });
 
