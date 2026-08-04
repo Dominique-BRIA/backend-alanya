@@ -59,7 +59,24 @@ async function tokensForUser(prisma, userId) {
   return rows.map((r) => r.token);
 }
 
-export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false }) {
+/**
+ * Durée de vie d'un push, en millisecondes.
+ *
+ * ⚠️ SANS TTL, FCM CONSERVE UN MESSAGE JUSQU'À QUATRE SEMAINES. Un téléphone
+ * éteint pendant un appel recevait donc « Appel entrant » en se rallumant le
+ * lendemain, pour un appel terminé depuis longtemps. Pire : rien ne garantit
+ * l'ordre entre deux messages en attente, si bien que l'annulation pouvait être
+ * délivrée AVANT l'appel qu'elle annule — la sonnerie repartait alors sans
+ * jamais s'arrêter.
+ *
+ * 90 s pour l'appel : la valeur au-delà de laquelle le serveur le déclare sans
+ * réponse. 120 s pour l'annulation, volontairement plus long — elle doit
+ * toujours survivre à l'appel qu'elle vient éteindre.
+ */
+export const TTL_APPEL_MS = 90 * 1000;
+export const TTL_ANNULATION_MS = 120 * 1000;
+
+export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false, ttlMs = null }) {
   const fb = await loadFirebase();
   if (!fb) return;
 
@@ -73,9 +90,31 @@ export async function sendPushToUser(prisma, userId, { title, body, data = {}, d
     const payload = {
       tokens,
       data,
-      android: { priority: "high" },
-      apns: { payload: { aps: { sound: "default" } } },
-      webpush: { headers: { Urgency: "high" } },
+      // `ttl` en millisecondes côté Android (firebase-admin), en SECONDES pour
+      // l'en-tête webpush, et en horodatage d'expiration absolu pour APNs :
+      // trois unités différentes pour la même intention.
+      android: {
+        priority: "high",
+        ...(ttlMs != null ? { ttl: ttlMs } : {}),
+      },
+      apns: {
+        payload: { aps: { sound: "default" } },
+        ...(ttlMs != null
+          ? {
+              headers: {
+                "apns-expiration": String(
+                  Math.floor(Date.now() / 1000) + Math.floor(ttlMs / 1000),
+                ),
+              },
+            }
+          : {}),
+      },
+      webpush: {
+        headers: {
+          Urgency: "high",
+          ...(ttlMs != null ? { TTL: String(Math.floor(ttlMs / 1000)) } : {}),
+        },
+      },
     };
     if (!dataOnly) payload.notification = { title, body };
     const res = await messaging.sendEachForMulticast(payload);
@@ -153,6 +192,7 @@ export async function pushIncomingCall(prisma, {
     // data-only → déclenche le handler d'arrière-plan qui affiche la notif
     // d'appel PLEIN ÉCRAN (full-screen intent) même app fermée.
     dataOnly: true,
+    ttlMs: TTL_APPEL_MS,
     data: {
       type: "incoming_call",
       callId,
@@ -162,6 +202,11 @@ export async function pushIncomingCall(prisma, {
       isGroup: String(Boolean(isGroup)),
       title,
       body,
+      // Horodatage d'ÉMISSION. Le TTL empêche FCM de garder le message trop
+      // longtemps, mais un push déjà en transit peut malgré tout arriver en
+      // retard : le client compare cette date à l'heure de réception et ignore
+      // un appel périmé, plutôt que de faire sonner dans le vide.
+      sentAt: new Date().toISOString(),
     },
   });
 }
@@ -174,6 +219,9 @@ export async function pushCallCancelled(prisma, { recipientId, callId }) {
     title: "",
     body: "",
     dataOnly: true,
+    // Plus long que l'appel : une annulation doit toujours survivre à ce
+    // qu'elle éteint, sinon la notification d'appel reste affichée.
+    ttlMs: TTL_ANNULATION_MS,
     data: { type: "call_cancelled", callId: callId ?? "" },
   });
 }

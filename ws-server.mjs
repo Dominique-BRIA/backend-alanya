@@ -11,7 +11,11 @@ import { parse } from "node:url";
 import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled } from "./push.mjs";
 // Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
 // raison du JavaScript plutôt que du TypeScript.
-import { serialiseAppelPour, STATUTS_TERMINAUX } from "./src/lib/call-labels.mjs";
+import {
+  serialiseAppelPour,
+  STATUTS_TERMINAUX,
+  DELAI_SANS_REPONSE_MS,
+} from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
 
 const prisma = new PrismaClient();
@@ -161,6 +165,10 @@ function markOfflineIfGone(userId, ws) {
   removeClient(userId, ws);
   if (!clients.has(userId)) {
     announcePresence(userId, false).catch(() => {});
+    // Dernière socket fermée : ses appels en cours n'ont plus personne pour
+    // les porter. Sans cela, l'appel restait en sonnerie et son correspondant
+    // était considéré comme occupé indéfiniment.
+    clotureAppelsDeLUtilisateur(userId).catch(() => {});
   }
 }
 
@@ -186,6 +194,136 @@ async function purgeExpiredStatuses() {
     if (res.count > 0) console.log(`[ws] Messages éphémères purgés : ${res.count}`);
   } catch (e) {
     console.error("[ws] purge des messages éphémères:", e);
+  }
+}
+
+/**
+ * Ferme les appels laissés en sonnerie au-delà du délai.
+ *
+ * ⚠️ CE BALAYAGE EST INDISPENSABLE, et son absence était le défaut le plus
+ * grave du système d'appel. Le seul nettoyage existant vit dans
+ * `POST /api/calls` : il ne s'exécute donc QUE lorsque quelqu'un passe un
+ * nouvel appel, et uniquement sur SES propres appels.
+ *
+ * Conséquence : si l'appelant plante ou perd le réseau sans raccrocher, l'appel
+ * restait RINGING indéfiniment. Son correspondant était alors considéré comme
+ * occupé — donc INJOIGNABLE pour tout le monde, sans limite de temps et sans
+ * que rien ne l'indique.
+ *
+ * Le nettoyage ne doit dépendre de l'activité de personne : il tourne ici, à
+ * intervalle régulier, pour tous les utilisateurs.
+ */
+async function fermeAppelsPerimes() {
+  try {
+    const limite = new Date(Date.now() - DELAI_SANS_REPONSE_MS);
+    const perimes = await prisma.call.findMany({
+      where: { status: "RINGING", startedAt: { lt: limite } },
+      select: { id: true },
+    });
+    if (perimes.length === 0) return;
+    const ids = perimes.map((c) => c.id);
+    const maintenant = new Date();
+    await prisma.call.updateMany({
+      where: { id: { in: ids } },
+      data: { status: "NO_ANSWER", endedAt: maintenant },
+    });
+    await prisma.callParticipant.updateMany({
+      where: { callId: { in: ids }, leftAt: null },
+      data: { leftAt: maintenant },
+    });
+    console.log(`[ws] Appels sans réponse clôturés : ${ids.length}`);
+    // Chacun doit l'apprendre : sans cette diffusion, l'écran d'appel de
+    // l'appelant continuerait de sonner alors que l'appel est clos en base.
+    for (const id of ids) {
+      const participants = await callParticipantIds(id);
+      for (const uid of participants) {
+        sendTo(uid, { type: "call_state", callId: id, state: "ended", from: null });
+      }
+      await diffuseAppelTermine(id, participants);
+      if (isPushEnabled()) {
+        for (const uid of participants) {
+          pushCallCancelled(prisma, { recipientId: uid, callId: id }).catch(() => {});
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[ws] clôture des appels périmés:", e);
+  }
+}
+
+/**
+ * Clôt les appels d'un utilisateur dont la dernière socket vient de se fermer.
+ *
+ * Complète le balayage périodique en réagissant TOUT DE SUITE : quand
+ * l'application de l'appelant est tuée, son correspondant n'a aucune raison
+ * d'attendre 90 s avant que la sonnerie ne s'arrête.
+ */
+async function clotureAppelsDeLUtilisateur(userId) {
+  try {
+    const parts = await prisma.callParticipant.findMany({
+      where: {
+        userId,
+        leftAt: null,
+        call: { status: { in: ["RINGING", "ONGOING"] } },
+      },
+      include: { call: { select: { id: true, status: true, initiatorId: true, answeredAt: true } } },
+    });
+    if (parts.length === 0) return;
+    const maintenant = new Date();
+
+    for (const p of parts) {
+      const appel = p.call;
+      const participants = await callParticipantIds(appel.id);
+
+      // Sonnerie dont l'initiateur disparaît : plus personne ne peut décrocher,
+      // l'appel est clos pour tout le monde.
+      const estInitiateur = appel.initiatorId === userId;
+      const doitClore =
+        (appel.status === "RINGING" && estInitiateur) ||
+        // Sinon, on ne retire QUE cet utilisateur ; l'appel ne se clôt que s'il
+        // ne reste personne en ligne — même règle que la route `leave`.
+        false;
+
+      await prisma.callParticipant.updateMany({
+        where: { callId: appel.id, userId },
+        data: { leftAt: maintenant },
+      });
+
+      let clos = doitClore;
+      if (!doitClore) {
+        const restants = await prisma.callParticipant.count({
+          where: { callId: appel.id, joinedAt: { not: null }, leftAt: null },
+        });
+        clos = restants === 0;
+      }
+      if (!clos) continue;
+
+      await prisma.call.update({
+        where: { id: appel.id },
+        data: {
+          status: appel.answeredAt ? "ENDED" : "NO_ANSWER",
+          endedAt: maintenant,
+        },
+      });
+      await prisma.callParticipant.updateMany({
+        where: { callId: appel.id, leftAt: null },
+        data: { leftAt: maintenant },
+      });
+      for (const uid of participants) {
+        if (uid === userId) continue;
+        sendTo(uid, { type: "call_state", callId: appel.id, state: "ended", from: userId });
+      }
+      await diffuseAppelTermine(appel.id, participants);
+      if (isPushEnabled()) {
+        for (const uid of participants) {
+          if (uid === userId) continue;
+          pushCallCancelled(prisma, { recipientId: uid, callId: appel.id }).catch(() => {});
+        }
+      }
+      console.log(`[ws] Appel ${appel.id} clos : socket de ${userId} fermée`);
+    }
+  } catch (e) {
+    console.error("[ws] clôture des appels à la déconnexion:", e);
   }
 }
 
@@ -766,12 +904,48 @@ async function handleCallRing(ws, msg) {
   }
 }
 
+/**
+ * Envoie une trame aux sockets d'un utilisateur qui participent À CET APPEL.
+ *
+ * ⚠️ `sendTo` écrit sur TOUTES les sockets du compte. Pour la signalisation
+ * WebRTC c'est un défaut : quelqu'un connecté sur son téléphone et sur le web
+ * voyait les offres SDP et les candidats ICE partir vers les deux, alors qu'un
+ * seul appareil est dans l'appel. L'autre les empilait dans un tampon qu'il ne
+ * vidait jamais, et pouvait répondre à une négociation qui ne le concernait pas.
+ *
+ * Une socket déclare l'appel qu'elle a rejoint dans `ws.callIdActif` (posé par
+ * `handleCallState`). On ne retient donc que celles-là.
+ *
+ * Repli délibéré : si AUCUNE socket n'a encore déclaré cet appel — le cas
+ * pendant la sonnerie, avant tout décrochage — on retombe sur `sendTo`. Sans ce
+ * repli, la toute première offre n'atteindrait personne.
+ */
+function envoieAuxSocketsDeLAppel(userId, callId, payload) {
+  const set = clients.get(userId);
+  if (!set) return false;
+  const data = JSON.stringify(payload);
+  let cible = false;
+  for (const s of set) {
+    if (s.readyState === s.OPEN && s.callIdActif === callId) {
+      s.send(data);
+      cible = true;
+    }
+  }
+  if (cible) return true;
+  return sendTo(userId, payload);
+}
+
 async function handleCallSignal(ws, msg) {
   const { callId, toUserId, signal } = msg;
   if (!callId || !toUserId || !signal) return;
   const ids = await callParticipantIds(callId);
   if (!ids.includes(ws.userId) || !ids.includes(toUserId)) return;
-  sendTo(toUserId, { type: "call_signal", callId, from: ws.userId, signal });
+  envoieAuxSocketsDeLAppel(toUserId, callId, {
+    type: "call_signal",
+    callId,
+    from: ws.userId,
+    signal,
+  });
 }
 
 /**
@@ -824,6 +998,17 @@ async function handleCallState(ws, msg) {
   if (!callId || !state) return;
   const ids = await callParticipantIds(callId);
   if (!ids.includes(ws.userId)) return;
+
+  // La socket déclare l'appel qu'elle porte, ce qui permet d'adresser la
+  // signalisation WebRTC à L'APPAREIL et non au compte — voir
+  // `envoieAuxSocketsDeLAppel`. « joined » marque l'entrée ; toute fin la
+  // libère, sans quoi une socket resterait éternellement rattachée à un appel
+  // terminé et capterait la signalisation du suivant.
+  if (state === "joined" || state === "ringing") {
+    ws.callIdActif = callId;
+  } else if (ws.callIdActif === callId) {
+    ws.callIdActif = null;
+  }
   const payload = {
     type: "call_state",
     callId,
@@ -889,6 +1074,13 @@ async function handleCallInvite(ws, msg) {
     ws.send(JSON.stringify({ type: "call_invite_result", ok: false, reason: "ALREADY_IN", publicNumber }));
     return;
   }
+  // Contrôle de blocage, absent ici alors que `handleCallRing` l'applique
+  // (ligne ~876) : inviter dans un appel permettait donc de joindre quelqu'un
+  // qui vous a bloqué — un contournement du blocage.
+  if (await areBlocked(ws.userId, invitee.id)) {
+    ws.send(JSON.stringify({ type: "call_invite_result", ok: false, reason: "BLOCKED", publicNumber }));
+    return;
+  }
 
   // Ajoute l'invité aux participants (pas encore "joined").
   await prisma.callParticipant.upsert({
@@ -910,17 +1102,38 @@ async function handleCallInvite(ws, msg) {
     groupName = conv?.name ?? null;
     memberCount = conv?.participants.length ?? 0;
   }
-  sendTo(invitee.id, {
+  // ⚠️ MÊME TRAITEMENT QUE `handleCallRing`, qui manquait ici. `sendTo` seul ne
+  // suffit pas : un invité dont l'application est fermée n'a aucune socket, la
+  // trame était donc perdue, sans mise en tampon ni notification. L'inviteur
+  // recevait pourtant `ok: true` et croyait l'invitation partie.
+  const chargeInvite = {
     type: "incoming_call",
     callId,
     convId: call.convId,
     callType: call.type,
     callerId: ws.userId,
     callerName,
+    // Absent ici alors que `handleCallRing` l'envoie : l'écran d'appel de
+    // l'invité s'affichait donc sans photo.
+    callerAvatarUrl: inviter?.avatarUrl ?? null,
     isGroup: true, // multi-partie tant que l'invité rejoint
     groupName,
     memberCount: memberCount + 1,
-  });
+  };
+  if (!sendTo(invitee.id, chargeInvite)) {
+    bufferPendingCall(invitee.id, chargeInvite);
+  }
+  if (isPushEnabled()) {
+    await pushIncomingCall(prisma, {
+      recipientId: invitee.id,
+      callId,
+      convId: call.convId,
+      callerName,
+      callType: call.type,
+      isGroup: true,
+      groupName,
+    });
+  }
 
   // Informe l'inviteur ET les autres participants de l'identité de l'invité.
   const payload = {
@@ -1214,6 +1427,10 @@ wss.on("listening", () => {
   // Purge des statuts expirés : une fois au démarrage, puis toutes les heures.
   purgeExpiredStatuses();
   setInterval(purgeExpiredStatuses, 60 * 60 * 1000);
+  // Toutes les 30 s : bien plus court que le délai de 90 s, pour qu'un appel
+  // abandonné ne survive jamais longtemps à son échéance.
+  fermeAppelsPerimes();
+  setInterval(fermeAppelsPerimes, 30 * 1000);
 });
 
 wss.on("connection", (ws, req) => {
