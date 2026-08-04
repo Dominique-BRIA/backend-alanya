@@ -39,13 +39,26 @@ export const verifySchema = z.object({
 const deviceIdSchema = z.string().trim().min(8).max(255).optional();
 
 export const setupSchema = z.object({
+  // Reste OBLIGATOIRE : le formulaire ne le demande plus, mais il y recopie le
+  // nom avant l'envoi. Le contrat d'API est donc inchangé, et un client plus
+  // ancien qui envoie un vrai pseudo continue de fonctionner.
+  //
   // 50 et non 100 : c'est la longueur de la colonne users.pseudo depuis le
   // 30/07/2026. Laisser 100 ici ferait passer la validation puis échouer
   // l'insertion en base, et l'utilisateur récupérerait une erreur 500 au lieu
-  // d'un message clair.
+  // d'un message clair. ⚠️ Le nom, lui, va jusqu'à 100 : le client doit donc
+  // TRONQUER avant de le recopier ici.
   pseudo: z.string().trim().min(2, "Pseudo trop court").max(50, "Pseudo trop long (50 caractères maximum)"),
   password: z.string().min(8, "Le mot de passe doit faire au moins 8 caractères").max(128),
   nom: z.string().trim().min(1, "Le nom est requis").max(100).optional(),
+  // Numéro de téléphone personnel, distinct de l'Alanya ID. 20 caractères,
+  // longueur relevée sur la colonne users.mobile — au-delà, la validation
+  // passerait et l'insertion échouerait.
+  //
+  // Facultatif ICI et obligatoire dans le formulaire, comme demandé : le
+  // serveur reste tolérant pour ne pas rejeter les clients plus anciens, et
+  // c'est l'interface qui impose la saisie.
+  mobile: z.string().trim().min(1).max(20, "Téléphone trop long (20 caractères maximum)").optional(),
   idPays: z.number().int().positive().optional(),
   deviceId: deviceIdSchema,
 });

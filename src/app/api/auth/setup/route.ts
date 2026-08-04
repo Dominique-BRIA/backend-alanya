@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { setupSchema } from "@/lib/validation";
+import { nomAffichage } from "@/lib/display-name.mjs";
 import { hashPassword } from "@/lib/password";
 import { verifyAccessToken } from "@/lib/jwt";
 import { issueTokenPair } from "@/modules/auth/tokens";
@@ -24,7 +25,8 @@ export async function POST(req: NextRequest) {
       return fail("setupToken invalide ou expiré", 401, "BAD_TOKEN");
     }
 
-    const { pseudo, password, nom, idPays, deviceId } = setupSchema.parse(await req.json());
+    const { pseudo, password, nom, mobile, idPays, deviceId } =
+      setupSchema.parse(await req.json());
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user || !user.emailVerified) return fail("Compte non vérifié", 400, "NOT_VERIFIED");
@@ -44,6 +46,7 @@ export async function POST(req: NextRequest) {
         passwordHash,
         pseudo,
         nom: nom ?? null,
+        mobile: mobile ?? null,
         idPays: idPays ?? null,
         typeCompte: 0,
       },
@@ -59,8 +62,10 @@ export async function POST(req: NextRequest) {
           id: user.id,
           email: user.email,
           publicNumber: user.publicNumber,
-          pseudo,
+          // Le client affiche ce champ comme nom — voir `nomAffichage`.
+          pseudo: nomAffichage({ nom, pseudo, publicNumber: user.publicNumber }),
           nom: nom ?? null,
+          mobile: mobile ?? null,
           idPays: idPays ?? null,
           typeCompte: 0,
         },
