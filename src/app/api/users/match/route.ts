@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { z } from "zod";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 const matchSchema = z.object({
   numbers: z
@@ -54,6 +55,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     select: {
       id: true,
       publicNumber: true,
+      nom: true,
       pseudo: true,
       avatarUrl: true,
       statusMsg: true,
@@ -73,7 +75,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     matched: found.map((u) => ({
       id: u.id,
       publicNumber: u.publicNumber,
-      pseudo: u.pseudo ?? null,
+      pseudo: nomAffichage(u),
       avatarUrl: u.avatarUrl ?? null,
       statusMsg: u.statusMsg ?? null,
       alreadyContact: alreadySet.has(u.id),

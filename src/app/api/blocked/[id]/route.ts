@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { mirrorContactBlock } from "@/lib/blocking";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // DELETE /api/blocked/:id — débloque un utilisateur (id = idBlock).
 export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -42,7 +43,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   return ok({
     idBlock: blocked.idBlock,
     idCallerBlock: blocked.idCallerBlock,
-    pseudo: blocked.blockedUser.pseudo ?? null,
+    pseudo: nomAffichage(blocked.blockedUser),
     publicNumber: blocked.blockedUser.publicNumber,
     dateBlock: blocked.dateBlock,
   });

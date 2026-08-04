@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { nomAffichage } from "./display-name.mjs";
 
 export async function conversationMeta(convId: string | null) {
   if (!convId) return { isGroup: false, groupName: null as string | null, memberCount: 2 };
@@ -60,6 +61,6 @@ export async function activeCallParticipants(callId: string) {
   });
   return parts.map((p) => ({
     userId: p.userId,
-    displayName: p.user.pseudo ?? p.user.publicNumber,
+    displayName: nomAffichage(p.user) ?? p.user.publicNumber,
   }));
 }

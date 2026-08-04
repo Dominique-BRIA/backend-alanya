@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/meetings/:id — détail d'une réunion avec tous les participants.
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -39,14 +40,14 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     duree: meeting.duree,
     organiser: {
       id: meeting.organiser.id,
-      pseudo: meeting.organiser.pseudo ?? null,
+      pseudo: nomAffichage(meeting.organiser),
       publicNumber: meeting.organiser.publicNumber,
       avatarUrl: meeting.organiser.avatarUrl ?? null,
     },
     participants: meeting.participants.map((p) => ({
       ID: p.ID,
       IDparticipant: p.IDparticipant,
-      pseudo: p.user.pseudo ?? null,
+      pseudo: nomAffichage(p.user),
       publicNumber: p.user.publicNumber,
       avatarUrl: p.user.avatarUrl ?? null,
       status: p.status,

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { updateProfileSchema } from "@/lib/validation";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // PATCH /api/account/profile — met à jour le profil de l'utilisateur connecté.
 // F4 : écrit directement dans users (plus de table profiles).
@@ -19,7 +20,7 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string) => {
   });
 
   return ok({
-    pseudo: user.pseudo,
+    pseudo: nomAffichage(user),
     avatarUrl: user.avatarUrl,
     statusMsg: user.statusMsg,
   });

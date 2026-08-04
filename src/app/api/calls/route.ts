@@ -10,6 +10,7 @@ import {
   estOccupe,
   DELAI_SANS_REPONSE_MS,
 } from "@/lib/calls";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/calls — historique des appels de l'utilisateur (50 derniers).
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -42,7 +43,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     const peer = others[0]?.user;
     const peerName = isGroup
       ? (conv?.name ?? "Groupe")
-      : (peer?.pseudo ?? peer?.publicNumber ?? "Inconnu");
+      : (peer ? nomAffichage(peer) : null) ?? "Inconnu";
     // `isOutgoing` est DÉRIVÉ de l'initiateur réel, il n'est pas stocké : c'est
     // ce qui garantit que la bulle sort du bon côté chez chacun. Le même appel
     // est sortant pour l'un et entrant pour l'autre — un booléen en base ne
@@ -186,7 +187,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     .filter((p) => p.userId !== userId)
     .map((p) => ({
       userId: p.userId,
-      pseudo: p.user.pseudo ?? null,
+      pseudo: nomAffichage(p.user),
       publicNumber: p.user.publicNumber,
       avatarUrl: p.user.avatarUrl ?? null,
     }));
@@ -203,7 +204,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       groupName: meta.groupName,
       memberCount: meta.memberCount,
       callees,
-      callerName: call.initiator.pseudo ?? call.initiator.publicNumber,
+      callerName: nomAffichage(call.initiator),
     },
     201,
   );

@@ -11,6 +11,8 @@
 // entre l'historique (HTTP) et le temps réel (WS), et le même appel changerait
 // de libellé selon le chemin par lequel il arrive.
 
+import { nomAffichage } from "./display-name.mjs";
+
 /// Délai au bout duquel un appel qui sonne est considéré sans réponse.
 ///
 /// 90 s et non 2 min : c'est la valeur du minuteur Telecom côté Android. Quand
@@ -109,7 +111,7 @@ export function serialiseAppelPour(call, conv, pourUserId) {
   const peer = others[0]?.user;
   const peerName = isGroup
     ? (conv?.name ?? "Groupe")
-    : (peer?.pseudo ?? peer?.publicNumber ?? "Inconnu");
+    : (peer ? nomAffichage(peer) : null) ?? "Inconnu";
   const durationSec =
     call.answeredAt && call.endedAt
       ? Math.round((new Date(call.endedAt).getTime() - new Date(call.answeredAt).getTime()) / 1000)

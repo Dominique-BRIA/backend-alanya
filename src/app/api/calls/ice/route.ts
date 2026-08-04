@@ -17,7 +17,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     // Récupération optionnelle du pseudo / numéro pour les logs
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { pseudo: true, publicNumber: true },
+      select: { nom: true, pseudo: true, publicNumber: true },
     });
     const usernameLog = userId ?? "anonyme";
 

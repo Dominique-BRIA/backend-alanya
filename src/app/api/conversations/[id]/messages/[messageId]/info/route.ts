@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/conversations/:id/messages/:messageId/info — accusés « lu » par membre.
 // Dérivé de Participant.lastReadAt (lu si lastReadAt >= date du message).
@@ -26,7 +27,7 @@ export const GET = withAuth(
       select: {
         userId: true,
         lastReadAt: true,
-        user: { select: { pseudo: true, publicNumber: true } },
+        user: { select: { nom: true, pseudo: true, publicNumber: true } },
       },
     });
 
@@ -34,7 +35,7 @@ export const GET = withAuth(
       const read = p.lastReadAt != null && p.lastReadAt >= message.createdAt;
       return {
         userId: p.userId,
-        name: p.user.pseudo ?? p.user.publicNumber,
+        name: nomAffichage(p.user),
         read,
         readAt: read ? p.lastReadAt : null,
       };

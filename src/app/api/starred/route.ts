@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/starred — messages favoris de l'utilisateur, toutes conversations
 // confondues (du plus récent au plus ancien). Exclut les messages supprimés.
@@ -14,7 +15,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       message: {
         include: {
           conv: { select: { id: true, name: true, isGroup: true } },
-          sender: { select: { id: true, pseudo: true, publicNumber: true } },
+          sender: { select: { id: true, nom: true, pseudo: true, publicNumber: true } },
         },
       },
     },
@@ -24,7 +25,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     .filter((s) => !s.message.deletedAt)
     .map((s) => {
       const m = s.message;
-      const senderName = m.sender.pseudo ?? m.sender.publicNumber;
+      const senderName = nomAffichage(m.sender);
       return {
         id: m.id,
         convId: m.convId,

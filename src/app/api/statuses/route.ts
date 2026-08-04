@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createStatusSchema } from "@/lib/validation";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -65,7 +66,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     const u = list[0]!.user;
     return {
       userId: uid,
-      pseudo: u.pseudo ?? null,
+      pseudo: nomAffichage(u),
       avatarUrl: u.avatarUrl ?? null,
       publicNumber: u.publicNumber,
       hasUnviewed: list.some((s) => s.views.length === 0),

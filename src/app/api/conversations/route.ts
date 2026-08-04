@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { createConversationSchema } from "@/lib/validation";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { serialiseAppelPour } from "@/lib/calls";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // Convertit le type entier (BD) en string (API)
 function _typeToString(t: number | null): string {
@@ -84,7 +85,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     const others = conv.participants.filter((pp) => pp.userId !== userId);
     const title = conv.isGroup
       ? conv.name
-      : (others[0]?.user.pseudo ?? others[0]?.user.publicNumber ?? "Inconnu");
+      : (others[0] ? nomAffichage(others[0].user) : null) ?? "Inconnu";
 
     // F11 : dernier message — utilise le champ dénormalisé OU le fallback
     const fallbackLast = conv.messages[0];
@@ -106,7 +107,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
           pp.userId !== userId && pp.user.lastSeenVisibility === 0;
         return {
           id: pp.userId,
-          pseudo: pp.user.pseudo ?? null,
+          pseudo: nomAffichage(pp.user),
           publicNumber: pp.user.publicNumber,
           isOnline: hidePresence ? 0 : pp.user.isOnline,
           lastSeen: hidePresence ? null : (pp.user.lastSeen ?? null),

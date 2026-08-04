@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { requireUser, UnauthorizedError } from "@/lib/auth-context";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/me — profil de l'utilisateur authentifié.
 export async function GET(req: NextRequest) {
@@ -13,7 +14,7 @@ export async function GET(req: NextRequest) {
       id: user.id,
       email: user.email,
       publicNumber: user.publicNumber,
-      pseudo: user.pseudo ?? null,
+      pseudo: nomAffichage(user),
       avatarUrl: user.avatarUrl ?? null,
       statusMsg: user.statusMsg ?? null,
       nom: user.nom ?? null,

@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { blockUserSchema } from "@/lib/validation";
 import { mirrorContactBlock } from "@/lib/blocking";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/blocked — liste des utilisateurs bloqués par l'utilisateur connecté.
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -19,7 +20,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     blocked: blocked.map((b) => ({
       idBlock: b.idBlock,
       idCallerBlock: b.idCallerBlock,
-      pseudo: b.blockedUser.pseudo ?? null,
+      pseudo: nomAffichage(b.blockedUser),
       publicNumber: b.blockedUser.publicNumber,
       avatarUrl: b.blockedUser.avatarUrl ?? null,
       dateBlock: b.dateBlock,

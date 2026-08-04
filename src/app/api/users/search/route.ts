@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { publicNumberSchema } from "@/lib/validation";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 export async function OPTIONS() {
   return new Response(null, {
@@ -38,7 +39,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   return ok({
     id: found.id,
     publicNumber: found.publicNumber,
-    pseudo: found.pseudo ?? null,
+    pseudo: nomAffichage(found),
     avatarUrl: found.avatarUrl ?? null,
     statusMsg: found.statusMsg ?? null,
     alreadyContact: Boolean(existing),

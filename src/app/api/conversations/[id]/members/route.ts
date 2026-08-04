@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/conversations/:id/members — liste les membres du groupe.
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -24,7 +25,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   return ok({
     members: conv.participants.map((p) => ({
       id: p.userId,
-      pseudo: p.user.pseudo ?? null,
+      pseudo: nomAffichage(p.user),
       publicNumber: p.user.publicNumber,
       avatarUrl: p.user.avatarUrl ?? null,
       // Confidentialité : masque la présence d'un membre qui a choisi « personne ».

@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 // GET /api/statuses/:id/views — liste des personnes ayant vu MON statut,
 // avec l'horodatage de visionnage. Réservé au propriétaire du statut.
@@ -23,7 +24,7 @@ export const GET = withAuth(
       orderBy: { viewedAt: "desc" },
       include: {
         viewer: {
-          select: { id: true, pseudo: true, publicNumber: true, avatarUrl: true },
+          select: { id: true, nom: true, pseudo: true, publicNumber: true, avatarUrl: true },
         },
       },
     });
@@ -31,7 +32,7 @@ export const GET = withAuth(
     return ok({
       views: views.map((v) => ({
         userId: v.viewer.id,
-        name: v.viewer.pseudo ?? v.viewer.publicNumber,
+        name: nomAffichage(v.viewer),
         avatarUrl: v.viewer.avatarUrl,
         viewedAt: v.viewedAt,
       })),
