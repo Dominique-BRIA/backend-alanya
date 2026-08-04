@@ -12,6 +12,7 @@ import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled } fr
 // Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
 // raison du JavaScript plutôt que du TypeScript.
 import { serialiseAppelPour, STATUTS_TERMINAUX } from "./src/lib/call-labels.mjs";
+import { nomAffichage } from "./src/lib/display-name.mjs";
 
 const prisma = new PrismaClient();
 // Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
@@ -716,7 +717,7 @@ async function handleCallRing(ws, msg) {
   if (call.initiatorId !== ws.userId) return;
   if (call.status !== "RINGING") return;
 
-  const callerName = call.initiator.pseudo ?? call.initiator.publicNumber;
+  const callerName = nomAffichage(call.initiator);
   const callerAvatarUrl = call.initiator.avatarUrl ?? null;
   let isGroup = false;
   let groupName = null;
@@ -898,7 +899,7 @@ async function handleCallInvite(ws, msg) {
 
   // Fait sonner l'invité (même charge utile que handleCallRing).
   const inviter = await prisma.user.findUnique({ where: { id: ws.userId } });
-  const callerName = inviter?.pseudo ?? inviter?.publicNumber ?? "Quelqu'un";
+  const callerName = (inviter ? nomAffichage(inviter) : null) ?? "Quelqu'un";
   let groupName = null;
   let memberCount = 0;
   if (call.convId) {
