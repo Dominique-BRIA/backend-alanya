@@ -30,12 +30,12 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     where: { callId: id, joinedAt: { not: null }, leftAt: null },
   });
 
-  // Plus personne en ligne : on clôture l'appel.
+  // Moins de deux participants actifs : on clôture l'appel.
   //
   // Même règle que dans `end` : `answeredAt` décide. Un appel que personne n'a
   // décroché reste un NO_ANSWER même si le départ passe par ici — sinon il
   // ressortirait comme ENDED sans durée, l'ambiguïté qu'on vient de retirer.
-  if (stillActiveCount === 0) {
+  if (stillActiveCount < 2) {
     await prisma.call.update({
       where: { id },
       data: {
