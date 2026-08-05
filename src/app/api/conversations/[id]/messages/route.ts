@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { ok } from "@/lib/http";
+import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { sendMessageSchema } from "@/lib/validation";
 import { assertParticipant } from "@/modules/messaging/access";
@@ -129,6 +129,38 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   await assertParticipant(convId, userId);
 
   const body = sendMessageSchema.parse(await req.json());
+
+  /**
+   * Blocage : on refuse ici aussi.
+   *
+   * Le client bascule sur cette route quand le WebSocket n'acquitte pas — ce
+   * qui est précisément ce qui se passe entre deux personnes bloquées. Sans ce
+   * contrôle, le repli serait une porte dérobée : le message passerait par HTTP
+   * ce que le temps réel venait de refuser.
+   *
+   * On répond 403 et non 200 : mentir à l'appelant n'est pas le rôle de l'API.
+   * C'est le client qui, connaissant le blocage, n'envoie rien et laisse le
+   * message en « en cours d'envoi » — l'indicateur qui ne se résout jamais.
+   */
+  const participants = await prisma.participant.findMany({
+    where: { convId },
+    select: { userId: true },
+  });
+  if (participants.length === 2) {
+    const autre = participants.find((p) => p.userId !== userId)?.userId;
+    if (autre) {
+      const blocage = await prisma.blocked.findFirst({
+        where: {
+          OR: [
+            { alanyaID: userId, idCallerBlock: autre },
+            { alanyaID: autre, idCallerBlock: userId },
+          ],
+        },
+        select: { idBlock: true },
+      });
+      if (blocage) return fail("Message non distribuable", 403, "BLOCKED");
+    }
+  }
 
   // Messages éphémères : calcule l'expiration selon le réglage de la conversation.
   const convCfg = await prisma.conversation.findUnique({

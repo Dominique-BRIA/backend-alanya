@@ -81,6 +81,64 @@ async function areBlocked(userA, userB) {
   return row !== null;
 }
 
+/**
+ * Blocage entre deux personnes d'une conversation directe, avec le sens.
+ * Renvoie null si personne n'a bloque personne.
+ */
+async function detailBlocage(userA, userB) {
+  const row = await prisma.blocked.findFirst({
+    where: {
+      OR: [
+        { alanyaID: userA, idCallerBlock: userB },
+        { alanyaID: userB, idCallerBlock: userA },
+      ],
+    },
+    select: { alanyaID: true, idCallerBlock: true },
+  });
+  if (!row) return null;
+  return { bloqueurId: row.alanyaID, bloqueId: row.idCallerBlock };
+}
+
+/**
+ * Avis systeme de blocage, depose dans la conversation et diffuse aux deux.
+ *
+ * Le texte n'est PAS fige ici : chacun lit l'application dans sa langue, et le
+ * bloqueur et le bloque ne lisent pas la meme phrase. On enregistre donc un
+ * code et ses parametres ; chaque client compose « Vous avez bloque X » ou
+ * « Vous avez ete bloque par Y » selon qu'il est l'un ou l'autre.
+ *
+ * Un seul avis par blocage : sans ce garde-fou, chaque tentative d'envoi en
+ * ajouterait un et la conversation se remplirait d'avis identiques.
+ */
+async function deposerAvisDeBlocage(convId, bloqueurId, bloqueId) {
+  const dernier = await prisma.message.findFirst({
+    where: { convId, type: "SYSTEM" },
+    orderBy: { createdAt: "desc" },
+    select: { content: true },
+  });
+  if (dernier?.content?.includes('"blocked_notice"')) return null;
+
+  const [bloqueur, bloque] = await Promise.all([
+    prisma.user.findUnique({ where: { id: bloqueurId }, select: { pseudo: true, publicNumber: true } }),
+    prisma.user.findUnique({ where: { id: bloqueId }, select: { pseudo: true, publicNumber: true } }),
+  ]);
+
+  const charge = JSON.stringify({
+    code: "blocked_notice",
+    blockerId: bloqueurId,
+    blockerName: bloqueur?.pseudo ?? bloqueur?.publicNumber ?? "",
+    blockedName: bloque?.pseudo ?? bloque?.publicNumber ?? "",
+  });
+
+  const avis = await prisma.message.create({
+    data: { convId, senderId: bloqueurId, content: charge, type: "SYSTEM", status: "SENT" },
+    include: { media: true },
+  });
+  const serialise = await serializeMessage(avis, avis.media);
+  for (const uid of [bloqueurId, bloqueId]) sendTo(uid, { type: "message", message: serialise });
+  return avis;
+}
+
 // Personnes qui partagent au moins une conversation avec `userId` (= celles qui
 // voient sa présence dans l'app). Cible de la diffusion temps réel.
 async function conversationPeers(userId) {
@@ -473,6 +531,35 @@ async function handleSend(ws, msg) {
     return;
   }
 
+  /**
+   * Blocage : le message n'est ni enregistre, ni acquitte, ni livre.
+   *
+   * Le controle etait fait APRES l'enregistrement, et l'expediteur recevait
+   * quand meme son echo : son indicateur passait a « envoye » alors que rien
+   * n'etait parti. Sans ack, il ne se resout jamais — c'est le comportement
+   * attendu. Le client court-circuite aussi de son cote ; ce refus-ci est la
+   * defense, pour qu'un client modifie ne puisse pas passer outre.
+   *
+   * Deux cas, selon les accuses de lecture de la personne BLOQUEE :
+   * - desactives : rien du tout, elle n'apprend pas qu'elle est bloquee ;
+   * - actives : un avis systeme parait des deux cotes.
+   */
+  const participants = await participantsOf(convId);
+  if (participants.length === 2) {
+    const autre = participants.find((uid) => uid !== ws.userId);
+    const blocage = autre ? await detailBlocage(ws.userId, autre) : null;
+    if (blocage) {
+      const bloque = await prisma.user.findUnique({
+        where: { id: blocage.bloqueId },
+        select: { readReceipts: true },
+      });
+      if ((bloque?.readReceipts ?? 1) !== 0) {
+        await deposerAvisDeBlocage(convId, blocage.bloqueurId, blocage.bloqueId);
+      }
+      return;
+    }
+  }
+
   // MODIFICATION : vérifie tous les médias
   let premierMime = null;
   for (const mid of uniqueMediaIds) {
@@ -534,20 +621,11 @@ async function handleSend(ws, msg) {
   });
 
   const serialized = await serializeMessage(created, created.media);
-  const recipients = await participantsOf(convId);
+  // Le blocage a deja renvoye plus haut : tout message qui arrive ici est
+  // legitime, il n'y a plus de cas a ecarter au moment de la livraison.
+  const recipients = participants;
 
-  // Blocage (conversation directe) : si l'un a bloqué l'autre, on ne délivre pas
-  // le message au correspondant (ni WS, ni push, ni statut DELIVERED). Le message
-  // reste chez l'émetteur ; il est aussi filtré à la lecture côté bloqueur.
-  let blockedDirect = false;
-  if (recipients.length === 2) {
-    const other = recipients.find((uid) => uid !== ws.userId);
-    if (other) blockedDirect = await areBlocked(ws.userId, other);
-  }
-
-  const otherOnline =
-    !blockedDirect &&
-    recipients.some((uid) => uid !== ws.userId && isUserOnline(uid));
+  const otherOnline = recipients.some((uid) => uid !== ws.userId && isUserOnline(uid));
   let finalStatus = created.status;
   if (otherOnline) {
     await prisma.message.update({ where: { id: created.id }, data: { status: "DELIVERED" } });
@@ -556,7 +634,6 @@ async function handleSend(ws, msg) {
 
   const messageWithStatus = { ...serialized, status: finalStatus };
   for (const uid of recipients) {
-    if (uid !== ws.userId && blockedDirect) continue; // pas de livraison au bloqué
     sendTo(uid, {
       type: "message",
       message: messageWithStatus,
@@ -564,7 +641,7 @@ async function handleSend(ws, msg) {
     });
   }
 
-  if (isPushEnabled() && !blockedDirect) {
+  if (isPushEnabled()) {
     const sender = await prisma.user.findUnique({
       where: { id: ws.userId },
     });
