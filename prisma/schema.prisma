@@ -106,6 +106,7 @@ model User {
   meetingParticipations MeetingParticipant[] @relation("MeetingParticipantUser")
   blockedUsers          Blocked[]            @relation("BlockOwner")
   blockedByUsers        Blocked[]            @relation("BlockedUser")
+  conversationLocks     ConversationLock[]
 
   // --- Relations vers les nouvelles tables du référentiel ---
   accessLogs      UserAccess[]
@@ -485,6 +486,7 @@ model Conversation {
 
   participants Participant[]
   messages     Message[]
+  locks        ConversationLock[]
 
   // --- F11 : Dernier message dénormalisé ---
   lastMessage         String?   @db.Text
@@ -874,6 +876,53 @@ model Blocked {
   @@unique([alanyaID, idCallerBlock])
   @@index([alanyaID])
   @@map("blocked")
+}
+
+// ---------------------------------------------------------------------------
+// CONVERSATION_LOCK — reservation d'une conversation par UN appareil
+// ---------------------------------------------------------------------------
+
+/// Verrou de conversation, pose par un appareil pour un compte.
+///
+/// Cas d'usage : un numero professionnel partage entre plusieurs agents. Celui
+/// qui prend la main sur une discussion la reserve, et les autres appareils du
+/// MEME compte ne peuvent plus y ecrire.
+///
+/// Le verrou n'isole pas : les autres appareils continuent de recevoir en
+/// temps reel tout ce que l'agent envoie et recoit. Ils perdent le droit
+/// d'ecrire, rien d'autre — aucune diffusion de message ne doit le consulter.
+///
+/// A ne pas confondre avec `Blocked` : bloquer empeche les messages d'un TIERS
+/// d'arriver ; verrouiller repartit l'ecriture entre SES PROPRES appareils.
+model ConversationLock {
+  id     String @id @default(uuid()) @db.Uuid
+  convId String @map("conversID") @db.Uuid
+  /// Compte proprietaire du verrou. Un seul verrou par (conversation, compte) :
+  /// c'est entre appareils d'un meme compte que la main se passe.
+  userId String @map("alanyaID") @db.Uuid
+
+  conv Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Appareil qui detient le verrou. Sans cle etrangere : `Appareil.idAgent`
+  /// n'est pas unique, et la ligne d'appareil peut disparaitre sans que le
+  /// verrou doive tomber avec elle.
+  appareilId Int     @map("appareilID")
+  /// Nom affiche du detenteur, fige a la pose. Les autres appareils doivent
+  /// pouvoir dire QUI a la main sans requeter le registre a chaque affichage,
+  /// et le nom reste juste meme si l'appareil est retire ensuite.
+  detenteur  String? @db.VarChar(80)
+
+  lockedAt DateTime @default(now()) @map("locked_at") @db.Timestamptz
+  /// Peremption. L'appareil detenteur la repousse tant qu'il est connecte ; a
+  /// defaut le verrou tombe tout seul, sinon une fermeture brutale laisserait
+  /// la conversation reservee pour toujours.
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+
+  @@unique([convId, userId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("conversation_lock")
 }
 
 // ---------------------------------------------------------------------------
