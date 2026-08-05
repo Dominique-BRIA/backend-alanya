@@ -568,7 +568,11 @@ async function handleSend(ws, msg) {
     const sender = await prisma.user.findUnique({
       where: { id: ws.userId },
     });
-    const senderName = sender?.pseudo ?? sender?.publicNumber ?? "Quelqu'un";
+    // `nomAffichage` et non `pseudo` : c'est le NOM qui s'affiche partout
+    // ailleurs, et la notification était le dernier endroit à montrer le
+    // pseudo — un libellé d'inscription que 39 comptes sur 49 laissent vide.
+    const senderName =
+      (sender ? nomAffichage(sender) : null) ?? "Quelqu'un";
     const conv = await prisma.conversation.findUnique({
       where: { id: convId },
       include: { participants: { include: { user: true } } },
@@ -576,7 +580,8 @@ async function handleSend(ws, msg) {
     let convTitle = conv?.name ?? null;
     if (conv && !conv.isGroup) {
       const other = conv.participants.find((p) => p.userId !== ws.userId);
-      convTitle = other?.user.pseudo ?? other?.user.publicNumber ?? convTitle;
+      convTitle =
+        (other ? nomAffichage(other.user) : null) ?? convTitle;
     }
     const preview = type === "TEXT" ? (content ?? "").slice(0, 120) : null;
 
