@@ -508,6 +508,141 @@ function typeDepuisMime(mime) {
   return "FILE";
 }
 
+/* ----------------- Verrou de conversation ----------------- */
+
+/**
+ * Duree de vie d'un verrou sans signe de vie du detenteur.
+ *
+ * Le client envoie un ping applicatif toutes les 25 s ; deux minutes laissent
+ * donc passer plusieurs pings manques avant de rendre la main. Sans cette
+ * peremption, une fermeture brutale (onglet tue, batterie a plat) reserverait
+ * la conversation pour toujours.
+ */
+const DUREE_VERROU_MS = 120_000;
+
+function peremptionVerrou() {
+  return new Date(Date.now() + DUREE_VERROU_MS);
+}
+
+/** Etat diffuse aux appareils du compte. */
+function serialiseVerrou(convId, verrou) {
+  return {
+    type: "conversation_lock",
+    convId,
+    locked: verrou !== null,
+    appareilId: verrou?.appareilId ?? null,
+    detenteur: verrou?.detenteur ?? null,
+    expiresAt: verrou?.expiresAt ?? null,
+  };
+}
+
+/**
+ * Pose ou retire le verrou d'une conversation.
+ *
+ * Le verrou appartient au COMPTE et designe l'appareil qui a la main : c'est
+ * entre appareils d'un meme compte que la reservation se joue, jamais entre
+ * comptes. L'etat est diffuse a toutes les sockets du compte — le registre est
+ * `userId -> Set<ws>`, cibler « mes autres appareils » est donc immediat.
+ *
+ * Le verrou ne gouverne QUE l'ecriture : aucune diffusion de message ne le
+ * consulte, et les appareils qui le subissent continuent de tout recevoir.
+ */
+async function handleConversationLock(ws, msg) {
+  const { convId, lock, appareilId, detenteur } = msg;
+  if (!convId || !(await isParticipant(convId, ws.userId))) return;
+
+  const cle = { convId_userId: { convId, userId: ws.userId } };
+
+  if (lock === false) {
+    const existant = await prisma.conversationLock.findUnique({ where: cle });
+    // Seul le detenteur rend la main : un autre appareil ne peut pas se
+    // l'arracher, sinon la reservation ne protegerait rien.
+    if (!existant) return;
+    if (ws.appareilId != null && existant.appareilId !== ws.appareilId) return;
+    await prisma.conversationLock.delete({ where: cle });
+    sendTo(ws.userId, serialiseVerrou(convId, null));
+    return;
+  }
+
+  const idAppareil = Number(appareilId ?? ws.appareilId ?? 0);
+  if (!Number.isFinite(idAppareil) || idAppareil <= 0) return;
+  // On retient l'appareil sur la socket : c'est ce qui permet de rendre la main
+  // toute seule a la deconnexion.
+  ws.appareilId = idAppareil;
+
+  const nom = typeof detenteur === "string" ? detenteur.slice(0, 80) : null;
+  const existant = await prisma.conversationLock.findUnique({ where: cle });
+  if (existant && existant.appareilId !== idAppareil && existant.expiresAt > new Date()) {
+    // Premier arrive, premier servi : on renvoie l'etat reel au demandeur
+    // plutot que de le laisser croire qu'il a la main.
+    ws.send(JSON.stringify(serialiseVerrou(convId, existant)));
+    return;
+  }
+
+  const verrou = await prisma.conversationLock.upsert({
+    where: cle,
+    create: {
+      convId,
+      userId: ws.userId,
+      appareilId: idAppareil,
+      detenteur: nom,
+      expiresAt: peremptionVerrou(),
+    },
+    update: { appareilId: idAppareil, detenteur: nom, expiresAt: peremptionVerrou() },
+  });
+  sendTo(ws.userId, serialiseVerrou(convId, verrou));
+}
+
+/**
+ * Repousse la peremption des verrous tenus par cette socket.
+ *
+ * Appele au ping applicatif : tant que l'appareil donne signe de vie, ses
+ * reservations tiennent.
+ */
+async function rafraichirVerrous(ws) {
+  if (!ws.userId || ws.appareilId == null) return;
+  await prisma.conversationLock.updateMany({
+    where: { userId: ws.userId, appareilId: ws.appareilId },
+    data: { expiresAt: peremptionVerrou() },
+  });
+}
+
+/**
+ * Rend la main a la deconnexion d'un appareil.
+ *
+ * On ne le fait que si l'appareil n'a plus AUCUNE socket ouverte : un
+ * rechargement de page ferme une socket et en rouvre une, et le verrou ne doit
+ * pas sauter a chaque rafraichissement.
+ */
+async function libererVerrousDeLAppareil(userId, appareilId) {
+  if (appareilId == null) return;
+  const encoreLa = [...(clients.get(userId) ?? [])].some(
+    (autre) => autre.readyState === autre.OPEN && autre.appareilId === appareilId,
+  );
+  if (encoreLa) return;
+
+  const verrous = await prisma.conversationLock.findMany({
+    where: { userId, appareilId },
+    select: { convId: true },
+  });
+  if (verrous.length === 0) return;
+  await prisma.conversationLock.deleteMany({ where: { userId, appareilId } });
+  for (const { convId } of verrous) sendTo(userId, serialiseVerrou(convId, null));
+}
+
+/** Purge les verrous perimes et previent les comptes concernes. */
+async function purgerVerrousPerimes() {
+  const perimes = await prisma.conversationLock.findMany({
+    where: { expiresAt: { lt: new Date() } },
+    select: { id: true, convId: true, userId: true },
+  });
+  if (perimes.length === 0) return;
+  await prisma.conversationLock.deleteMany({
+    where: { id: { in: perimes.map((v) => v.id) } },
+  });
+  for (const v of perimes) sendTo(v.userId, serialiseVerrou(v.convId, null));
+}
+
 async function handleSend(ws, msg) {
   // MODIFICATION : ajoute mediaIds pour multi-médias
   const { convId, content, tempId, mediaId, mediaIds } = msg;
@@ -1513,6 +1648,11 @@ wss.on("listening", () => {
   // abandonné ne survive jamais longtemps à son échéance.
   fermeAppelsPerimes();
   setInterval(fermeAppelsPerimes, 30 * 1000);
+
+  // Verrous de conversation : un appareil disparu sans fermer proprement laisse
+  // une reservation derriere lui, que seule la peremption libere.
+  purgerVerrousPerimes().catch(() => {});
+  setInterval(() => purgerVerrousPerimes().catch(() => {}), 30 * 1000);
 });
 
 wss.on("connection", (ws, req) => {
@@ -1552,6 +1692,8 @@ wss.on("connection", (ws, req) => {
     }
     try {
       if (msg.type === "send") await handleSend(ws, msg);
+      else if (msg.type === "conversation_lock") await handleConversationLock(ws, msg);
+      else if (msg.type === "ping") await rafraichirVerrous(ws);
       else if (msg.type === "read") await handleRead(ws, msg);
       else if (msg.type === "typing") await handleTyping(ws, msg);
       else if (msg.type === "recording") await handleRecording(ws, msg);
@@ -1577,6 +1719,8 @@ wss.on("connection", (ws, req) => {
 
   ws.on("close", () => {
     markOfflineIfGone(userId, ws); // hors-ligne + lastSeen si dernière socket
+    // Rend la main sur les conversations que cet appareil avait reservees.
+    libererVerrousDeLAppareil(userId, ws.appareilId).catch(() => {});
     for (const [meetingId, room] of meetingRooms) {
       if (room.has(userId)) {
         room.delete(userId);

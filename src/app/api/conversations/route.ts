@@ -80,6 +80,24 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     return dateActivite(b).getTime() - dateActivite(a).getTime();
   });
 
+  /**
+   * Verrous poses par les appareils de ce compte, en une seule requete.
+   *
+   * Les perimes sont ecartes a la lecture : le nettoyage periodique du serveur
+   * temps reel peut avoir jusqu'a 30 s de retard, et une conversation ne doit
+   * pas paraitre reservee alors qu'elle ne l'est plus.
+   */
+  const verrous = await prisma.conversationLock.findMany({
+    where: { userId, expiresAt: { gt: new Date() } },
+    select: { convId: true, appareilId: true, detenteur: true, expiresAt: true },
+  });
+  const verrousParConv = new Map(
+    verrous.map((v) => [
+      v.convId,
+      { appareilId: v.appareilId, detenteur: v.detenteur, expiresAt: v.expiresAt },
+    ]),
+  );
+
   const conversations = parts.map((p) => {
     const conv = p.conv;
     const others = conv.participants.filter((pp) => pp.userId !== userId);
@@ -136,6 +154,10 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       unread: p.unreadCount,
       isPinned: p.isPinned === 1,
       isArchived: p.isArchived === 1,
+      // Verrou pose par un appareil de CE compte, s'il en existe un et qu'il
+      // n'est pas perime. Il ne gouverne que l'ecriture : la conversation reste
+      // lisible, et les messages continuent d'arriver.
+      lock: verrousParConv.get(conv.id) ?? null,
       // Même définition que celle qui a servi au tri : sinon la liste serait
       // ordonnée sur une date et en afficherait une autre.
       updatedAt: dateActivite(p),
