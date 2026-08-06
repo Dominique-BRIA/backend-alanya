@@ -854,6 +854,13 @@ model Pays {
   /// Libellé anglais du pays. NOT NULL avec défaut vide : les lignes déjà
   /// semées n'en ont pas, et la colonne s'ajoute sans réécrire la table.
   libelleAnglais  String @default("") @db.VarChar(100)
+  /// Code ISO 3166-1 alpha-2 (CM, FR, SN…).
+  ///
+  /// C'est lui qui permet aux clients de traduire le nom du pays dans les neuf
+  /// langues sans qu'on stocke neuf libellés : `Intl.DisplayNames` sur le web,
+  /// équivalent natif sur mobile. Nullable — un pays sans code s'affiche avec
+  /// son `libelle`, comme avant.
+  iso2            String? @db.Char(2)
   prefix          String @default("") @db.VarChar(10) // indicatif téléphonique (+237, +33…)
   timeZone        String @default("Africa/Dakar") @db.VarChar(200) // ex: "Africa/Douala"
   decalageHoraire Int    @default(0)
