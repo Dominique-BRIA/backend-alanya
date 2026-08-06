@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 
 // GET /api/conversations/:id/members — liste les membres du groupe.
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -83,6 +84,17 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     })),
   });
 
+  // Un avis par personne ajoutée : « X a été ajouté par Y ». Les noms sont
+  // figés dans l'avis — si quelqu'un change de pseudo plus tard, l'historique
+  // garde celui qu'il portait au moment de l'action.
+  const auteur = await nomPourAvis(userId);
+  for (const u of toAdd) {
+    await deposerMessageSysteme(convId, userId, "member_added", {
+      target: await nomPourAvis(u.id),
+      actor: auteur,
+    });
+  }
+
   return ok({
     message: `${toAdd.length} membre(s) ajouté(s)`,
     added: toAdd.map((u) => u.publicNumber),
@@ -120,16 +132,36 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   const target = conv.participants.find((p) => p.userId === targetId);
   if (!target) return fail("Membre introuvable dans ce groupe", 404, "NOT_MEMBER");
 
+  // Les noms sont lus AVANT la suppression : après, le participant n'est plus
+  // là pour être nommé.
+  const nomCible = await nomPourAvis(targetId);
+  const nomAuteur = targetId === userId ? nomCible : await nomPourAvis(userId);
+
   await prisma.participant.delete({
     where: { convId_userId: { convId, userId: targetId } },
   });
 
   // Si c'est soi-même qui quitte, on peut aussi supprimer la conv si vide
+  let convSupprimee = false;
   if (targetId === userId) {
     const remaining = await prisma.participant.count({ where: { convId } });
     if (remaining === 0) {
       await prisma.conversation.delete({ where: { id: convId } });
+      convSupprimee = true;
     }
+  }
+
+  // Un départ volontaire ne nomme pas d'auteur : « X a quitté le groupe ».
+  // Retiré par quelqu'un d'autre, l'avis le dit : « X a été retiré par Y ».
+  // Rien à déposer si la conversation vient d'être supprimée — le message
+  // n'aurait plus de fil où vivre.
+  if (!convSupprimee) {
+    await (targetId === userId
+      ? deposerMessageSysteme(convId, targetId, "member_left", { target: nomCible })
+      : deposerMessageSysteme(convId, userId, "member_removed", {
+          target: nomCible,
+          actor: nomAuteur,
+        }));
   }
 
   return ok({ message: "Membre retiré", userId: targetId });
