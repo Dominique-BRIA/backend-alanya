@@ -118,46 +118,51 @@ CREATE INDEX IF NOT EXISTS "justificatif_facture_idx" ON "justificatif_paiement"
 -- ── 6. Clés étrangères ───────────────────────────────────────────────────
 -- Posées après coup, et non dans les `CREATE TABLE` : une contrainte nommée
 -- ne se crée pas conditionnellement, il faut interroger le catalogue.
+--
+-- ⚠️ CORRIGÉ le 06/08/2026. Ces neuf garde-fous cherchaient la contrainte
+-- PAR SON NOM. Or un `prisma db push` lancé sur la production a renommé les
+-- contraintes selon les conventions de Prisma : `facture_company_fkey` est
+-- devenue `facture_idCompany_fkey`. Les garde-fous ne trouvaient donc plus
+-- rien et RECRÉAIENT une seconde clé identique à chaque déploiement — vérifié
+-- en rejouant les 23 migrations sur une copie de la base : deux clés en double
+-- sur `facture`, deux sur `facture_ligne`.
+--
+-- La recherche porte désormais sur la COLONNE PORTEUSE, qui ne dépend d'aucune
+-- convention de nommage. Le nom n'est plus utilisé qu'à la création.
 DO $$
+DECLARE
+  cle record;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'facture_company_fkey') THEN
-    ALTER TABLE "facture" ADD CONSTRAINT "facture_company_fkey"
-      FOREIGN KEY ("idCompany") REFERENCES "company" ("idcompany") ON DELETE RESTRICT;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'facture_superadmin_fkey') THEN
-    ALTER TABLE "facture" ADD CONSTRAINT "facture_superadmin_fkey"
-      FOREIGN KEY ("idSuperAdmin") REFERENCES "adminroot" ("idroot") ON DELETE SET NULL;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'facture_createdby_fkey') THEN
-    ALTER TABLE "facture" ADD CONSTRAINT "facture_createdby_fkey"
-      FOREIGN KEY ("createdByRootId") REFERENCES "Root" ("idRoot") ON DELETE SET NULL;
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'facture_ligne_facture_fkey') THEN
-    ALTER TABLE "facture_ligne" ADD CONSTRAINT "facture_ligne_facture_fkey"
-      FOREIGN KEY ("idFacture") REFERENCES "facture" ("idFacture") ON DELETE CASCADE;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'facture_ligne_prix_fkey') THEN
-    ALTER TABLE "facture_ligne" ADD CONSTRAINT "facture_ligne_prix_fkey"
-      FOREIGN KEY ("idPrixAbonnement") REFERENCES "prixabonnement" ("idabonnement") ON DELETE SET NULL;
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'justificatif_facture_fkey') THEN
-    ALTER TABLE "justificatif_paiement" ADD CONSTRAINT "justificatif_facture_fkey"
-      FOREIGN KEY ("idFacture") REFERENCES "facture" ("idFacture") ON DELETE CASCADE;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'justificatif_adminroot_fkey') THEN
-    ALTER TABLE "justificatif_paiement" ADD CONSTRAINT "justificatif_adminroot_fkey"
-      FOREIGN KEY ("uploadedByAdminRootId") REFERENCES "adminroot" ("idroot") ON DELETE SET NULL;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'justificatif_uploadroot_fkey') THEN
-    ALTER TABLE "justificatif_paiement" ADD CONSTRAINT "justificatif_uploadroot_fkey"
-      FOREIGN KEY ("uploadedByRootId") REFERENCES "Root" ("idRoot") ON DELETE SET NULL;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'justificatif_validateur_fkey') THEN
-    ALTER TABLE "justificatif_paiement" ADD CONSTRAINT "justificatif_validateur_fkey"
-      FOREIGN KEY ("validatedByRootId") REFERENCES "Root" ("idRoot") ON DELETE SET NULL;
-  END IF;
+  FOR cle IN
+    SELECT * FROM (VALUES
+      ('facture',              'idCompany',             'facture_company_fkey',         'company',        'idcompany',      'RESTRICT'),
+      ('facture',              'idSuperAdmin',          'facture_superadmin_fkey',      'adminroot',      'idroot',         'SET NULL'),
+      ('facture',              'createdByRootId',       'facture_createdby_fkey',       'Root',           'idRoot',         'SET NULL'),
+      ('facture_ligne',        'idFacture',             'facture_ligne_facture_fkey',   'facture',        'idFacture',      'CASCADE'),
+      ('facture_ligne',        'idPrixAbonnement',      'facture_ligne_prix_fkey',      'prixabonnement', 'idabonnement',   'SET NULL'),
+      ('justificatif_paiement','idFacture',             'justificatif_facture_fkey',    'facture',        'idFacture',      'CASCADE'),
+      ('justificatif_paiement','uploadedByAdminRootId', 'justificatif_adminroot_fkey',  'adminroot',      'idroot',         'SET NULL'),
+      ('justificatif_paiement','uploadedByRootId',      'justificatif_uploadroot_fkey', 'Root',           'idRoot',         'SET NULL'),
+      ('justificatif_paiement','validatedByRootId',     'justificatif_validateur_fkey', 'Root',           'idRoot',         'SET NULL')
+    ) AS t(porteuse, colonne, nom, cible, col_cible, action)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_constraint c
+       WHERE c.conrelid = format('%I', cle.porteuse)::regclass
+         AND c.contype  = 'f'
+         AND c.conkey   = ARRAY[(
+               SELECT a.attnum FROM pg_attribute a
+                WHERE a.attrelid = format('%I', cle.porteuse)::regclass
+                  AND a.attname  = cle.colonne
+                  AND NOT a.attisdropped)]
+    ) THEN
+      EXECUTE format(
+        'ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES %I (%I) ON DELETE %s',
+        cle.porteuse, cle.nom, cle.colonne, cle.cible, cle.col_cible, cle.action);
+      RAISE NOTICE 'cle etrangere posee : %.%', cle.porteuse, cle.colonne;
+    END IF;
+  END LOOP;
 END $$;
 
 -- ── 7. `company` : colonnes manquantes ───────────────────────────────────
