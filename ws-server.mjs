@@ -57,6 +57,44 @@ function sendTo(userId, payload) {
   return delivered;
 }
 
+/**
+ * Envoie a un SEUL appareil du compte, celui qui detient le verrou.
+ *
+ * `sendTo` arrose tous les appareils : c'est ce qu'on veut pour un changement
+ * d'etat, pas pour une sonnerie d'appel qu'un seul poste doit entendre.
+ */
+function sendToAppareil(userId, appareilId, payload) {
+  const set = clients.get(userId);
+  if (!set) return false;
+  const data = JSON.stringify(payload);
+  let delivered = false;
+  for (const ws of set) {
+    if (ws.readyState === ws.OPEN && ws.appareilId === appareilId) {
+      ws.send(data);
+      delivered = true;
+    }
+  }
+  return delivered;
+}
+
+/**
+ * Appareil qui detient la conversation pour ce compte, ou null.
+ *
+ * Le verrou reserve la conversation a UN poste : les autres appareils du meme
+ * compte ne peuvent ni ecrire, ni appeler ce correspondant, ni etre sonnes par
+ * lui. Ils suivent le fil en lecture, et retrouvent tous leurs droits des que
+ * le detenteur rend la main.
+ */
+async function detenteurDuVerrou(convId, userId) {
+  if (!convId) return null;
+  const verrou = await prisma.conversationLock.findUnique({
+    where: { convId_userId: { convId, userId } },
+    select: { appareilId: true, expiresAt: true },
+  });
+  if (!verrou || verrou.expiresAt <= new Date()) return null;
+  return verrou.appareilId;
+}
+
 function isUserOnline(userId) {
   const set = clients.get(userId);
   if (!set) return false;
@@ -1106,6 +1144,25 @@ async function handleCallRing(ws, msg) {
   if (call.initiatorId !== ws.userId) return;
   if (call.status !== "RINGING") return;
 
+  /**
+   * Verrou : un appareil qui n'a pas la main ne peut pas appeler ce
+   * correspondant. On refuse ici plutot que de laisser sonner — l'appel a beau
+   * etre cree cote REST, sans cette diffusion personne ne sonne, et
+   * l'initiateur recoit l'etat qui le lui dit.
+   */
+  const monVerrou = await detenteurDuVerrou(call.convId, ws.userId);
+  if (monVerrou !== null && monVerrou !== ws.appareilId) {
+    ws.send(
+      JSON.stringify({
+        type: "call_state",
+        callId,
+        state: "locked_elsewhere",
+        convId: call.convId,
+      }),
+    );
+    return;
+  }
+
   const callerName = nomAffichage(call.initiator);
   const callerAvatarUrl = call.initiator.avatarUrl ?? null;
   let isGroup = false;
@@ -1137,11 +1194,23 @@ async function handleCallRing(ws, msg) {
       groupName,
       memberCount,
     };
-    const delivered = sendTo(uid, payload);
-    if (!delivered) {
+    /**
+     * Verrou de conversation : si un poste du compte destinataire a reserve
+     * cette conversation, lui seul sonne. Les autres appareils ne recoivent ni
+     * la sonnerie, ni le push — ils suivent le fil en lecture et retrouvent
+     * leurs droits des que le detenteur rend la main.
+     */
+    const detenteur = await detenteurDuVerrou(call.convId, uid);
+    const delivered = detenteur
+      ? sendToAppareil(uid, detenteur, payload)
+      : sendTo(uid, payload);
+    if (!delivered && !detenteur) {
+      // On ne met en attente que si PERSONNE n'a ete joint. Quand un verrou
+      // designe un poste hors ligne, rejouer l'appel plus tard sur un autre
+      // appareil contournerait la reservation.
       bufferPendingCall(uid, payload);
     }
-    if (isPushEnabled()) {
+    if (isPushEnabled() && !detenteur) {
       await pushIncomingCall(prisma, {
         recipientId: uid,
         callId,
@@ -1725,7 +1794,13 @@ wss.on("connection", (ws, req) => {
       return;
     }
     try {
-      if (msg.type === "send") await handleSend(ws, msg);
+      if (msg.type === "device") {
+        // Annonce d'identite : sans elle, on ne saurait pas quelle socket
+        // appartient a quel poste, et le verrou ne pourrait pas viser un
+        // appareil precis pour les appels.
+        const id = Number(msg.appareilId ?? 0);
+        if (Number.isFinite(id) && id > 0) ws.appareilId = id;
+      } else if (msg.type === "send") await handleSend(ws, msg);
       else if (msg.type === "conversation_lock") await handleConversationLock(ws, msg);
       else if (msg.type === "ping") await rafraichirVerrous(ws);
       else if (msg.type === "read") await handleRead(ws, msg);
