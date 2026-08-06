@@ -46,7 +46,13 @@ model User {
   // --- F3 : Type de compte & statut actif ---
   typeCompte Int     @default(0) @map("type_compte") @db.SmallInt
   actif      Int     @default(1) @db.SmallInt
-  mobile     String? @db.VarChar(20)
+  /// ⚠️ `@unique` OBLIGATOIRE : la contrainte existe en base depuis toujours.
+  /// Sans cette déclaration, Prisma croit devoir la supprimer — c'est
+  /// exactement ce qui a fait échouer un `db push` lancé sur la production le
+  /// 06/08/2026, après qu'il eut deja supprime trois index. PostgreSQL a
+  /// refuse (« cannot drop index users_mobile_key because constraint ...
+  /// requires it »), ce qui a stoppe la casse. Ne pas retirer.
+  mobile     String? @unique @db.VarChar(20)
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
   pseudo    String?   @map("pseudo") @db.VarChar(50)
@@ -120,7 +126,7 @@ model User {
   /// Transferts que CET agent a effectués — distinct des services émetteur et
   /// destinataire, qui disent d'où vient le rapport et où il va, pas qui l'a
   /// déplacé.
-  transfertsAgent Transferer[]     @relation("TransfertAgent")
+  transfertsAgent Transferer[]          @relation("TransfertAgent")
 
   // --- Organisation / centre d'appels (référentiel équipe) ---
   // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
@@ -134,6 +140,9 @@ model User {
 
   @@index([publicNumber])
   @@index([idCompany])
+  /// Existait en base sans etre declare ici : Prisma voulait donc le
+  /// supprimer, et l'a fait le 06/08/2026 sur la production.
+  @@index([idPays])
   @@map("users")
 }
 
@@ -234,22 +243,22 @@ model CustomerChat {
 /// Clé primaire nommée `idRap` d'après ce modèle. Les tables filles gardent
 /// `idRapport` comme nom de colonne étrangère, également d'après le modèle.
 model RapportChat {
-  idRap        Int          @id @default(autoincrement())
+  idRap        Int           @id @default(autoincrement())
   idCustomer   Int?
   /// SetNull sur le client comme sur l'agent : retirer l'un ou l'autre ne doit
   /// plus effacer le rapport, qui est justement la trace de leur échange.
   customerChat CustomerChat? @relation(fields: [idCustomer], references: [id], onDelete: SetNull)
   /// Reste en UUID, là où le modèle tidesk le type en INT : nos agents SONT
   /// des utilisateurs, il n'existe pas de table d'agents séparée à cibler.
-  idAgent      String?      @db.Uuid
-  agent        User?        @relation(fields: [idAgent], references: [id], onDelete: SetNull)
-  resume       String?      @db.Text
+  idAgent      String?       @db.Uuid
+  agent        User?         @relation(fields: [idAgent], references: [id], onDelete: SetNull)
+  resume       String?       @db.Text
   /// Obligatoire : un rapport sans objet n'est pas exploitable.
-  subject      String       @db.VarChar(150)
+  subject      String        @db.VarChar(150)
   /// Numéro de rappel du client, saisi par l'agent. Ajouté directement en base
   /// par l'équipe ; ce champ ne fait que refléter la colonne existante —
   /// `character varying(20)`, nullable, relevée sur la prod le 31/07/2026.
-  mobile       String?      @db.VarChar(20)
+  mobile       String?       @db.VarChar(20)
 
   /// Gravité du problème — nomenclature, et non plus un entier libre.
   /// Entier, comme la clé qu'il référence.
@@ -577,12 +586,12 @@ enum MessageStatus {
 }
 
 model Message {
-  id        String            @id @default(uuid()) @map("msgID") @db.Uuid
-  convId    String            @map("conversationID") @db.Uuid
-  senderId  String            @map("senderID") @db.Uuid
-  conv      Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
-  sender    User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-  content   String? // texte (null pour médias purs)
+  id         String            @id @default(uuid()) @map("msgID") @db.Uuid
+  convId     String            @map("conversationID") @db.Uuid
+  senderId   String            @map("senderID") @db.Uuid
+  conv       Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
+  sender     User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content    String? // texte (null pour médias purs)
   /// Appareil qui a envoyé le message, quand le client l'a indiqué.
   ///
   /// `senderId` dit quel COMPTE a écrit ; cette colonne dit lequel de ses
@@ -593,25 +602,28 @@ model Message {
   /// Nullable : tout l'historique existant n'en a pas, et un client qui ne
   /// l'envoie pas reste valide. Pas de clé étrangère — la ligne d'appareil peut
   /// disparaître sans emporter les messages déjà envoyés.
-  appareilId Int?             @map("appareilID")
-  type      MessageType       @default(TEXT)
-  status    MessageStatus     @default(SENT)
-  replyToId String?           @map("replyToID") @db.Uuid
-  replyTo   Message?          @relation("MessageReplies", fields: [replyToId], references: [id])
-  replies   Message[]         @relation("MessageReplies")
-  media     MediaFile[]
-  createdAt DateTime          @default(now()) @map("sendAt") @db.Timestamptz
-  editedAt  DateTime?         @db.Timestamptz
+  appareilId Int?              @map("appareilID")
+  type       MessageType       @default(TEXT)
+  status     MessageStatus     @default(SENT)
+  replyToId  String?           @map("replyToID") @db.Uuid
+  replyTo    Message?          @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies    Message[]         @relation("MessageReplies")
+  media      MediaFile[]
+  createdAt  DateTime          @default(now()) @map("sendAt") @db.Timestamptz
+  editedAt   DateTime?         @db.Timestamptz
   // Message éphémère : instant d'expiration (null = permanent). Purgé après.
-  expiresAt DateTime?         @map("expires_at") @db.Timestamptz
-  deletedAt DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
-  hides     MessageHide[]
-  reactions MessageReaction[]
-  stars     MessageStar[]
+  expiresAt  DateTime?         @map("expires_at") @db.Timestamptz
+  deletedAt  DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
+  hides      MessageHide[]
+  reactions  MessageReaction[]
+  stars      MessageStar[]
 
   @@index([convId, createdAt])
   @@index([senderId])
   @@index([appareilId])
+  /// Balayage des messages ephemeres arrives a echeance. Existait en base sans
+  /// etre declare ici : supprime par un `db push` le 06/08/2026.
+  @@index([expiresAt])
   @@map("message")
 }
 
@@ -949,7 +961,7 @@ model ConversationLock {
   /// et le nom reste juste meme si l'appareil est retire ensuite.
   detenteur  String? @db.VarChar(80)
 
-  lockedAt DateTime @default(now()) @map("locked_at") @db.Timestamptz
+  lockedAt  DateTime @default(now()) @map("locked_at") @db.Timestamptz
   /// Peremption. L'appareil detenteur la repousse tant qu'il est connecte ; a
   /// defaut le verrou tombe tout seul, sinon une fermeture brutale laisserait
   /// la conversation reservee pour toujours.
@@ -1168,6 +1180,9 @@ model Company {
   CenterComs CenterCom[]
   Centers    Center[]
 
+  /// Existait en base sans etre declare ici : supprime par un `db push` le
+  /// 06/08/2026. Le re-declarer empeche Prisma de vouloir le retirer.
+  @@index([idTypeCompany])
   @@map("company")
 }
 
@@ -1209,7 +1224,7 @@ model Agence {
   ville   Ville?   @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
   company Company? @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
 
-  Fonctions Fonction[]
+  Fonctions    Fonction[]
   rapportChats RapportChat[]
 
   @@map("agence")
