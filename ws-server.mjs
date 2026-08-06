@@ -1201,16 +1201,38 @@ async function handleCallRing(ws, msg) {
      * leurs droits des que le detenteur rend la main.
      */
     const detenteur = await detenteurDuVerrou(call.convId, uid);
-    const delivered = detenteur
-      ? sendToAppareil(uid, detenteur, payload)
-      : sendTo(uid, payload);
-    if (!delivered && !detenteur) {
-      // On ne met en attente que si PERSONNE n'a ete joint. Quand un verrou
-      // designe un poste hors ligne, rejouer l'appel plus tard sur un autre
-      // appareil contournerait la reservation.
-      bufferPendingCall(uid, payload);
-    }
-    if (isPushEnabled() && !detenteur) {
+
+    // On vise d'abord le poste qui detient la reservation.
+    let delivered = detenteur ? sendToAppareil(uid, detenteur, payload) : false;
+
+    /*
+     * ⚠️ CORRECTIF DU 06/08/2026 — un verrou RESERVE un appel, il ne doit pas
+     * le faire disparaitre.
+     *
+     * La version precedente sautait a la fois la mise en attente ET le push des
+     * qu'un verrou existait, meme quand le detenteur n'avait pas ete joint.
+     * L'appel devenait alors totalement silencieux : pas de sonnerie, pas de
+     * notification, et l'appelant restait sur « connexion en cours » jusqu'a
+     * l'expiration. Constate sur les appels Web -> Android.
+     *
+     * Le ciblage repose sur `ws.appareilId`, renseigne par le message
+     * d'annonce `{type:"device"}`. Or l'APPLICATION MOBILE NE L'ENVOIE PAS
+     * ENCORE : `sendToAppareil` ne trouve donc jamais sa cible sur mobile, et
+     * la reservation transformait chaque appel verrouille en trou noir. Tant
+     * que le mobile n'annonce pas son identite, ce repli est ce qui fait
+     * sonner les telephones.
+     *
+     * La reservation reste honoree quand elle PEUT l'etre : si le detenteur
+     * est joint, lui seul sonne et aucun push ne part. Sinon on retombe sur le
+     * comportement d'avant — mieux vaut sonner sur un poste de trop que pas du
+     * tout.
+     */
+    const reservationHonoree = delivered;
+    if (!delivered) delivered = sendTo(uid, payload);
+
+    if (!delivered) bufferPendingCall(uid, payload);
+
+    if (isPushEnabled() && !reservationHonoree) {
       await pushIncomingCall(prisma, {
         recipientId: uid,
         callId,
