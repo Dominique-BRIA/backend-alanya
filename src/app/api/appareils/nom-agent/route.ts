@@ -14,7 +14,7 @@ import { z } from "zod";
  * son équipe — a répondu.
  *
  * La ligne visée est celle du couple (compte, appareil) : `Appareil` est unique
- * sur (cookiesWebId, idAgent), donc deux comptes utilisés dans le même
+ * sur (cookiesWebId, alanyaId), donc deux comptes utilisés dans le même
  * navigateur gardent chacun leur pseudo.
  */
 
@@ -22,8 +22,8 @@ import { z } from "zod";
 async function ligneAppareil(userId: string, cookiesWebId: string | null) {
   if (!cookiesWebId) return null;
   return prisma.appareil.findFirst({
-    where: { idAgent: userId, cookiesWebId },
-    select: { appareilId: true, nomAgent: true },
+    where: { alanyaId: userId, cookiesWebId },
+    select: { appareilId: true, agent: true },
   });
 }
 
@@ -37,7 +37,7 @@ async function ligneAppareil(userId: string, cookiesWebId: string | null) {
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const cookiesWebId = req.nextUrl.searchParams.get("cookiesWebId");
   const ligne = await ligneAppareil(userId, cookiesWebId);
-  return ok({ nomAgent: ligne?.nomAgent ?? null });
+  return ok({ nomAgent: ligne?.agent ?? null });
 });
 
 const corpsSchema = z.object({
@@ -56,8 +56,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
 
   const maj = await prisma.appareil.update({
     where: { appareilId: ligne.appareilId },
-    data: { nomAgent: body.nomAgent },
-    select: { appareilId: true, nomAgent: true },
+    data: { agent: body.nomAgent },
+    select: { appareilId: true, agent: true },
   });
-  return ok({ appareilId: maj.appareilId, nomAgent: maj.nomAgent });
+  return ok({ appareilId: maj.appareilId, nomAgent: maj.agent });
 });

@@ -79,11 +79,9 @@ model User {
   resetOtp          String?   @map("reset_otp") @db.VarChar(6)
   resetOtpExpiresAt DateTime? @map("reset_otp_expires_at") @db.Timestamptz
 
-  /// Suppression logique, ajoutée par James. ⚠️ `users` porte désormais TROIS
-  /// notions d'inactivité : `actif` (l'utilisateur), `exclus` (décision
-  /// d'administration) et `isDelete` (effacement). Rien ne dit laquelle fait
-  /// foi — à clarifier avec l'équipe avant que du code ne s'appuie dessus.
+  //  Ajouter par James
   isDelete Boolean @default(false) @map("isDelete")
+
 
   refreshTokens    RefreshToken[]
   contacts         Contact[]         @relation("UserContacts")
@@ -106,21 +104,15 @@ model User {
   meetingParticipations MeetingParticipant[] @relation("MeetingParticipantUser")
   blockedUsers          Blocked[]            @relation("BlockOwner")
   blockedByUsers        Blocked[]            @relation("BlockedUser")
-  conversationLocks     ConversationLock[]
 
   // --- Relations vers les nouvelles tables du référentiel ---
-  accessLogs      UserAccess[]
-  callsMade       CallHistory[]         @relation("CallCaller")
-  callsReceived   CallHistory[]         @relation("CallReceiver")
-  reservedPhones  ReservedAlanyaPhone[]
-  appareils       Appareil[]
-  customerChats   CustomerChat[]
-  rapportsAsAgent RapportChat[]
-  bordereauxAgent BordereauAgent[]
-  /// Transferts que CET agent a effectués — distinct des services émetteur et
-  /// destinataire, qui disent d'où vient le rapport et où il va, pas qui l'a
-  /// déplacé.
-  transfertsAgent Transferer[]     @relation("TransfertAgent")
+  accessLogs     UserAccess[]
+  callsMade      CallHistory[]         @relation("CallCaller")
+  callsReceived  CallHistory[]         @relation("CallReceiver")
+  reservedPhones ReservedAlanyaPhone[]
+  appareils      Appareil[]
+  customerChats  CustomerChat[]
+  rapportsAgent  RapportChat[]
 
   // --- Organisation / centre d'appels (référentiel équipe) ---
   // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
@@ -161,27 +153,25 @@ model Appareil {
   /// Nom de l'agent associé à l'appareil. Nullable : les lignes existantes n'en
   /// ont pas, et le remplir de force par un défaut inventé donnerait une
   /// information fausse plutôt qu'absente.
-  agent        String?   @db.VarChar(50)
+  nomAgent     String?   @db.VarChar(50)
   /// Agent propriétaire de l'appareil — un utilisateur. La colonne s'appelait
   /// `alanyaID` ; le renommage en `idAgent` dit ce qu'elle désigne vraiment
   /// depuis que ce registre sert le centre d'appels.
   ///
   /// ⚠️ Cette colonne n'est PAS unique : un agent a plusieurs appareils. Aucune
   /// clé étrangère ne peut donc la cibler — pointer vers `users.alanyaID`.
-  /// Champ renommé « alanyaId » pour suivre le référentiel équipe ; la
-  /// COLONNE reste « idAgent », d'où le @map. Rien ne bouge en base.
-  alanyaId     String    @map("idAgent") @db.Uuid
-  user         User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  idAgent      String    @db.Uuid
+  user         User      @relation(fields: [idAgent], references: [id], onDelete: Cascade)
   destroy      Int       @default(0) @db.SmallInt
 
   customerChats CustomerChat[]
 
   /// Unicité sur le COUPLE (navigateur, agent) : deux comptes utilisés tour à
   /// tour dans le même navigateur gardent chacun leur entrée.
-  @@unique([cookiesWebId, alanyaId], map: "Appareil_cookies_idAgent_key")
+  @@unique([cookiesWebId, idAgent], map: "Appareil_cookies_idAgent_key")
   /// Couvre aussi les recherches sur le seul `idAgent` (préfixe gauche) : pas
   /// besoin d'un second index sur cette colonne.
-  @@index([alanyaId, destroy, lastLogin(sort: Desc)], map: "Appareil_idAgent_destroy_idx")
+  @@index([idAgent, destroy, lastLogin(sort: Desc)], map: "Appareil_idAgent_destroy_idx")
   @@map("Appareil")
 }
 
@@ -200,21 +190,20 @@ model CustomerChat {
   appareil   Appareil  @relation(fields: [appareilId], references: [appareilId], onDelete: Cascade)
   /// Le client de la session. La colonne s'appelait `AlanyaID` ; `customerID`
   /// la distingue de l'agent, qui est à l'autre bout de la discussion.
-  alanyaId   String    @map("AlanyaID") @db.Uuid
-  user       User      @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  customerId String    @map("customerID") @db.Uuid
+  user       User      @relation(fields: [customerId], references: [id], onDelete: Cascade)
   startTime  DateTime  @default(now()) @map("start_time") @db.Timestamptz
   endTime    DateTime? @map("end_time") @db.Timestamptz
   isFree     Int       @default(1) @db.SmallInt
+  /// Vrai BOOLEAN, contrairement à `isFree` qui suit la convention SMALLINT 0/1
+  /// du référentiel. Écart assumé : demandé explicitement en booléen.
+  isResolved Boolean   @default(false)
 
-  /// `isResolved` a été DÉPLACÉ vers `RapportChat.is_resolve` : la résolution
-  /// est un état du ticket, pas de la session. Une discussion peut se terminer
-  /// sans que la réclamation soit réglée.
-
-  rapportsChat RapportChat[]
+  rapports RapportChat[]
 
   /// Les sessions d'un client, la plus récente d'abord. Le préfixe gauche
   /// couvre aussi les recherches sur le seul `customerId`.
-  @@index([alanyaId, startTime(sort: Desc)], map: "customerChat_AlanyaID_start_idx")
+  @@index([customerId, startTime(sort: Desc)], map: "customerChat_customerID_start_idx")
   /// PostgreSQL n'indexe pas automatiquement les clés étrangères : sans cet
   /// index, toute suppression d'appareil imposerait un parcours complet.
   @@index([appareilId], map: "customerChat_appareilID_idx")
@@ -227,69 +216,22 @@ model CustomerChat {
 /// cette dernière n'est pas unique (un agent a plusieurs appareils), donc
 /// aucune clé étrangère ne peut la cibler. La valeur est la même, prise à sa
 /// source — et le rapport reste rattaché à l'agent même s'il change de poste.
-/// C'est aussi un **ticket** : il circule entre services et agents jusqu'à
-/// résolution, et chaque étape laisse une trace (transferts, bordereaux,
-/// commentaires) — modèle tidesk.
-///
-/// Clé primaire nommée `idRap` d'après ce modèle. Les tables filles gardent
-/// `idRapport` comme nom de colonne étrangère, également d'après le modèle.
 model RapportChat {
-  idRap        Int          @id @default(autoincrement())
-  idCustomer   Int?
-  /// SetNull sur le client comme sur l'agent : retirer l'un ou l'autre ne doit
-  /// plus effacer le rapport, qui est justement la trace de leur échange.
-  customerChat CustomerChat? @relation(fields: [idCustomer], references: [id], onDelete: SetNull)
-  /// Reste en UUID, là où le modèle tidesk le type en INT : nos agents SONT
-  /// des utilisateurs, il n'existe pas de table d'agents séparée à cibler.
-  idAgent      String?      @db.Uuid
-  agent        User?        @relation(fields: [idAgent], references: [id], onDelete: SetNull)
+  idRapport    Int          @id @default(autoincrement())
+  idCustomer   Int
+  customerChat CustomerChat @relation(fields: [idCustomer], references: [id], onDelete: Cascade)
+  idAgent      String       @db.Uuid
+  agent        User         @relation(fields: [idAgent], references: [id], onDelete: Cascade)
   resume       String?      @db.Text
-  /// Obligatoire : un rapport sans objet n'est pas exploitable.
-  subject      String       @db.VarChar(150)
-  /// Numéro de rappel du client, saisi par l'agent. Ajouté directement en base
-  /// par l'équipe ; ce champ ne fait que refléter la colonne existante —
-  /// `character varying(20)`, nullable, relevée sur la prod le 31/07/2026.
-  mobile       String?      @db.VarChar(20)
+  subject      String?      @db.VarChar(200)
+  date         DateTime     @default(now()) @db.Timestamptz
+  type         Int?         @db.SmallInt
 
-  /// Gravité du problème — nomenclature, et non plus un entier libre.
-  /// Entier, comme la clé qu'il référence.
-  idDegreRapport Int?
-  degre          DegreRapport?  @relation(fields: [idDegreRapport], references: [idDegreRapport], onDelete: SetNull)
-  /// Nature du problème — nomenclature, avec sa couleur d'affichage.
-  idNature       Int?           @db.SmallInt
-  nature         NatureRapport? @relation(fields: [idNature], references: [idNature], onDelete: SetNull)
-  /// Avancement du traitement.
-  /// État, et non information optionnelle : non traité par défaut.
-  traiter        Int            @default(0) @db.SmallInt
-  /// Déplacé depuis `customerChat` : une session peut se terminer sans que la
-  /// réclamation soit résolue, les deux notions ne se confondent pas.
-  is_resolve     Boolean        @default(false)
-
-  /// `start_time` remplace l'ancien `date` : le modèle mesure une DURÉE de
-  /// traitement, pas un instant de création. `end_time` nul = en cours.
-  start_time DateTime  @default(now()) @db.Timestamptz
-  end_time   DateTime? @db.Timestamptz
-
-  idAgence  Int?
-  agence    Agence?  @relation(fields: [idAgence], references: [idAgence], onDelete: SetNull)
-  idService Int?
-  service   Service? @relation(fields: [idService], references: [idService], onDelete: SetNull)
-
-  /// Conservé de l'état précédent : la colonne existe et rien ne l'utilise. Le
-  /// modèle tidesk ne la reprend pas — à supprimer si l'équipe confirme.
-  type Int? @db.SmallInt
-
-  docs              DocRapport[]
-  transferts        Transferer[]
-  bordereauxService BordereauService[]
-  bordereauxAgent   BordereauAgent[]
-  commentaires      Commentaire[]
+  docs DocRapport[]
 
   @@index([idCustomer], map: "rapportChat_idCustomer_idx")
   /// Les rapports d'un agent, du plus récent au plus ancien.
-  @@index([idAgent], map: "rapportChat_idAgent_idx")
-  @@index([idService], map: "rapportChat_idService_idx")
-  @@index([idAgence], map: "rapportChat_idAgence_idx")
+  @@index([idAgent, date(sort: Desc)], map: "rapportChat_idAgent_date_idx")
   @@map("rapportChat")
 }
 
@@ -297,135 +239,12 @@ model RapportChat {
 model DocRapport {
   idDoc     Int         @id @default(autoincrement())
   idRapport Int
-  rapport   RapportChat @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-  /// `Text` et non `VarChar(150)` comme le modèle : les URL de médias signées
-  /// dépassent régulièrement 150 caractères. Écart assumé.
+  rapport   RapportChat @relation(fields: [idRapport], references: [idRapport], onDelete: Cascade)
   url       String      @db.Text
-  upload_at DateTime    @default(now()) @db.Timestamptz
-  typeMedia Int?        @db.SmallInt
+  type      Int?        @db.SmallInt
 
   @@index([idRapport], map: "docRapport_idRapport_idx")
   @@map("docRapport")
-}
-
-/// Nomenclature des degrés de gravité d'un rapport.
-///
-/// `libelleAn` est le libellé anglais — nom repris du modèle tidesk. Il diffère
-/// de `Pays.libelleAnglais`, écrit en toutes lettres : l'incohérence vient du
-/// modèle, elle est signalée plutôt que corrigée unilatéralement.
-model DegreRapport {
-  idDegreRapport Int     @id @default(autoincrement()) @db.SmallInt
-  libelle        String  @db.VarChar(45)
-  libelleAn      String? @db.VarChar(45)
-
-  rapportsChat RapportChat[]
-
-  @@map("degreRapport")
-}
-
-/// Nomenclature des natures de rapport, avec la couleur qui les distingue
-/// dans l'interface (ex. « #C56A42 »).
-model NatureRapport {
-  idNature    Int     @id @default(autoincrement()) @db.SmallInt
-  libelle     String  @db.VarChar(45)
-  libelleAn   String? @db.VarChar(45)
-  codeCouleur String? @db.VarChar(10)
-
-  rapportsChat RapportChat[]
-
-  @@map("natureRapport")
-}
-
-/// Nomenclature des types d'entreprise, référencée par [Company].
-model TypeCompany {
-  idTypeCompany Int     @id @default(autoincrement())
-  libelle       String  @db.VarChar(45)
-  libelleAn     String? @db.VarChar(45)
-
-  companies Company[]
-
-  @@map("typeCompany")
-}
-
-/// Passage d'un rapport d'un service à un autre.
-///
-/// Une ligne par transfert : le parcours complet se lit en triant sur
-/// `sent_at`, sans qu'aucune information soit écrasée.
-model Transferer {
-  idTrans            Int         @id @default(autoincrement())
-  idService_sender   Int?
-  serviceSender      Service?    @relation("TransfertEmetteur", fields: [idService_sender], references: [idService], onDelete: SetNull)
-  idService_receiver Int?
-  serviceReceiver    Service?    @relation("TransfertDestinataire", fields: [idService_receiver], references: [idService], onDelete: SetNull)
-  sent_at            DateTime    @default(now()) @db.Timestamptz
-  idRapport          Int
-  rapport            RapportChat @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-
-  /// Qui a transféré, et pourquoi. Le transfert ne retenait que les services :
-  /// on savait d'où venait un rapport et où il allait, jamais qui l'avait
-  /// déplacé ni pour quel motif. SetNull, pour que le départ de l'agent ne
-  /// fasse pas disparaître le transfert lui-même.
-  idAgent     String? @db.Uuid
-  agent       User?   @relation("TransfertAgent", fields: [idAgent], references: [id], onDelete: SetNull)
-  commentaire String? @db.Text
-
-  @@index([idRapport, sent_at], map: "transferer_idRapport_idx")
-  @@map("transferer")
-}
-
-/// Temps passé sur un rapport PAR SERVICE. `end_time` nul = en cours.
-model BordereauService {
-  idBordService Int         @id @default(autoincrement())
-  idRapport     Int
-  rapport       RapportChat @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-  idService     Int?
-  service       Service?    @relation(fields: [idService], references: [idService], onDelete: SetNull)
-  start_time    DateTime    @default(now()) @db.Timestamptz
-  end_time      DateTime?   @db.Timestamptz
-
-  @@index([idRapport], map: "bordereauService_idRapport_idx")
-  @@index([idService], map: "bordereauService_idService_idx")
-  @@map("bordereauService")
-}
-
-/// Temps passé sur un rapport PAR AGENT. `end_time` nul = en cours.
-model BordereauAgent {
-  idbordAgent Int         @id @default(autoincrement())
-  idRapport   Int
-  rapport     RapportChat @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-  idAgent     String?     @db.Uuid
-  /// SetNull : retirer un agent ne doit plus emporter ses bordereaux.
-  agent       User?       @relation(fields: [idAgent], references: [id], onDelete: SetNull)
-  start_time  DateTime    @default(now()) @db.Timestamptz
-  end_time    DateTime?   @db.Timestamptz
-
-  commentaires Commentaire[]
-
-  @@index([idRapport], map: "bordereauAgent_idRapport_idx")
-  /// Ramené à la seule colonne d'agent : on cherche les bordereaux D'UN agent,
-  /// jamais l'ensemble trié par date.
-  @@index([idAgent], map: "bordereauAgent_idAgent_idx")
-  @@map("bordereauAgent")
-}
-
-/// Commentaire interne sur un rapport.
-///
-/// `idBordAgent` est nullable : un commentaire peut porter sur le rapport
-/// entier sans être rattaché au passage d'un agent particulier.
-model Commentaire {
-  idCom       Int             @id @default(autoincrement())
-  idBordAgent Int?
-  /// SetNull : le bordereau peut disparaître, le commentaire reste.
-  bordAgent   BordereauAgent? @relation(fields: [idBordAgent], references: [idbordAgent], onDelete: SetNull)
-  idRapport   Int
-  rapport     RapportChat     @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-  /// Obligatoire : un commentaire vide n'a pas de sens.
-  content     String          @db.Text
-  created_at  DateTime        @default(now()) @db.Timestamptz
-
-  @@index([idRapport, created_at], map: "commentaire_idRapport_idx")
-  @@index([idBordAgent], map: "commentaire_idBordAgent_idx")
-  @@map("commentaire")
 }
 
 // Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
@@ -510,7 +329,6 @@ model Conversation {
 
   participants Participant[]
   messages     Message[]
-  locks        ConversationLock[]
 
   // --- F11 : Dernier message dénormalisé ---
   lastMessage         String?   @db.Text
@@ -583,17 +401,6 @@ model Message {
   conv      Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
   sender    User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   content   String? // texte (null pour médias purs)
-  /// Appareil qui a envoyé le message, quand le client l'a indiqué.
-  ///
-  /// `senderId` dit quel COMPTE a écrit ; cette colonne dit lequel de ses
-  /// appareils — un numéro professionnel peut être partagé entre plusieurs
-  /// agents. Elle sert à afficher le pseudo de l'appareil au-dessus du message,
-  /// et UNIQUEMENT aux appareils du même compte.
-  ///
-  /// Nullable : tout l'historique existant n'en a pas, et un client qui ne
-  /// l'envoie pas reste valide. Pas de clé étrangère — la ligne d'appareil peut
-  /// disparaître sans emporter les messages déjà envoyés.
-  appareilId Int?             @map("appareilID")
   type      MessageType       @default(TEXT)
   status    MessageStatus     @default(SENT)
   replyToId String?           @map("replyToID") @db.Uuid
@@ -611,7 +418,6 @@ model Message {
 
   @@index([convId, createdAt])
   @@index([senderId])
-  @@index([appareilId])
   @@map("message")
 }
 
@@ -736,31 +542,12 @@ enum CallType {
   VIDEO
 }
 
-/// Statuts d'appel. Chaque valeur décrit un FAIT objectif, jamais un point de
-/// vue : un refus est un seul événement, que l'appelant lit « refusé » et
-/// l'appelé « rejeté ». Cette formulation par destinataire est calculée à la
-/// lecture par `libelleAppel()`, elle n'est pas stockée — sinon il faudrait
-/// écrire deux lignes pour le même fait, et c'est exactement la confusion qui
-/// faisait afficher « Rejeté » des deux côtés.
-///
-/// ⚠️ Une valeur d'enum PostgreSQL ne se RETIRE pas : il faudrait recréer le
-/// type et réécrire toutes les colonnes qui l'utilisent, sur des données de
-/// prod. Tout ajout ici est définitif.
 enum CallStatus {
   RINGING
   ONGOING
   ENDED
-  /// Conservé pour l'historique : les appels créés avant l'ajout de NO_ANSWER
-  /// portent cette valeur. Le nouveau code écrit NO_ANSWER, jamais MISSED, et
-  /// `libelleAppel()` traite les deux à l'identique.
   MISSED
   REJECTED
-  /// Personne n'a décroché — ni raccroché par l'appelant, ni refusé par
-  /// l'appelé. Remplace le `ENDED` que posait `end/route.ts` quand l'appelant
-  /// abandonnait, et qui obligeait le client à deviner via `durationSec == 0`.
-  NO_ANSWER
-  /// L'appelé était déjà en ligne. L'appel n'a jamais sonné chez lui.
-  BUSY
 }
 
 model Call {
@@ -915,53 +702,6 @@ model Blocked {
 }
 
 // ---------------------------------------------------------------------------
-// CONVERSATION_LOCK — reservation d'une conversation par UN appareil
-// ---------------------------------------------------------------------------
-
-/// Verrou de conversation, pose par un appareil pour un compte.
-///
-/// Cas d'usage : un numero professionnel partage entre plusieurs agents. Celui
-/// qui prend la main sur une discussion la reserve, et les autres appareils du
-/// MEME compte ne peuvent plus y ecrire.
-///
-/// Le verrou n'isole pas : les autres appareils continuent de recevoir en
-/// temps reel tout ce que l'agent envoie et recoit. Ils perdent le droit
-/// d'ecrire, rien d'autre — aucune diffusion de message ne doit le consulter.
-///
-/// A ne pas confondre avec `Blocked` : bloquer empeche les messages d'un TIERS
-/// d'arriver ; verrouiller repartit l'ecriture entre SES PROPRES appareils.
-model ConversationLock {
-  id     String @id @default(uuid()) @db.Uuid
-  convId String @map("conversID") @db.Uuid
-  /// Compte proprietaire du verrou. Un seul verrou par (conversation, compte) :
-  /// c'est entre appareils d'un meme compte que la main se passe.
-  userId String @map("alanyaID") @db.Uuid
-
-  conv Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
-  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  /// Appareil qui detient le verrou. Sans cle etrangere : `Appareil.idAgent`
-  /// n'est pas unique, et la ligne d'appareil peut disparaitre sans que le
-  /// verrou doive tomber avec elle.
-  appareilId Int     @map("appareilID")
-  /// Nom affiche du detenteur, fige a la pose. Les autres appareils doivent
-  /// pouvoir dire QUI a la main sans requeter le registre a chaque affichage,
-  /// et le nom reste juste meme si l'appareil est retire ensuite.
-  detenteur  String? @db.VarChar(80)
-
-  lockedAt DateTime @default(now()) @map("locked_at") @db.Timestamptz
-  /// Peremption. L'appareil detenteur la repousse tant qu'il est connecte ; a
-  /// defaut le verrou tombe tout seul, sinon une fermeture brutale laisserait
-  /// la conversation reservee pour toujours.
-  expiresAt DateTime @map("expires_at") @db.Timestamptz
-
-  @@unique([convId, userId])
-  @@index([userId])
-  @@index([expiresAt])
-  @@map("conversation_lock")
-}
-
-// ---------------------------------------------------------------------------
 // USER_ACCESS (journal de connexions) — table du référentiel, ajoutée
 // ---------------------------------------------------------------------------
 
@@ -1043,6 +783,7 @@ model Ville {
   nom     String @db.VarChar(45)
   idPays  Int?   @map("idpays")
   pays    Pays?  @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  
 
   Companies Company[]
   Agences   Agence[]
@@ -1053,30 +794,26 @@ model Ville {
 }
 
 model AdminRoot {
-  idRoot               Int       @id @default(autoincrement()) @map("idroot")
-  nom                  String    @db.VarChar(60)
-  email                String    @unique @db.VarChar(100)
-  alanyaPhone          String?   @map("alanyaphone") @db.VarChar(15)
-  mobile               String?   @db.VarChar(15)
-  username             String    @unique @db.VarChar(30)
-  password             String    @db.VarChar(200)
-  idPays               Int?      @map("idpays")
-  type                 Int?
-  startPrefix          Int?      @map("startprefix")
-  endPrefix            Int?      @map("endprefix")
-  /// Réinitialisation de mot de passe du back-office, ajoutée par James.
-  resetPasswordToken   String?   @map("reset_password_token") @db.VarChar(255)
-  resetPasswordExpires DateTime? @map("reset_password_expires") @db.Timestamptz
-  pays                 Pays?     @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  idRoot      Int     @id @default(autoincrement()) @map("idroot")
+  nom         String  @db.VarChar(60)
+  email       String  @unique @db.VarChar(100)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  mobile      String? @db.VarChar(15)
+  username    String  @unique @db.VarChar(30)
+  password    String  @db.VarChar(200)
+  idPays      Int?    @map("idpays")
+  type        Int?
+  startPrefix Int?    @map("startprefix")
+  endPrefix   Int?    @map("endprefix")
+  resetPasswordToken   String?      @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime?    @map("reset_password_expires") @db.Timestamptz
+  pays        Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
 
   Abonnements Abonnement[]
   Companies   Company[]
   CenterComs  CenterCom[]
   AccesAdmins AccesAdmin[]
   Admins      Admin[]
-
-  FacturesRecues       Facture[]
-  JustificatifsEnvoyes JustificatifPaiement[] @relation("JustifUploadeurAdminRoot")
 
   @@map("adminroot")
 }
@@ -1085,16 +822,13 @@ model PrixAbonnement {
   idAbonnement Int     @id @default(autoincrement()) @map("idabonnement")
   libelle      String  @db.VarChar(45)
   montant      Decimal @db.Decimal(10, 2)
-  description  String? @db.Text
-  isDelete     Boolean @default(false) @map("isDelete")
+
+  isDelete Boolean @default(false) @map("isDelete")
+  description String? @db.Text
+
   idPays       Int?    @map("idpays")
-  /// Ce que ce tarif facture : 0 agent, 1 centre d'appel, 2 numéro court.
-  /// Les lignes de facture en gardent une copie — il ne sert qu'à choisir le
-  /// tarif applicable au moment du calcul.
-  type         Int     @default(0) @db.SmallInt
   pays         Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
 
-  factureLignes FactureLigne[]
 
   @@map("prixabonnement")
 }
@@ -1103,7 +837,10 @@ model Abonnement {
   idAbonnement Int        @id @default(autoincrement()) @map("idabonnement")
   prix         Decimal    @db.Decimal(10, 2)
   libelle      String     @db.VarChar(45)
-  isDelete     Boolean    @default(false) @map("isDelete")
+
+  isDelete Boolean @default(false) @map("isDelete")
+
+
   rootID       Int?       @map("rootid")
   adminRoot    AdminRoot? @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
 
@@ -1126,40 +863,17 @@ model Company {
   idAbonnement  Int?    @map("idabonnement")
   rootID        Int?    @map("rootid")
   prefixeAlanya Int?    @map("prefixealanya")
-  /// Type d'entreprise. Nom physique en camelCase — il suit celui de la
-  /// colonne référencée, `typeCompany.idTypeCompany`, alors que les autres
-  /// clés étrangères de `company` sont en minuscules (`idville`, `idpays`).
-  /// Les deux conventions se croisent ici : celles du référentiel équipe et
-  /// celles du modèle tidesk.
-  idTypeCompany Int?    @map("idTypeCompany")
 
-  ville       Ville?       @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
-  pays        Pays?        @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
-  abonnement  Abonnement?  @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
-  adminRoot   AdminRoot?   @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
-  /// SetNull comme les autres nomenclatures : retirer un type d'entreprise ne
-  /// doit pas emporter les entreprises qui s'y référaient.
-  typeCompany TypeCompany? @relation(fields: [idTypeCompany], references: [idTypeCompany], onDelete: SetNull, onUpdate: Cascade)
+  ville      Ville?      @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
+  pays       Pays?       @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  abonnement Abonnement? @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
+  adminRoot  AdminRoot?  @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
 
   created_at         DateTime? @default(dbgenerated("CURRENT_DATE")) @db.Date
   lat                Float?
   lon                Float?
   maxAgents          Int?      @default(20) @map("maxagents")
   maxAgentsPerCenter Int?      @default(5) @map("maxagentspercenter")
-
-  /// Adresses des services propres à l'entreprise. Les trois colonnes
-  /// existaient DÉJÀ en base, en VARCHAR(50), sans figurer dans ce schéma —
-  /// elles étaient donc invisibles du code. Élargies à 255 par la migration :
-  /// cinquante caractères ne suffisent pas à une URL.
-  urlServeur  String? @map("url_serveur") @db.VarChar(255)
-  urlMedia    String? @map("url_media") @db.VarChar(255)
-  urlDoc      String? @map("url_doc") @db.VarChar(255)
-  /// Numéro court attribué à l'entreprise ; facturé à part.
-  numeroCourt String? @map("numero_court") @db.VarChar(20)
-  /// Suppression logique, comme sur `service` et `prixabonnement`.
-  isDelete    Boolean @default(false) @map("isDelete")
-
-  Factures Facture[]
 
   Users      User[]
   Admins     Admin[]
@@ -1172,19 +886,19 @@ model Company {
 }
 
 model Admin {
-  idAdmin              Int       @id @default(autoincrement()) @map("idadmin")
-  nom                  String    @db.VarChar(60)
-  email                String    @unique @db.VarChar(100)
-  alanyaPhone          String?   @map("alanyaphone") @db.VarChar(15)
-  mobile               String?   @db.VarChar(15)
-  username             String    @unique @db.VarChar(30)
-  password             String    @db.VarChar(200)
-  idRoot               Int?      @map("idroot")
-  idCompany            Int?      @map("idcompany")
-  type                 Int?
-  /// Réinitialisation de mot de passe du back-office, ajoutée par James.
-  resetPasswordToken   String?   @map("reset_password_token") @db.VarChar(255)
-  resetPasswordExpires DateTime? @map("reset_password_expires") @db.Timestamptz
+  idAdmin     Int     @id @default(autoincrement()) @map("idadmin")
+  nom         String  @db.VarChar(60)
+  email       String  @unique @db.VarChar(100)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  mobile      String? @db.VarChar(15)
+  username    String  @unique @db.VarChar(30)
+  password    String  @db.VarChar(200)
+  idRoot      Int?    @map("idroot")
+  idCompany   Int?    @map("idcompany")
+  type        Int?
+
+  resetPasswordToken   String?      @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime?    @map("reset_password_expires") @db.Timestamptz
 
   adminRoot AdminRoot? @relation(fields: [idRoot], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
   company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
@@ -1204,35 +918,26 @@ model Agence {
   idVille     Int?    @map("idville")
   idCompany   Int?    @map("idcompany")
 
+
   isDelete Boolean @default(false) @map("isDelete")
+
 
   ville   Ville?   @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
   company Company? @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
 
   Fonctions Fonction[]
-  rapportChats RapportChat[]
 
   @@map("agence")
 }
 
 model Service {
-  idService Int     @id @default(autoincrement()) @map("idservice")
-  libelle   String  @db.VarChar(100)
-  /// Renommé depuis `deleted` et passé en BOOLEAN, pour rejoindre la
-  /// convention des six autres tables. `service` avait sa propre notion de
-  /// suppression logique, sous un autre nom et un autre type — deux façons de
-  /// dire la même chose dans un même schéma.
-  isDelete  Boolean @default(false) @map("isDelete")
-  idCompany Int?    @map("idcompany")
+  idService Int    @id @default(autoincrement()) @map("idservice")
+  libelle   String @db.VarChar(100)
+  deleted   Int?   @default(0) @db.SmallInt
+  idCompany Int?   @map("idcompany")
 
   company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
   Fonctions Fonction[]
-
-  // Volet tidesk : un service traite des rapports, en émet et en reçoit.
-  rapportsChat           RapportChat[]
-  transfertsEmetteur     Transferer[]       @relation("TransfertEmetteur")
-  transfertsDestinataire Transferer[]       @relation("TransfertDestinataire")
-  bordereauxService      BordereauService[]
 
   @@map("service")
 }
@@ -1314,129 +1019,4 @@ model AccesAdmin {
   @@index([idAdmin], map: "accesadmin_idadmin_idx")
   @@index([idRoot], map: "accesadmin_idroot_idx")
   @@map("accesadmin")
-}
-
-// ===============================================================
-// Facturation des entreprises
-// ===============================================================
-// Volet sans risque du référentiel équipe (schéma du 05/08/2026) : que des
-// créations. Migration : `prisma/manual/2026-08_facturation.sql`.
-
-enum FactureStatut {
-  BROUILLON // calculée, pas encore transmise au Super Admin
-  ENVOYEE // transmise, en attente de justificatif validé
-  PAYEE // justificatif validé
-}
-
-enum JustificatifStatut {
-  EN_ATTENTE
-  VALIDE
-  REJETE
-}
-
-/// Comptes techniques de la facturation — à ne pas confondre avec
-/// [AdminRoot], qui administre les entreprises. `type` : 0 lecture,
-/// 1 lecture/écriture, 2 comptable.
-model Root {
-  idRoot   Int    @id @default(autoincrement()) @map("idRoot")
-  username String @unique @db.VarChar(50)
-  password String @db.VarChar(255)
-  type     Int    @default(0) @db.SmallInt
-  actif    Int    @default(1) @db.SmallInt
-
-  FacturesCreees       Facture[]
-  JustificatifsEnvoyes JustificatifPaiement[] @relation("JustifUploadeurRoot")
-  JustificatifsValides JustificatifPaiement[] @relation("JustifValidateur")
-}
-
-/// Facture annuelle d'une entreprise.
-///
-/// `companyLibelle` est une COPIE du nom au moment de l'émission, et non une
-/// jointure : une facture doit rester lisible telle qu'elle a été émise, même
-/// si l'entreprise est renommée ensuite. Même raison pour les libellés de
-/// lignes et leurs prix.
-model Facture {
-  idFacture      Int     @id @default(autoincrement())
-  numero         String  @unique @db.VarChar(30)
-  idCompany      Int
-  /// RESTRICT et non Cascade : supprimer une entreprise ne doit pas effacer
-  /// son historique comptable.
-  company        Company @relation(fields: [idCompany], references: [idCompany], onDelete: Restrict)
-  companyLibelle String  @db.VarChar(60)
-
-  idSuperAdmin Int?
-  superAdmin   AdminRoot? @relation(fields: [idSuperAdmin], references: [idRoot], onDelete: SetNull)
-
-  createdByRootId Int?
-  createdByRoot   Root? @relation(fields: [createdByRootId], references: [idRoot], onDelete: SetNull)
-
-  annee        Int
-  periodeDebut DateTime @db.Date
-  periodeFin   DateTime @db.Date
-
-  nombreAgents       Int
-  nombreCentresAppel Int
-  aNumeroCourt       Boolean
-
-  montantTotal Decimal       @db.Decimal(12, 2)
-  statut       FactureStatut @default(BROUILLON)
-
-  createdAt DateTime  @default(now()) @db.Timestamptz
-  envoyeeAt DateTime? @db.Timestamptz
-  payeeAt   DateTime? @db.Timestamptz
-
-  lignes        FactureLigne[]
-  justificatifs JustificatifPaiement[]
-
-  @@index([idCompany, annee], map: "facture_company_annee_idx")
-  @@index([idSuperAdmin], map: "facture_superadmin_idx")
-  @@map("facture")
-}
-
-/// Ligne de facture. `type` : 0 agent, 1 centre d'appel, 2 numéro court.
-model FactureLigne {
-  idLigne   Int     @id @default(autoincrement())
-  idFacture Int
-  facture   Facture @relation(fields: [idFacture], references: [idFacture], onDelete: Cascade)
-
-  idPrixAbonnement Int?
-  prixAbonnement   PrixAbonnement? @relation(fields: [idPrixAbonnement], references: [idAbonnement], onDelete: SetNull)
-  libelleSnapshot  String          @db.VarChar(100)
-  type             Int             @db.SmallInt
-
-  quantite     Int
-  prixUnitaire Decimal @db.Decimal(10, 2)
-  montantLigne Decimal @db.Decimal(12, 2)
-
-  @@index([idFacture], map: "facture_ligne_facture_idx")
-  @@map("facture_ligne")
-}
-
-/// Justificatif de paiement d'une facture.
-///
-/// Deux dépositaires possibles — un administrateur d'entreprise ou un compte
-/// technique — d'où deux clés étrangères distinctes plutôt qu'une colonne
-/// unique dont on ne saurait pas quelle table elle désigne.
-model JustificatifPaiement {
-  idJustificatif Int     @id @default(autoincrement())
-  idFacture      Int
-  facture        Facture @relation(fields: [idFacture], references: [idFacture], onDelete: Cascade)
-
-  fichierUrl String @db.VarChar(255)
-
-  uploadedByAdminRootId Int?
-  uploadedByAdminRoot   AdminRoot? @relation("JustifUploadeurAdminRoot", fields: [uploadedByAdminRootId], references: [idRoot], onDelete: SetNull)
-  uploadedByRootId      Int?
-  uploadedByRoot        Root?      @relation("JustifUploadeurRoot", fields: [uploadedByRootId], references: [idRoot], onDelete: SetNull)
-
-  statut            JustificatifStatut @default(EN_ATTENTE)
-  raisonRejet       String?            @db.Text
-  validatedByRootId Int?
-  validatedByRoot   Root?              @relation("JustifValidateur", fields: [validatedByRootId], references: [idRoot], onDelete: SetNull)
-  validatedAt       DateTime?          @db.Timestamptz
-
-  createdAt DateTime @default(now()) @db.Timestamptz
-
-  @@index([idFacture], map: "justificatif_facture_idx")
-  @@map("justificatif_paiement")
 }

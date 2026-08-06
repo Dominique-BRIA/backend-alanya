@@ -18,16 +18,16 @@
 --                    -f prisma/manual/2026-07_rapport_chat.sql
 
 -- -------------------------------------------------------------
--- 1. Appareil.agent  →  Appareil.nomAgent
+-- 1. Appareil.nomAgent  →  Appareil.agent
 -- -------------------------------------------------------------
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_name = 'Appareil' AND column_name = 'agent')
+             WHERE table_name = 'Appareil' AND column_name = 'nomAgent')
      AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                     WHERE table_name = 'Appareil' AND column_name = 'nomAgent')
+                     WHERE table_name = 'Appareil' AND column_name = 'agent')
   THEN
-    ALTER TABLE "Appareil" RENAME COLUMN "agent" TO "nomAgent";
+    ALTER TABLE "Appareil" RENAME COLUMN "nomAgent" TO "agent";
   END IF;
 END $$;
 
@@ -71,29 +71,31 @@ BEGIN
 END $$;
 
 -- -------------------------------------------------------------
--- 3. customerChat.AlanyaID  →  customerChat.customerID
+-- 3. customerChat.customerID  →  customerChat.AlanyaID
 -- -------------------------------------------------------------
--- Distingue le client de l'agent, qui est à l'autre bout de la discussion.
+-- Retour au nom du référentiel équipe (schéma du 05/08/2026). Le renommage
+-- inverse, fait le 29/07 pour distinguer le client de l'agent, est abandonné :
+-- c'est le référentiel qui fait foi sur le nommage.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_name = 'customerChat' AND column_name = 'AlanyaID')
+             WHERE table_name = 'customerChat' AND column_name = 'customerID')
      AND NOT EXISTS (SELECT 1 FROM information_schema.columns
-                     WHERE table_name = 'customerChat' AND column_name = 'customerID')
+                     WHERE table_name = 'customerChat' AND column_name = 'AlanyaID')
   THEN
-    ALTER TABLE "customerChat" RENAME COLUMN "AlanyaID" TO "customerID";
+    ALTER TABLE "customerChat" RENAME COLUMN "customerID" TO "AlanyaID";
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customerChat_AlanyaID_fkey')
-     AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customerChat_customerID_fkey')
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customerChat_customerID_fkey')
+     AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customerChat_AlanyaID_fkey')
   THEN
-    ALTER TABLE "customerChat" RENAME CONSTRAINT "customerChat_AlanyaID_fkey" TO "customerChat_customerID_fkey";
+    ALTER TABLE "customerChat" RENAME CONSTRAINT "customerChat_customerID_fkey" TO "customerChat_AlanyaID_fkey";
   END IF;
 
-  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'customerChat_AlanyaID_start_idx')
-     AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'customerChat_customerID_start_idx')
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'customerChat_customerID_start_idx')
+     AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'customerChat_AlanyaID_start_idx')
   THEN
-    ALTER INDEX "customerChat_AlanyaID_start_idx" RENAME TO "customerChat_customerID_start_idx";
+    ALTER INDEX "customerChat_customerID_start_idx" RENAME TO "customerChat_AlanyaID_start_idx";
   END IF;
 END $$;
 

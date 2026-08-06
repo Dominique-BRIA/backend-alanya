@@ -734,8 +734,8 @@ async function handleSend(ws, msg) {
   let appareilEmetteur = null;
   if (Number.isFinite(appareilAnnonce) && appareilAnnonce > 0) {
     const ligne = await prisma.appareil.findFirst({
-      where: { appareilId: appareilAnnonce, idAgent: ws.userId },
-      select: { appareilId: true, nomAgent: true },
+      where: { appareilId: appareilAnnonce, alanyaId: ws.userId },
+      select: { appareilId: true, agent: true },
     });
     if (ligne) {
       appareilEmetteur = ligne;
@@ -799,8 +799,8 @@ async function handleSend(ws, msg) {
    * recoivent pas du tout : on ne compte pas sur le client pour le cacher.
    */
   const pourMoi =
-    appareilEmetteur?.nomAgent
-      ? { ...messageWithStatus, nomAgent: appareilEmetteur.nomAgent }
+    appareilEmetteur?.agent
+      ? { ...messageWithStatus, nomAgent: appareilEmetteur.agent }
       : messageWithStatus;
   for (const uid of recipients) {
     sendTo(uid, {

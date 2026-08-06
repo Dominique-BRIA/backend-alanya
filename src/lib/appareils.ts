@@ -36,10 +36,10 @@ export function serializeAppareil(a: Appareil): AppareilJson {
      *
      * Il n'apparaît que dans la liste des appareils et au-dessus des messages
      * du compte : ce n'est pas un nom d'affichage, et il ne sort jamais vers un
-     * autre compte. Ici la route est déjà filtrée sur `idAgent = moi`, donc on
+     * autre compte. Ici la route est déjà filtrée sur `alanyaId = moi`, donc on
      * ne sert que ses propres appareils.
      */
-    nomAgent: a.nomAgent,
+    nomAgent: a.agent,
     createAt: a.createAt.toISOString(),
     lastLogin: a.lastLogin ? a.lastLogin.toISOString() : null,
     revoked: a.destroy === 1,

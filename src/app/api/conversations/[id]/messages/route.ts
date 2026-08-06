@@ -83,13 +83,13 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const pseudoParAppareil = new Map<number, string>();
   if (mesAppareils.length > 0) {
     const lignes = await prisma.appareil.findMany({
-      // idAgent en plus de l'id : la ceinture et les bretelles, au cas où un
+      // alanyaId en plus de l'id : la ceinture et les bretelles, au cas où un
       // message porterait l'appareil d'un autre compte.
-      where: { appareilId: { in: mesAppareils }, idAgent: userId },
-      select: { appareilId: true, nomAgent: true },
+      where: { appareilId: { in: mesAppareils }, alanyaId: userId },
+      select: { appareilId: true, agent: true },
     });
     for (const l of lignes) {
-      if (l.nomAgent) pseudoParAppareil.set(l.appareilId, l.nomAgent);
+      if (l.agent) pseudoParAppareil.set(l.appareilId, l.agent);
     }
   }
 
