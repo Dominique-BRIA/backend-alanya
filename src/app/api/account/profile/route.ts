@@ -4,6 +4,7 @@ import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { updateProfileSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // PATCH /api/account/profile — met à jour le profil de l'utilisateur connecté.
 // F4 : écrit directement dans users (plus de table profiles).
@@ -21,7 +22,7 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string) => {
 
   return ok({
     pseudo: nomAffichage(user),
-    avatarUrl: user.avatarUrl,
+    avatarUrl: avatarPublicUrl(user.avatarUrl),
     statusMsg: user.statusMsg,
   });
 });

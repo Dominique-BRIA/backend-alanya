@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/statuses/:id/views — liste des personnes ayant vu MON statut,
 // avec l'horodatage de visionnage. Réservé au propriétaire du statut.
@@ -33,7 +34,7 @@ export const GET = withAuth(
       views: views.map((v) => ({
         userId: v.viewer.id,
         name: nomAffichage(v.viewer),
-        avatarUrl: v.viewer.avatarUrl,
+        avatarUrl: avatarPublicUrl(v.viewer.avatarUrl),
         viewedAt: v.viewedAt,
       })),
     });

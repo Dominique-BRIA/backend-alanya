@@ -11,6 +11,7 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/calls — historique des appels de l'utilisateur (50 derniers).
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -189,7 +190,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       userId: p.userId,
       pseudo: nomAffichage(p.user),
       publicNumber: p.user.publicNumber,
-      avatarUrl: p.user.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(p.user.avatarUrl ?? null),
     }));
 
   const meta = await conversationMeta(call.convId);

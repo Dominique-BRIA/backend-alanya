@@ -7,6 +7,7 @@ import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { recordAccess } from "@/lib/user-access";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // POST /api/auth/login
 // Connexion par email OU par numéro public (6 ou 8 chiffres) + mot de passe.
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
         email: user.email,
         publicNumber: user.publicNumber,
         pseudo: nomAffichage(user),
-        avatarUrl: user.avatarUrl ?? null,
+        avatarUrl: avatarPublicUrl(user.avatarUrl ?? null),
         isOnline: 1,
       },
       ...tokens,

@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { createMeetingSchema } from "@/lib/validation";
 import { randomUUID } from "crypto";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/meetings — liste les meetings de l'utilisateur (organisés ou participés).
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -37,14 +38,14 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
         id: m.organiser.id,
         pseudo: nomAffichage(m.organiser),
         publicNumber: m.organiser.publicNumber,
-        avatarUrl: m.organiser.avatarUrl ?? null,
+        avatarUrl: avatarPublicUrl(m.organiser.avatarUrl ?? null),
       },
       participants: m.participants.map((p) => ({
         ID: p.ID,
         IDparticipant: p.IDparticipant,
         pseudo: nomAffichage(p.user),
         publicNumber: p.user.publicNumber,
-        avatarUrl: p.user.avatarUrl ?? null,
+        avatarUrl: avatarPublicUrl(p.user.avatarUrl ?? null),
         status: p.status,
         connecte: p.connecte,
         start_time: p.start_time,

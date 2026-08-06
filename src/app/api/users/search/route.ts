@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { publicNumberSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 export async function OPTIONS() {
   return new Response(null, {
@@ -40,7 +41,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     id: found.id,
     publicNumber: found.publicNumber,
     pseudo: nomAffichage(found),
-    avatarUrl: found.avatarUrl ?? null,
+    avatarUrl: avatarPublicUrl(found.avatarUrl ?? null),
     statusMsg: found.statusMsg ?? null,
     alreadyContact: Boolean(existing),
   });

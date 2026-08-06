@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/conversations/:id/members — liste les membres du groupe.
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -28,7 +29,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       id: p.userId,
       pseudo: nomAffichage(p.user),
       publicNumber: p.user.publicNumber,
-      avatarUrl: p.user.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(p.user.avatarUrl ?? null),
       // Confidentialité : masque la présence d'un membre qui a choisi « personne ».
       isOnline:
         p.userId !== userId && p.user.lastSeenVisibility === 0

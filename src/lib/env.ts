@@ -19,6 +19,13 @@ export const env = {
 
   databaseUrl: () => required("DATABASE_URL"),
 
+  /// Origine publique du serveur, utilisée pour bâtir les URL renvoyées aux
+  /// clients. Elle vit ici et NON dans les données : le jour où le domaine
+  /// change, ou où les fichiers passent derrière un serveur dédié, c'est cette
+  /// seule valeur qui bouge — aucune ligne à migrer.
+  /// Sans barre finale : les chemins qu'on lui accole commencent par « / ».
+  publicBaseUrl: optional("PUBLIC_BASE_URL", "https://alanyavox.com").replace(/\/+$/, ""),
+
   jwt: {
     accessSecret: () => required("JWT_ACCESS_SECRET"),
     refreshSecret: () => required("JWT_REFRESH_SECRET"),

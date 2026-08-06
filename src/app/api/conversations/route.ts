@@ -6,6 +6,7 @@ import { createConversationSchema } from "@/lib/validation";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { serialiseAppelPour } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // Convertit le type entier (BD) en string (API)
 function _typeToString(t: number | null): string {
@@ -118,7 +119,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       id: conv.id,
       isGroup: conv.isGroup,
       title,
-      avatarUrl: conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null),
       members: conv.participants.map((pp) => {
         // Confidentialité : masque la présence d'un pair qui a choisi « personne ».
         const hidePresence =

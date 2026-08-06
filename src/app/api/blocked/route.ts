@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { blockUserSchema } from "@/lib/validation";
 import { mirrorContactBlock } from "@/lib/blocking";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/blocked — liste des utilisateurs bloqués par l'utilisateur connecté.
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -48,7 +49,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       idCallerBlock: b.idCallerBlock,
       pseudo: nomAffichage(b.blockedUser),
       publicNumber: b.blockedUser.publicNumber,
-      avatarUrl: b.blockedUser.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(b.blockedUser.avatarUrl ?? null),
       dateBlock: b.dateBlock,
     })),
     blockedBy: blockedBy.map((b) => ({
@@ -57,7 +58,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       idCallerBlock: b.alanyaID,
       pseudo: nomAffichage(b.owner),
       publicNumber: b.owner.publicNumber,
-      avatarUrl: b.owner.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(b.owner.avatarUrl ?? null),
       dateBlock: b.dateBlock,
     })),
   });

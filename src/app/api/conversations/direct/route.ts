@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // POST /api/conversations/direct — cherche ou crée une conversation 1-to-1.
 // Body: { targetUserId: string }
@@ -27,6 +28,6 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     id: conv.id,
     isGroup: false,
     title: nomAffichage(target) ?? "Inconnu",
-    avatarUrl: target.avatarUrl ?? null,
+    avatarUrl: avatarPublicUrl(target.avatarUrl ?? null),
   });
 });

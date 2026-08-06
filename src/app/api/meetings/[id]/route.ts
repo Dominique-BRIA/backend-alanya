@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/meetings/:id — détail d'une réunion avec tous les participants.
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -42,14 +43,14 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       id: meeting.organiser.id,
       pseudo: nomAffichage(meeting.organiser),
       publicNumber: meeting.organiser.publicNumber,
-      avatarUrl: meeting.organiser.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(meeting.organiser.avatarUrl ?? null),
     },
     participants: meeting.participants.map((p) => ({
       ID: p.ID,
       IDparticipant: p.IDparticipant,
       pseudo: nomAffichage(p.user),
       publicNumber: p.user.publicNumber,
-      avatarUrl: p.user.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(p.user.avatarUrl ?? null),
       status: p.status,
       connecte: p.connecte,
       start_time: p.start_time,

@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { z } from "zod";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 const matchSchema = z.object({
   numbers: z
@@ -76,7 +77,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       id: u.id,
       publicNumber: u.publicNumber,
       pseudo: nomAffichage(u),
-      avatarUrl: u.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(u.avatarUrl ?? null),
       statusMsg: u.statusMsg ?? null,
       alreadyContact: alreadySet.has(u.id),
     })),

@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { addContactSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 interface ContactWithUser {
   id: string;
@@ -47,7 +48,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
         id: c.contact.id,
         publicNumber: c.contact.publicNumber,
         pseudo: nomAffichage(c.contact),
-        avatarUrl: c.contact.avatarUrl ?? null,
+        avatarUrl: avatarPublicUrl(c.contact.avatarUrl ?? null),
         statusMsg: c.contact.statusMsg ?? null,
       },
     })),
@@ -93,7 +94,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
         id: created.contact.id,
         publicNumber: created.contact.publicNumber,
         pseudo: nomAffichage(created.contact),
-        avatarUrl: created.contact.avatarUrl ?? null,
+        avatarUrl: avatarPublicUrl(created.contact.avatarUrl ?? null),
       },
     },
     201,

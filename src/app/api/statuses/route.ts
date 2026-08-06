@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createStatusSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { avatarPublicUrl } from "@/lib/avatar";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -67,7 +68,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     return {
       userId: uid,
       pseudo: nomAffichage(u),
-      avatarUrl: u.avatarUrl ?? null,
+      avatarUrl: avatarPublicUrl(u.avatarUrl ?? null),
       publicNumber: u.publicNumber,
       hasUnviewed: list.some((s) => s.views.length === 0),
       statuses: list.map(mapStatus),
