@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { fail, handleError, HttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import { formesStockeesPour } from "@/lib/avatar";
 import { readStored, getSignedDownloadUrl, useCloudStorage } from "@/modules/media/storage";
 
 /**
@@ -33,10 +34,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     // Les photos de GROUPE comptent autant que celles de personnes — elles
     // s'affichent dans la même liste de discussions. Elles vivent dans
     // `conversation.groupPhoto`, pas dans `users`, d'où les deux recherches.
-    const chemin = `/api/media/${id}`;
+    const formes = formesStockeesPour(id);
     const [estAvatarCompte, estPhotoGroupe] = await Promise.all([
-      prisma.user.findFirst({ where: { avatarUrl: chemin }, select: { id: true } }),
-      prisma.conversation.findFirst({ where: { avatarUrl: chemin }, select: { id: true } }),
+      prisma.user.findFirst({ where: { avatarUrl: { in: formes } }, select: { id: true } }),
+      prisma.conversation.findFirst({ where: { avatarUrl: { in: formes } }, select: { id: true } }),
     ]);
     if (!estAvatarCompte && !estPhotoGroupe) {
       return fail("Avatar introuvable", 404, "NOT_FOUND");

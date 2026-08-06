@@ -4,7 +4,7 @@ import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { updateProfileSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
-import { avatarPublicUrl } from "@/lib/avatar";
+import { avatarPublicUrl, avatarStockage } from "@/lib/avatar";
 
 // PATCH /api/account/profile — met à jour le profil de l'utilisateur connecté.
 // F4 : écrit directement dans users (plus de table profiles).
@@ -15,7 +15,7 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string) => {
     where: { id: userId },
     data: {
       ...(data.pseudo !== undefined && { pseudo: data.pseudo }),
-      ...(data.avatarUrl !== undefined && { avatarUrl: data.avatarUrl }),
+      ...(data.avatarUrl !== undefined && { avatarUrl: avatarStockage(data.avatarUrl) }),
       ...(data.statusMsg !== undefined && { statusMsg: data.statusMsg }),
     },
   });

@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { fail, handleError, HttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { withAuth, requireUser, UnauthorizedError } from "@/lib/auth-context";
+import { formesStockeesPour } from "@/lib/avatar";
 import { verifyAccessToken } from "@/lib/jwt";
 import {
   readStored,
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const isAvatar = !isOwner && !isParticipant
       ? Boolean(
           await prisma.user.findFirst({
-            where: { avatarUrl: `/api/media/${id}` },
+            where: { avatarUrl: { in: formesStockeesPour(id) } },
             select: { id: true },
           }),
         )

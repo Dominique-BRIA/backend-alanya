@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { avatarStockage } from "@/lib/avatar";
 
 // PATCH /api/conversations/:id — modifier le nom/avatar d'un groupe.
 // Seul un admin peut modifier.
@@ -26,7 +27,7 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   const data: any = {};
   if (body.name !== undefined) data.name = body.name;
-  if (body.avatarUrl !== undefined) data.avatarUrl = body.avatarUrl;
+  if (body.avatarUrl !== undefined) data.avatarUrl = avatarStockage(body.avatarUrl);
 
   if (Object.keys(data).length === 0) {
     return fail("Aucune modification", 400, "NO_CHANGES");
