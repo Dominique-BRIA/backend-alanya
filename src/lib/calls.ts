@@ -62,5 +62,11 @@ export async function activeCallParticipants(callId: string) {
   return parts.map((p) => ({
     userId: p.userId,
     displayName: nomAffichage(p.user) ?? p.user.publicNumber,
+    // L'avatar manquait, et c'est le seul endroit d'où le client peut le
+    // tenir quand il décroche APPLICATION FERMÉE : il n'a alors pas reçu
+    // l'événement WebSocket d'appel entrant, qui le portait jusqu'ici. Son
+    // écran d'appel restait donc sans photo, alors qu'il en affiche une quand
+    // l'application était ouverte.
+    avatarUrl: p.user.avatarUrl ?? null,
   }));
 }
