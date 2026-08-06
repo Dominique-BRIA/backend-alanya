@@ -1051,6 +1051,9 @@ model AdminRoot {
   AccesAdmins AccesAdmin[]
   Admins      Admin[]
 
+  FacturesRecues       Facture[]
+  JustificatifsEnvoyes JustificatifPaiement[] @relation("JustifUploadeurAdminRoot")
+
   @@map("adminroot")
 }
 
@@ -1061,7 +1064,13 @@ model PrixAbonnement {
   description  String? @db.Text
   isDelete     Boolean @default(false) @map("isDelete")
   idPays       Int?    @map("idpays")
+  /// Ce que ce tarif facture : 0 agent, 1 centre d'appel, 2 numéro court.
+  /// Les lignes de facture en gardent une copie — il ne sert qu'à choisir le
+  /// tarif applicable au moment du calcul.
+  type         Int     @default(0) @db.SmallInt
   pays         Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+
+  factureLignes FactureLigne[]
 
   @@map("prixabonnement")
 }
@@ -1113,6 +1122,20 @@ model Company {
   lon                Float?
   maxAgents          Int?      @default(20) @map("maxagents")
   maxAgentsPerCenter Int?      @default(5) @map("maxagentspercenter")
+
+  /// Adresses des services propres à l'entreprise. Les trois colonnes
+  /// existaient DÉJÀ en base, en VARCHAR(50), sans figurer dans ce schéma —
+  /// elles étaient donc invisibles du code. Élargies à 255 par la migration :
+  /// cinquante caractères ne suffisent pas à une URL.
+  urlServeur  String? @map("url_serveur") @db.VarChar(255)
+  urlMedia    String? @map("url_media") @db.VarChar(255)
+  urlDoc      String? @map("url_doc") @db.VarChar(255)
+  /// Numéro court attribué à l'entreprise ; facturé à part.
+  numeroCourt String? @map("numero_court") @db.VarChar(20)
+  /// Suppression logique, comme sur `service` et `prixabonnement`.
+  isDelete    Boolean @default(false) @map("isDelete")
+
+  Factures Facture[]
 
   Users      User[]
   Admins     Admin[]
@@ -1267,4 +1290,129 @@ model AccesAdmin {
   @@index([idAdmin], map: "accesadmin_idadmin_idx")
   @@index([idRoot], map: "accesadmin_idroot_idx")
   @@map("accesadmin")
+}
+
+// ===============================================================
+// Facturation des entreprises
+// ===============================================================
+// Volet sans risque du référentiel équipe (schéma du 05/08/2026) : que des
+// créations. Migration : `prisma/manual/2026-08_facturation.sql`.
+
+enum FactureStatut {
+  BROUILLON // calculée, pas encore transmise au Super Admin
+  ENVOYEE // transmise, en attente de justificatif validé
+  PAYEE // justificatif validé
+}
+
+enum JustificatifStatut {
+  EN_ATTENTE
+  VALIDE
+  REJETE
+}
+
+/// Comptes techniques de la facturation — à ne pas confondre avec
+/// [AdminRoot], qui administre les entreprises. `type` : 0 lecture,
+/// 1 lecture/écriture, 2 comptable.
+model Root {
+  idRoot   Int    @id @default(autoincrement()) @map("idRoot")
+  username String @unique @db.VarChar(50)
+  password String @db.VarChar(255)
+  type     Int    @default(0) @db.SmallInt
+  actif    Int    @default(1) @db.SmallInt
+
+  FacturesCreees       Facture[]
+  JustificatifsEnvoyes JustificatifPaiement[] @relation("JustifUploadeurRoot")
+  JustificatifsValides JustificatifPaiement[] @relation("JustifValidateur")
+}
+
+/// Facture annuelle d'une entreprise.
+///
+/// `companyLibelle` est une COPIE du nom au moment de l'émission, et non une
+/// jointure : une facture doit rester lisible telle qu'elle a été émise, même
+/// si l'entreprise est renommée ensuite. Même raison pour les libellés de
+/// lignes et leurs prix.
+model Facture {
+  idFacture      Int     @id @default(autoincrement())
+  numero         String  @unique @db.VarChar(30)
+  idCompany      Int
+  /// RESTRICT et non Cascade : supprimer une entreprise ne doit pas effacer
+  /// son historique comptable.
+  company        Company @relation(fields: [idCompany], references: [idCompany], onDelete: Restrict)
+  companyLibelle String  @db.VarChar(60)
+
+  idSuperAdmin Int?
+  superAdmin   AdminRoot? @relation(fields: [idSuperAdmin], references: [idRoot], onDelete: SetNull)
+
+  createdByRootId Int?
+  createdByRoot   Root? @relation(fields: [createdByRootId], references: [idRoot], onDelete: SetNull)
+
+  annee        Int
+  periodeDebut DateTime @db.Date
+  periodeFin   DateTime @db.Date
+
+  nombreAgents       Int
+  nombreCentresAppel Int
+  aNumeroCourt       Boolean
+
+  montantTotal Decimal       @db.Decimal(12, 2)
+  statut       FactureStatut @default(BROUILLON)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz
+  envoyeeAt DateTime? @db.Timestamptz
+  payeeAt   DateTime? @db.Timestamptz
+
+  lignes        FactureLigne[]
+  justificatifs JustificatifPaiement[]
+
+  @@index([idCompany, annee], map: "facture_company_annee_idx")
+  @@index([idSuperAdmin], map: "facture_superadmin_idx")
+  @@map("facture")
+}
+
+/// Ligne de facture. `type` : 0 agent, 1 centre d'appel, 2 numéro court.
+model FactureLigne {
+  idLigne   Int     @id @default(autoincrement())
+  idFacture Int
+  facture   Facture @relation(fields: [idFacture], references: [idFacture], onDelete: Cascade)
+
+  idPrixAbonnement Int?
+  prixAbonnement   PrixAbonnement? @relation(fields: [idPrixAbonnement], references: [idAbonnement], onDelete: SetNull)
+  libelleSnapshot  String          @db.VarChar(100)
+  type             Int             @db.SmallInt
+
+  quantite     Int
+  prixUnitaire Decimal @db.Decimal(10, 2)
+  montantLigne Decimal @db.Decimal(12, 2)
+
+  @@index([idFacture], map: "facture_ligne_facture_idx")
+  @@map("facture_ligne")
+}
+
+/// Justificatif de paiement d'une facture.
+///
+/// Deux dépositaires possibles — un administrateur d'entreprise ou un compte
+/// technique — d'où deux clés étrangères distinctes plutôt qu'une colonne
+/// unique dont on ne saurait pas quelle table elle désigne.
+model JustificatifPaiement {
+  idJustificatif Int     @id @default(autoincrement())
+  idFacture      Int
+  facture        Facture @relation(fields: [idFacture], references: [idFacture], onDelete: Cascade)
+
+  fichierUrl String @db.VarChar(255)
+
+  uploadedByAdminRootId Int?
+  uploadedByAdminRoot   AdminRoot? @relation("JustifUploadeurAdminRoot", fields: [uploadedByAdminRootId], references: [idRoot], onDelete: SetNull)
+  uploadedByRootId      Int?
+  uploadedByRoot        Root?      @relation("JustifUploadeurRoot", fields: [uploadedByRootId], references: [idRoot], onDelete: SetNull)
+
+  statut            JustificatifStatut @default(EN_ATTENTE)
+  raisonRejet       String?            @db.Text
+  validatedByRootId Int?
+  validatedByRoot   Root?              @relation("JustifValidateur", fields: [validatedByRootId], references: [idRoot], onDelete: SetNull)
+  validatedAt       DateTime?          @db.Timestamptz
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([idFacture], map: "justificatif_facture_idx")
+  @@map("justificatif_paiement")
 }
