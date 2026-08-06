@@ -117,6 +117,10 @@ model User {
   customerChats   CustomerChat[]
   rapportsAgent   RapportChat[]
   bordereauxAgent BordereauAgent[]
+  /// Transferts que CET agent a effectués — distinct des services émetteur et
+  /// destinataire, qui disent d'où vient le rapport et où il va, pas qui l'a
+  /// déplacé.
+  transfertsAgent Transferer[]     @relation("TransfertAgent")
 
   // --- Organisation / centre d'appels (référentiel équipe) ---
   // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
@@ -229,27 +233,32 @@ model CustomerChat {
 /// `idRapport` comme nom de colonne étrangère, également d'après le modèle.
 model RapportChat {
   idRap        Int          @id @default(autoincrement())
-  idCustomer   Int
-  customerChat CustomerChat @relation(fields: [idCustomer], references: [id], onDelete: Cascade)
+  idCustomer   Int?
+  /// SetNull sur le client comme sur l'agent : retirer l'un ou l'autre ne doit
+  /// plus effacer le rapport, qui est justement la trace de leur échange.
+  customerChat CustomerChat? @relation(fields: [idCustomer], references: [id], onDelete: SetNull)
   /// Reste en UUID, là où le modèle tidesk le type en INT : nos agents SONT
   /// des utilisateurs, il n'existe pas de table d'agents séparée à cibler.
-  idAgent      String       @db.Uuid
-  agent        User         @relation(fields: [idAgent], references: [id], onDelete: Cascade)
+  idAgent      String?      @db.Uuid
+  agent        User?        @relation(fields: [idAgent], references: [id], onDelete: SetNull)
   resume       String?      @db.Text
-  subject      String?      @db.VarChar(200)
+  /// Obligatoire : un rapport sans objet n'est pas exploitable.
+  subject      String       @db.VarChar(150)
   /// Numéro de rappel du client, saisi par l'agent. Ajouté directement en base
   /// par l'équipe ; ce champ ne fait que refléter la colonne existante —
   /// `character varying(20)`, nullable, relevée sur la prod le 31/07/2026.
   mobile       String?      @db.VarChar(20)
 
   /// Gravité du problème — nomenclature, et non plus un entier libre.
-  idDegreRapport Int?           @db.SmallInt
+  /// Entier, comme la clé qu'il référence.
+  idDegreRapport Int?
   degre          DegreRapport?  @relation(fields: [idDegreRapport], references: [idDegreRapport], onDelete: SetNull)
   /// Nature du problème — nomenclature, avec sa couleur d'affichage.
   idNature       Int?           @db.SmallInt
   nature         NatureRapport? @relation(fields: [idNature], references: [idNature], onDelete: SetNull)
   /// Avancement du traitement.
-  traiter        Int?           @db.SmallInt
+  /// État, et non information optionnelle : non traité par défaut.
+  traiter        Int            @default(0) @db.SmallInt
   /// Déplacé depuis `customerChat` : une session peut se terminer sans que la
   /// réclamation soit résolue, les deux notions ne se confondent pas.
   is_resolve     Boolean        @default(false)
@@ -276,7 +285,7 @@ model RapportChat {
 
   @@index([idCustomer], map: "rapportChat_idCustomer_idx")
   /// Les rapports d'un agent, du plus récent au plus ancien.
-  @@index([idAgent, start_time(sort: Desc)], map: "rapportChat_idAgent_date_idx")
+  @@index([idAgent], map: "rapportChat_idAgent_idx")
   @@index([idService], map: "rapportChat_idService_idx")
   @@index([idAgence], map: "rapportChat_idAgence_idx")
   @@map("rapportChat")
@@ -350,6 +359,14 @@ model Transferer {
   idRapport          Int
   rapport            RapportChat @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
 
+  /// Qui a transféré, et pourquoi. Le transfert ne retenait que les services :
+  /// on savait d'où venait un rapport et où il allait, jamais qui l'avait
+  /// déplacé ni pour quel motif. SetNull, pour que le départ de l'agent ne
+  /// fasse pas disparaître le transfert lui-même.
+  idAgent     String? @db.Uuid
+  agent       User?   @relation("TransfertAgent", fields: [idAgent], references: [id], onDelete: SetNull)
+  commentaire String? @db.Text
+
   @@index([idRapport, sent_at], map: "transferer_idRapport_idx")
   @@map("transferer")
 }
@@ -374,15 +391,18 @@ model BordereauAgent {
   idbordAgent Int         @id @default(autoincrement())
   idRapport   Int
   rapport     RapportChat @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-  idAgent     String      @db.Uuid
-  agent       User        @relation(fields: [idAgent], references: [id], onDelete: Cascade)
+  idAgent     String?     @db.Uuid
+  /// SetNull : retirer un agent ne doit plus emporter ses bordereaux.
+  agent       User?       @relation(fields: [idAgent], references: [id], onDelete: SetNull)
   start_time  DateTime    @default(now()) @db.Timestamptz
   end_time    DateTime?   @db.Timestamptz
 
   commentaires Commentaire[]
 
   @@index([idRapport], map: "bordereauAgent_idRapport_idx")
-  @@index([idAgent, start_time(sort: Desc)], map: "bordereauAgent_idAgent_idx")
+  /// Ramené à la seule colonne d'agent : on cherche les bordereaux D'UN agent,
+  /// jamais l'ensemble trié par date.
+  @@index([idAgent], map: "bordereauAgent_idAgent_idx")
   @@map("bordereauAgent")
 }
 
@@ -393,10 +413,12 @@ model BordereauAgent {
 model Commentaire {
   idCom       Int             @id @default(autoincrement())
   idBordAgent Int?
-  bordereau   BordereauAgent? @relation(fields: [idBordAgent], references: [idbordAgent], onDelete: Cascade)
+  /// SetNull : le bordereau peut disparaître, le commentaire reste.
+  bordereau   BordereauAgent? @relation(fields: [idBordAgent], references: [idbordAgent], onDelete: SetNull)
   idRapport   Int
   rapport     RapportChat     @relation(fields: [idRapport], references: [idRap], onDelete: Cascade)
-  content     String?         @db.Text
+  /// Obligatoire : un commentaire vide n'a pas de sens.
+  content     String          @db.Text
   created_at  DateTime        @default(now()) @db.Timestamptz
 
   @@index([idRapport, created_at], map: "commentaire_idRapport_idx")
