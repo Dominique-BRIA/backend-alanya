@@ -65,6 +65,34 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const hasMore = messages.length > limit;
   const page = hasMore ? messages.slice(0, limit) : messages;
 
+  /**
+   * Pseudos d'appareil, pour MES propres messages seulement.
+   *
+   * Le pseudo dit quel appareil du compte a écrit ; il ne regarde que ce
+   * compte. On ne le charge donc que pour les messages dont je suis
+   * l'expéditeur — les autres n'ont même pas à être interrogés, et le champ
+   * n'apparaîtra pas dans leur charge. Le filtrage est ici, pas côté client.
+   */
+  const mesAppareils = [
+    ...new Set(
+      page
+        .filter((m) => m.senderId === userId && m.appareilId != null)
+        .map((m) => m.appareilId as number),
+    ),
+  ];
+  const pseudoParAppareil = new Map<number, string>();
+  if (mesAppareils.length > 0) {
+    const lignes = await prisma.appareil.findMany({
+      // idAgent en plus de l'id : la ceinture et les bretelles, au cas où un
+      // message porterait l'appareil d'un autre compte.
+      where: { appareilId: { in: mesAppareils }, idAgent: userId },
+      select: { appareilId: true, nomAgent: true },
+    });
+    for (const l of lignes) {
+      if (l.nomAgent) pseudoParAppareil.set(l.appareilId, l.nomAgent);
+    }
+  }
+
   // --- Snapshots des messages cités (replyTo) ---
   // On récupère en une seule requête tous les messages référencés par replyToId,
   // pour pouvoir afficher l'aperçu côté UI même si le message original n'est pas
@@ -116,6 +144,10 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
           durationMs: f.durationMs,
         })),
         createdAt: m.createdAt,
+        // Absent — et non pas vide — quand le lecteur n'a pas à le voir.
+        ...(m.senderId === userId && m.appareilId != null && pseudoParAppareil.has(m.appareilId)
+          ? { nomAgent: pseudoParAppareil.get(m.appareilId) }
+          : {}),
       };
     }),
     nextCursor: hasMore ? page[page.length - 1]!.id : null,

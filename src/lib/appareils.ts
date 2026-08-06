@@ -13,6 +13,7 @@ export type AppareilJson = {
   isOnline: boolean;
   typeDevice: number;
   system: string | null;
+  nomAgent: string | null;
   createAt: string;
   lastLogin: string | null;
   /// `true` si l'appareil a été déconnecté à distance. La ligne est conservée
@@ -30,6 +31,15 @@ export function serializeAppareil(a: Appareil): AppareilJson {
     isOnline: a.isOnline === 1,
     typeDevice: a.typeDevice,
     system: a.system,
+    /**
+     * Pseudo donné à cet appareil pour ce compte.
+     *
+     * Il n'apparaît que dans la liste des appareils et au-dessus des messages
+     * du compte : ce n'est pas un nom d'affichage, et il ne sort jamais vers un
+     * autre compte. Ici la route est déjà filtrée sur `idAgent = moi`, donc on
+     * ne sert que ses propres appareils.
+     */
+    nomAgent: a.nomAgent,
     createAt: a.createAt.toISOString(),
     lastLogin: a.lastLogin ? a.lastLogin.toISOString() : null,
     revoked: a.destroy === 1,

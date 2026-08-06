@@ -559,6 +559,17 @@ model Message {
   conv      Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
   sender    User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   content   String? // texte (null pour médias purs)
+  /// Appareil qui a envoyé le message, quand le client l'a indiqué.
+  ///
+  /// `senderId` dit quel COMPTE a écrit ; cette colonne dit lequel de ses
+  /// appareils — un numéro professionnel peut être partagé entre plusieurs
+  /// agents. Elle sert à afficher le pseudo de l'appareil au-dessus du message,
+  /// et UNIQUEMENT aux appareils du même compte.
+  ///
+  /// Nullable : tout l'historique existant n'en a pas, et un client qui ne
+  /// l'envoie pas reste valide. Pas de clé étrangère — la ligne d'appareil peut
+  /// disparaître sans emporter les messages déjà envoyés.
+  appareilId Int?             @map("appareilID")
   type      MessageType       @default(TEXT)
   status    MessageStatus     @default(SENT)
   replyToId String?           @map("replyToID") @db.Uuid
@@ -576,6 +587,7 @@ model Message {
 
   @@index([convId, createdAt])
   @@index([senderId])
+  @@index([appareilId])
   @@map("message")
 }
 

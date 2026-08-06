@@ -646,6 +646,14 @@ async function purgerVerrousPerimes() {
 async function handleSend(ws, msg) {
   // MODIFICATION : ajoute mediaIds pour multi-médias
   const { convId, content, tempId, mediaId, mediaIds } = msg;
+  /**
+   * Appareil emetteur, quand le client l'indique.
+   *
+   * Il sert a etiqueter le message du pseudo de l'appareil, visible seulement
+   * par les autres appareils du meme compte. On ne fait PAS confiance a ce que
+   * le client affirme : l'appartenance est verifiee plus bas contre le registre.
+   */
+  const appareilAnnonce = Number(msg.appareilId ?? 0);
   let type = msg.msgType ?? "TEXT";
   if (!convId) return;
 
@@ -721,10 +729,27 @@ async function handleSend(ws, msg) {
   const ttl = convCfg?.disappearingSeconds ?? 0;
   const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
 
+  // L'appareil doit appartenir au compte qui envoie. Sans ce controle, n'importe
+  // qui pourrait attribuer son message a l'appareil d'un collegue.
+  let appareilEmetteur = null;
+  if (Number.isFinite(appareilAnnonce) && appareilAnnonce > 0) {
+    const ligne = await prisma.appareil.findFirst({
+      where: { appareilId: appareilAnnonce, idAgent: ws.userId },
+      select: { appareilId: true, nomAgent: true },
+    });
+    if (ligne) {
+      appareilEmetteur = ligne;
+      // On retient l'appareil sur la socket : le verrou s'en sert aussi pour
+      // rendre la main tout seul a la deconnexion.
+      ws.appareilId = ligne.appareilId;
+    }
+  }
+
   const created = await prisma.message.create({
     data: {
       convId,
       senderId: ws.userId,
+      appareilId: appareilEmetteur?.appareilId ?? null,
       content: content ?? null,
       type,
       status: "SENT",
@@ -768,10 +793,19 @@ async function handleSend(ws, msg) {
   }
 
   const messageWithStatus = { ...serialized, status: finalStatus };
+  /**
+   * Le pseudo d'appareil n'est ajoute QUE dans la charge destinee au compte
+   * emetteur — c'est-a-dire a ses propres appareils. Les autres comptes ne le
+   * recoivent pas du tout : on ne compte pas sur le client pour le cacher.
+   */
+  const pourMoi =
+    appareilEmetteur?.nomAgent
+      ? { ...messageWithStatus, nomAgent: appareilEmetteur.nomAgent }
+      : messageWithStatus;
   for (const uid of recipients) {
     sendTo(uid, {
       type: "message",
-      message: messageWithStatus,
+      message: uid === ws.userId ? pourMoi : messageWithStatus,
       tempId: uid === ws.userId ? tempId : undefined,
     });
   }
