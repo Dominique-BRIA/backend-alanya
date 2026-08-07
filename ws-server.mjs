@@ -742,6 +742,36 @@ async function handleSend(ws, msg) {
   const ttl = convCfg?.disappearingSeconds ?? 0;
   const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
 
+  /**
+   * Verrou de conversation : un poste qui n'a pas la main n'ecrit pas.
+   *
+   * Le controle vivait uniquement dans l'interface web — la barre de saisie y
+   * disparait. Un client qui ne l'implemente pas (le mobile) ou un client
+   * modifie pouvait donc ecrire dans une conversation reservee. La regle
+   * s'applique desormais ici, ou personne ne peut la contourner.
+   *
+   * Comme pour les appels, on ne refuse que si la socket s'est annoncee : sans
+   * identite, on ne peut pas distinguer le detenteur d'un autre poste, et
+   * refuser reviendrait a l'empecher d'ecrire dans SA propre reservation. Cette
+   * tolerance disparait des que le client envoie `device`.
+   */
+  if (ws.appareilId != null) {
+    const detenteur = await detenteurDuVerrou(convId, ws.userId);
+    if (detenteur !== null && detenteur !== ws.appareilId) {
+      ws.send(
+        JSON.stringify({
+          type: "conversation_lock",
+          convId,
+          locked: true,
+          appareilId: detenteur,
+          detenteur: null,
+          expiresAt: null,
+        }),
+      );
+      return;
+    }
+  }
+
   // L'appareil doit appartenir au compte qui envoie. Sans ce controle, n'importe
   // qui pourrait attribuer son message a l'appareil d'un collegue.
   let appareilEmetteur = null;

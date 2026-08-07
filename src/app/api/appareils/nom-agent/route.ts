@@ -54,6 +54,31 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const ligne = await ligneAppareil(userId, body.cookiesWebId);
   if (!ligne) return fail("Appareil inconnu pour ce compte", 404, "NOT_FOUND");
 
+  /**
+   * Le pseudo est unique au sein du compte : deux postes appelés « Accueil »
+   * rendraient inutile la réponse à « qui a envoyé ce message ».
+   *
+   * L'index le garantit ; ce contrôle est là pour répondre une phrase
+   * compréhensible plutôt qu'une violation de contrainte. Deux numéros Alanya
+   * différents gardent chacun leur « Accueil » — la contrainte porte sur le
+   * couple (compte, pseudo).
+   */
+  const pris = await prisma.appareil.findFirst({
+    where: {
+      alanyaId: userId,
+      agent: body.nomAgent,
+      appareilId: { not: ligne.appareilId },
+    },
+    select: { appareilId: true },
+  });
+  if (pris) {
+    return fail(
+      "Un autre appareil de ce compte porte déjà ce nom",
+      409,
+      "NAME_TAKEN",
+    );
+  }
+
   const maj = await prisma.appareil.update({
     where: { appareilId: ligne.appareilId },
     data: { agent: body.nomAgent },
