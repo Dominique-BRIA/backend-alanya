@@ -145,8 +145,11 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         })),
         createdAt: m.createdAt,
         // Absent — et non pas vide — quand le lecteur n'a pas à le voir.
+        // Le pseudo ET l'appareil qui a envoyé, dans la même charge restreinte
+        // au compte. L'appareil sert au client à se reconnaître : un poste
+        // n'affiche pas son propre nom au-dessus de ses propres messages.
         ...(m.senderId === userId && m.appareilId != null && pseudoParAppareil.has(m.appareilId)
-          ? { nomAgent: pseudoParAppareil.get(m.appareilId) }
+          ? { nomAgent: pseudoParAppareil.get(m.appareilId), appareilId: m.appareilId }
           : {}),
       };
     }),

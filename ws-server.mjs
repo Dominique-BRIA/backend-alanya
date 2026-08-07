@@ -843,7 +843,16 @@ async function handleSend(ws, msg) {
    */
   const pourMoi =
     appareilEmetteur?.agent
-      ? { ...messageWithStatus, nomAgent: appareilEmetteur.agent }
+      ? {
+          ...messageWithStatus,
+          nomAgent: appareilEmetteur.agent,
+          // L'appareil emetteur voyage avec le pseudo, dans la MEME charge
+          // restreinte au compte. Il sert au client a se reconnaitre : un poste
+          // n'affiche pas son propre nom au-dessus de ses propres messages —
+          // il sait deja qui il est. Seuls les AUTRES appareils du compte le
+          // voient, et c'est tout l'interet.
+          appareilId: appareilEmetteur.appareilId,
+        }
       : messageWithStatus;
   for (const uid of recipients) {
     sendTo(uid, {
