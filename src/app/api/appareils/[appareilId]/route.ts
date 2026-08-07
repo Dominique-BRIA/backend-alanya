@@ -81,6 +81,19 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) =>
       data: { destroy: 1, isOnline: 0 },
     });
 
+    /**
+     * Ses réservations partent avec lui — et c'est la SEULE porte de sortie.
+     *
+     * Un verrou ne se périme plus : il survit à la déconnexion et n'est retiré
+     * que par son détenteur. Un appareil perdu, volé ou réinstallé garderait
+     * donc ses conversations réservées à jamais, sans personne pour les rendre.
+     *
+     * Déconnecter l'appareil depuis cet écran est l'issue : on ne « vole » pas
+     * son verrou à un collègue en activité, on retire un poste qui n'existe
+     * plus. Le geste est déjà volontaire et tracé.
+     */
+    await prisma.conversationLock.deleteMany({ where: { userId, appareilId } });
+
     // Le cœur de l'opération : couper l'accès. Retirer la ligne du registre
     // sans révoquer les sessions laissait l'appareil pleinement connecté —
     // une fausse assurance, précisément dans le cas où l'on s'en sert.

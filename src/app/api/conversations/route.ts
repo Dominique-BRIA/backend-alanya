@@ -84,12 +84,11 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   /**
    * Verrous poses par les appareils de ce compte, en une seule requete.
    *
-   * Les perimes sont ecartes a la lecture : le nettoyage periodique du serveur
-   * temps reel peut avoir jusqu'a 30 s de retard, et une conversation ne doit
-   * pas paraitre reservee alors qu'elle ne l'est plus.
+   * Un verrou ne se perime plus : il survit a la deconnexion et n'est retire
+   * que par son detenteur. Il n'y a donc plus rien a ecarter a la lecture.
    */
   const verrous = await prisma.conversationLock.findMany({
-    where: { userId, expiresAt: { gt: new Date() } },
+    where: { userId },
     select: { convId: true, appareilId: true, detenteur: true, expiresAt: true },
   });
   const verrousParConv = new Map(
