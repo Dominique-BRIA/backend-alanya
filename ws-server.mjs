@@ -85,6 +85,26 @@ function sendToAppareil(userId, appareilId, payload) {
  * lui. Ils suivent le fil en lecture, et retrouvent tous leurs droits des que
  * le detenteur rend la main.
  */
+/**
+ * Ce compte a-t-il au moins une socket qui a annonce son appareil ?
+ *
+ * C'est la question qui decide si une reservation est APPLICABLE. Le ciblage
+ * par appareil repose sur `{type:"device"}` ; un client qui ne l'envoie pas est
+ * invisible au ciblage, et vouloir lui reserver un appel revient a le faire
+ * disparaitre. Tant qu'aucune socket du compte ne s'identifie, on ne peut pas
+ * honorer le verrou — on prefere sonner partout plutot que nulle part.
+ *
+ * Des que le client s'annoncera, ce repli s'effacera de lui-meme.
+ */
+function compteIdentifie(userId) {
+  const set = clients.get(userId);
+  if (!set) return false;
+  for (const ws of set) {
+    if (ws.readyState === ws.OPEN && ws.appareilId != null) return true;
+  }
+  return false;
+}
+
 async function detenteurDuVerrou(convId, userId) {
   if (!convId) return null;
   const verrou = await prisma.conversationLock.findUnique({
@@ -1151,7 +1171,10 @@ async function handleCallRing(ws, msg) {
    * l'initiateur recoit l'etat qui le lui dit.
    */
   const monVerrou = await detenteurDuVerrou(call.convId, ws.userId);
-  if (monVerrou !== null && monVerrou !== ws.appareilId) {
+  // On ne refuse que si l'on sait a quel poste on parle. Une socket qui ne
+  // s'est pas annoncee — le mobile aujourd'hui — pourrait etre le detenteur
+  // lui-meme : la refuser l'empecherait d'appeler depuis SA propre reservation.
+  if (monVerrou !== null && ws.appareilId != null && monVerrou !== ws.appareilId) {
     ws.send(
       JSON.stringify({
         type: "call_state",
@@ -1227,12 +1250,38 @@ async function handleCallRing(ws, msg) {
      * comportement d'avant — mieux vaut sonner sur un poste de trop que pas du
      * tout.
      */
+    /*
+     * AFFINAGE DU 07/08/2026 — le repli ne vaut que si l'on ne PEUT pas cibler.
+     *
+     * Le correctif du 06/08 retombait sur « tout le monde sonne » des que le
+     * detenteur n'etait pas joint. Sur un compte dont les appareils s'annoncent,
+     * cela laissait fuir la reservation : il suffisait que le poste detenteur
+     * se mette en veille pour que les autres se remettent a sonner, alors qu'ils
+     * ne peuvent ni ecrire ni appeler.
+     *
+     * On distingue donc deux situations :
+     *
+     *  - Le compte a au moins une socket identifiee. Le ciblage fonctionne : si
+     *    le detenteur ne repond pas, c'est qu'il est absent, et la reservation
+     *    tient. Personne d'autre ne sonne. Le verrou expire de lui-meme au bout
+     *    de deux minutes sans signe de vie, ce qui rend la main automatiquement
+     *    — le silence est donc borne, jamais definitif.
+     *
+     *  - Aucune socket identifiee (cas du mobile aujourd'hui). On ne sait pas
+     *    qui est qui : reserver reviendrait a faire disparaitre l'appel. On
+     *    retombe sur le comportement d'avant, exactement comme le voulait le
+     *    correctif du 06/08.
+     */
     const reservationHonoree = delivered;
-    if (!delivered) delivered = sendTo(uid, payload);
+    const peutCibler = detenteur !== null && compteIdentifie(uid);
 
-    if (!delivered) bufferPendingCall(uid, payload);
+    if (!delivered && !peutCibler) delivered = sendTo(uid, payload);
 
-    if (isPushEnabled() && !reservationHonoree) {
+    // Un appel reserve n'est pas mis en attente : le rejouer plus tard sur un
+    // autre poste contournerait la reservation.
+    if (!delivered && !peutCibler) bufferPendingCall(uid, payload);
+
+    if (isPushEnabled() && !reservationHonoree && !peutCibler) {
       await pushIncomingCall(prisma, {
         recipientId: uid,
         callId,
