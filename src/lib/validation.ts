@@ -161,6 +161,19 @@ export const addMeetingParticipantsSchema = z.object({
     .max(50),
 });
 
+/// Un participant propose UNE personne à l'organisateur.
+///
+/// Un seul numéro, et non un tableau : chaque proposition se tranche
+/// séparément, un lot obligerait l'organisateur à accepter ou refuser en bloc.
+export const createInviteRequestSchema = z.object({
+  publicNumber: publicNumberSchema,
+});
+
+/// Décision de l'organisateur sur une demande.
+export const decideInviteRequestSchema = z.object({
+  accepter: z.boolean(),
+});
+
 export const createMeetingSchema = z.object({
   objet: z.string().trim().min(1, "L'objet est requis").max(200),
   type_media: z.number().int().min(1).max(2),

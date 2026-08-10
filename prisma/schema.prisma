@@ -110,6 +110,8 @@ model User {
   // --- Nouvelles relations (schéma PDF) ---
   organizedMeetings     Meeting[]            @relation("MeetingOrganizer")
   meetingParticipations MeetingParticipant[] @relation("MeetingParticipantUser")
+  demandesFormulees     MeetingInviteRequest[] @relation("MeetingRequestAuthor")
+  demandesRecues        MeetingInviteRequest[] @relation("MeetingRequestInvitee")
   blockedUsers          Blocked[]            @relation("BlockOwner")
   blockedByUsers        Blocked[]            @relation("BlockedUser")
   conversationLocks     ConversationLock[]
@@ -903,9 +905,38 @@ model Meeting {
 
   participants MeetingParticipant[]
   rappel       MeetingRappel?
+  demandes     MeetingInviteRequest[]
 
   @@index([idOrganiser])
   @@map("meeting")
+}
+
+/// Demande d'un participant pour faire entrer quelqu'un dans une réunion.
+///
+/// Tant que l'organisateur n'a pas tranché, la personne proposée n'existe pas
+/// pour la réunion : elle n'est pas dans `participant` et n'apprend RIEN.
+///
+/// ⚠️ L'unicité porte sur (idMeeting, invite) et NON sur le demandeur : c'est
+/// elle qui applique la règle « un refus est définitif ». La ligne refusée reste
+/// et bloque toute nouvelle demande concernant cette personne, quel que soit
+/// celui qui la formule — sans quoi un participant refusé n'aurait qu'à faire
+/// redemander par un collègue.
+model MeetingInviteRequest {
+  id            Int       @id @default(autoincrement())
+  idMeeting     Int
+  meeting       Meeting   @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
+  demandeurId   String    @map("demandeur") @db.Uuid
+  demandeur     User      @relation("MeetingRequestAuthor", fields: [demandeurId], references: [id], onDelete: Cascade)
+  inviteId      String    @map("invite") @db.Uuid
+  invite        User      @relation("MeetingRequestInvitee", fields: [inviteId], references: [id], onDelete: Cascade)
+  /// 0 = en attente, 1 = acceptée, 2 = refusée.
+  statut        Int       @default(0) @db.SmallInt
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  decidedAt     DateTime? @map("decided_at") @db.Timestamptz
+
+  @@unique([idMeeting, inviteId], map: "meeting_invite_request_unique")
+  @@index([idMeeting, statut], map: "meeting_invite_request_meeting_statut_idx")
+  @@map("meeting_invite_request")
 }
 
 /// Rappel des 5 minutes DÉJÀ ENVOYÉ pour une réunion.

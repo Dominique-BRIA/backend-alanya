@@ -1,6 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
-import { pushMeetingInvitation } from "../../push.mjs";
+import {
+  pushMeetingInvitation,
+  pushMeetingRequest,
+  pushMeetingRequestDecided,
+} from "../../push.mjs";
 
 export function isPushConfigured(): boolean {
   return env.push.enabled();
@@ -44,4 +48,31 @@ export async function notifieInvitationReunion(args: {
   enCours?: boolean;
 }): Promise<void> {
   await pushMeetingInvitation(prisma, args);
+}
+
+/** Prévient l'organisateur qu'on lui demande de faire entrer quelqu'un. */
+export async function notifieDemandeReunion(args: {
+  recipientId: string;
+  meetingId: number;
+  objet: string;
+  demandeurName: string;
+  inviteName: string;
+}): Promise<void> {
+  await pushMeetingRequest(prisma, args);
+}
+
+/**
+ * Annonce la décision au DEMANDEUR — et à lui seul.
+ *
+ * La personne proposée n'apprend jamais qu'un refus a eu lieu, ni même qu'une
+ * demande a existé.
+ */
+export async function notifieDecisionDemandeReunion(args: {
+  recipientId: string;
+  meetingId: number;
+  objet: string;
+  inviteName: string;
+  accepte: boolean;
+}): Promise<void> {
+  await pushMeetingRequestDecided(prisma, args);
 }

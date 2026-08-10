@@ -273,6 +273,64 @@ export async function pushMeetingReminder(prisma, {
   });
 }
 
+/**
+ * Prévient l'organisateur qu'on lui demande de faire entrer quelqu'un.
+ *
+ * L'identité du proposé est nommée ici, et c'est voulu : c'est précisément
+ * l'information sur laquelle l'organisateur doit trancher.
+ */
+export async function pushMeetingRequest(prisma, {
+  recipientId,
+  meetingId,
+  objet,
+  demandeurName,
+  inviteName,
+}) {
+  if (!isPushEnabled()) return;
+  const sujet = objet?.trim() || "Réunion";
+  await sendPushToUser(prisma, recipientId, {
+    title: "Demande d'ajout à une réunion",
+    body: `${demandeurName} propose d'ajouter ${inviteName} à « ${sujet} »`,
+    data: {
+      type: "meeting_invite_request",
+      meetingId: String(meetingId),
+      objet: sujet,
+    },
+  });
+}
+
+/**
+ * Annonce au DEMANDEUR la décision de l'organisateur.
+ *
+ * ⚠️ Ne sert QU'AU DEMANDEUR. La personne proposée, elle, n'apprend rien d'un
+ * refus — ni qu'il a eu lieu, ni qu'une demande a existé. En cas d'acceptation
+ * elle reçoit une invitation ordinaire, indiscernable de celles que
+ * l'organisateur envoie lui-même : rien ne doit lui indiquer qu'elle a été
+ * proposée par un tiers, ni qu'elle aurait pu être refusée.
+ */
+export async function pushMeetingRequestDecided(prisma, {
+  recipientId,
+  meetingId,
+  objet,
+  inviteName,
+  accepte,
+}) {
+  if (!isPushEnabled()) return;
+  const sujet = objet?.trim() || "Réunion";
+  await sendPushToUser(prisma, recipientId, {
+    title: accepte ? "Demande acceptée" : "Demande refusée",
+    body: accepte
+      ? `${inviteName} a été ajouté à « ${sujet} »`
+      : `L'organisateur a refusé d'ajouter ${inviteName} à « ${sujet} »`,
+    data: {
+      type: "meeting_request_decided",
+      meetingId: String(meetingId),
+      objet: sujet,
+      accepte: String(Boolean(accepte)),
+    },
+  });
+}
+
 /** Notifie (data-only) que l'appel est terminé/annulé → le client retire la
  *  notif d'appel plein écran, même app fermée. Ciblé par le callId partagé. */
 export async function pushCallCancelled(prisma, { recipientId, callId }) {
