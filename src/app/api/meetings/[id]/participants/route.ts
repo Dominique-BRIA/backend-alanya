@@ -117,3 +117,76 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     })),
   });
 });
+
+// DELETE /api/meetings/:id/participants — exclut un participant.
+//
+// Body : { participantId: string }. RÉSERVÉ À L'ORGANISATEUR.
+//
+// Rien ne permettait de retirer quelqu'un : une personne conviée par erreur, ou
+// devenue indésirable, restait dans la salle jusqu'à la fin de la réunion. La
+// seule issue était de terminer la réunion pour tout le monde et d'en refaire
+// une — ce qui punit l'assemblée pour la présence d'un seul.
+//
+// L'exclusion n'est PAS un refus d'invitation : la ligne est effacée, pas
+// passée à « décliné ». Un décliné a choisi de ne pas venir et peut se raviser ;
+// un exclu ne doit pas pouvoir rentrer par la porte du join, qui ne vérifie que
+// l'existence de la ligne.
+//
+// Le départ du salon temps réel n'est pas force ici : ce process n'a aucun
+// moyen de parler au serveur WebSocket, qui tourne à part. L'exclu garde donc
+// son flux jusqu'à ce qu'il quitte ou que la réunion se termine. C'est la
+// limite connue de l'architecture, et elle vaut d'être écrite plutôt que
+// découverte.
+export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => {
+  const id = Number((await ctx.params).id);
+  if (isNaN(id) || id <= 0) return fail("ID invalide", 400, "BAD_ID");
+
+  const body = await req.json().catch(() => null);
+  const participantId =
+    body && typeof body.participantId === "string" ? body.participantId : "";
+  if (!participantId) return fail("Participant manquant", 400, "BAD_REQUEST");
+
+  const meeting = await prisma.meeting.findUnique({
+    where: { idMeeting: id },
+    select: { idMeeting: true, isEnd: true, idOrganiser: true },
+  });
+  if (!meeting) return fail("Réunion introuvable", 404, "NOT_FOUND");
+  if (meeting.idOrganiser !== userId) {
+    return fail("Seul l'organisateur peut exclure", 403, "FORBIDDEN");
+  }
+  if (meeting.isEnd === 1) {
+    return fail("Cette réunion est terminée", 409, "MEETING_ENDED");
+  }
+  // S'exclure soi-même fermerait la réunion sans personne pour la rouvrir, et
+  // laisserait les demandes d'invitation sans destinataire. Quitter est
+  // l'action prévue pour cela.
+  if (participantId === meeting.idOrganiser) {
+    return fail(
+      "L'organisateur ne peut pas s'exclure : quittez la réunion",
+      400,
+      "IS_ORGANISER",
+    );
+  }
+
+  const participant = await prisma.meetingParticipant.findUnique({
+    where: {
+      idMeeting_IDparticipant: { idMeeting: id, IDparticipant: participantId },
+    },
+  });
+  if (!participant) {
+    return fail("Cette personne ne participe pas à la réunion", 404, "NOT_FOUND");
+  }
+
+  // La durée déjà passée dans la salle est arrêtée avant l'effacement : sans
+  // cela, le temps de présence d'un exclu disparaîtrait des statistiques.
+  const duree = participant.start_time
+    ? Math.round((Date.now() - participant.start_time.getTime()) / 1000)
+    : null;
+  await prisma.meetingParticipant.update({
+    where: { ID: participant.ID },
+    data: { connecte: 0, duree },
+  });
+  await prisma.meetingParticipant.delete({ where: { ID: participant.ID } });
+
+  return ok({ message: "Participant exclu", idMeeting: id, participantId });
+});
