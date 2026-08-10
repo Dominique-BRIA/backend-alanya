@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { parse } from "node:url";
-import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled } from "./push.mjs";
+import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled, pushMeetingReminder } from "./push.mjs";
 // Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
 // raison du JavaScript plutôt que du TypeScript.
 import {
@@ -1889,6 +1889,93 @@ async function handleMeetingSignal(ws, msg) {
   }
 }
 
+/// Combien de temps avant le début d'une réunion part le rappel.
+const RAPPEL_REUNION_AVANT_MS = 5 * 60 * 1000;
+
+/**
+ * Rappelle aux participants qu'une réunion commence dans cinq minutes.
+ *
+ * Balayé ici et non par une tâche cron du système : ce process tourne déjà en
+ * permanence et porte les deux autres balayages (statuts expirés, appels
+ * périmés). Une cron de plus serait une pièce à installer, à surveiller et à
+ * redémarrer séparément.
+ *
+ * ⚠️ LA MARQUE EST POSÉE AVANT L'ENVOI, pas après. Si Firebase échoue ou si le
+ * process meurt au milieu de la boucle, le pire est qu'un rappel manque — alors
+ * que marquer après ferait tout recommencer au balayage suivant, trente
+ * secondes plus tard, et notifierait dix fois de suite. Une notification perdue
+ * se pardonne, dix notifications identiques non.
+ *
+ * L'insertion elle-même sert de verrou : `meeting_rappel` a pour clé primaire
+ * l'identifiant de la réunion, donc deux balayages concurrents ne peuvent pas
+ * envoyer deux rappels, le second échoue sur la contrainte.
+ *
+ * Le rappel part à TOUT LE MONDE, l'organisateur compris, et sans regarder qui
+ * a accepté : quelqu'un qui n'a pas encore répondu à l'invitation est
+ * précisément celui à qui le rappel sert le plus.
+ */
+async function envoieRappelsReunion() {
+  try {
+    const maintenant = Date.now();
+    const reunions = await prisma.meeting.findMany({
+      where: {
+        isEnd: 0,
+        // Strictement à venir, et dans les cinq prochaines minutes. Une réunion
+        // déjà commencée n'a pas à être « rappelée » : elle a lieu.
+        start_time: {
+          gt: new Date(maintenant),
+          lte: new Date(maintenant + RAPPEL_REUNION_AVANT_MS),
+        },
+        rappel: { is: null },
+      },
+      select: {
+        idMeeting: true,
+        objet: true,
+        start_time: true,
+        idOrganiser: true,
+        participants: { select: { IDparticipant: true } },
+      },
+    });
+
+    for (const r of reunions) {
+      try {
+        await prisma.meetingRappel.create({ data: { idMeeting: r.idMeeting } });
+      } catch {
+        // Déjà marquée entre la lecture et ici : un autre balayage s'en charge.
+        continue;
+      }
+
+      // Arrondi à la minute SUPÉRIEURE, et jamais moins d'une : « dans 0
+      // minutes » n'a aucun sens, et le balayage tombe rarement pile.
+      const minutes = Math.max(
+        1,
+        Math.ceil((r.start_time.getTime() - Date.now()) / 60000),
+      );
+      const destinataires = new Set([
+        r.idOrganiser,
+        ...r.participants.map((p) => p.IDparticipant),
+      ]);
+      for (const uid of destinataires) {
+        await pushMeetingReminder(prisma, {
+          recipientId: uid,
+          meetingId: r.idMeeting,
+          objet: r.objet,
+          minutes,
+        }).catch((e) =>
+          console.error("[ws] rappel de réunion:", e?.message ?? e),
+        );
+      }
+      console.log(
+        `[ws] Rappel envoyé pour la réunion ${r.idMeeting} (${destinataires.size} destinataires)`,
+      );
+    }
+  } catch (e) {
+    // Un balayage qui échoue ne doit pas emporter le serveur : le suivant
+    // repassera trente secondes plus tard, et la fenêtre dure cinq minutes.
+    console.error("[ws] envoieRappelsReunion:", e?.message ?? e);
+  }
+}
+
 const wss = new WebSocketServer({ port: PORT });
 
 wss.on("error", (err) => {
@@ -1919,6 +2006,11 @@ wss.on("listening", () => {
   // abandonné ne survive jamais longtemps à son échéance.
   fermeAppelsPerimes();
   setInterval(fermeAppelsPerimes, 30 * 1000);
+  // Rappels de réunion : même cadence que les appels périmés. La fenêtre de
+  // rappel dure cinq minutes, un balayage toutes les 30 s la traverse dix fois
+  // — aucune réunion ne peut la franchir sans être vue.
+  envoieRappelsReunion();
+  setInterval(envoieRappelsReunion, 30 * 1000);
 });
 
 wss.on("connection", (ws, req) => {

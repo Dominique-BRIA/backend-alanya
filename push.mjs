@@ -245,6 +245,34 @@ export async function pushMeetingInvitation(prisma, {
   });
 }
 
+/**
+ * Rappelle qu'une réunion commence bientôt.
+ *
+ * Le délai est dit de façon RELATIVE — « dans 5 minutes » — et non par une
+ * heure : même raison que pour l'invitation, le serveur est en UTC et une heure
+ * absolue serait fausse d'un décalage horaire. Un délai relatif reste juste
+ * sous tous les fuseaux.
+ */
+export async function pushMeetingReminder(prisma, {
+  recipientId,
+  meetingId,
+  objet,
+  minutes,
+}) {
+  if (!isPushEnabled()) return;
+  const sujet = objet?.trim() || "Réunion";
+  await sendPushToUser(prisma, recipientId, {
+    title: `Réunion dans ${minutes} minutes`,
+    body: `« ${sujet} » commence bientôt`,
+    data: {
+      type: "meeting_reminder",
+      meetingId: String(meetingId),
+      objet: sujet,
+      minutes: String(minutes),
+    },
+  });
+}
+
 /** Notifie (data-only) que l'appel est terminé/annulé → le client retire la
  *  notif d'appel plein écran, même app fermée. Ciblé par le callId partagé. */
 export async function pushCallCancelled(prisma, { recipientId, callId }) {

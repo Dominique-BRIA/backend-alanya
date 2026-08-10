@@ -902,9 +902,27 @@ model Meeting {
   type_media  Int      @default(1) @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
 
   participants MeetingParticipant[]
+  rappel       MeetingRappel?
 
   @@index([idOrganiser])
   @@map("meeting")
+}
+
+/// Rappel des 5 minutes DÉJÀ ENVOYÉ pour une réunion.
+///
+/// L'existence de la ligne porte toute l'information : il n'y a pas de booléen
+/// à tenir. La clé primaire étant l'identifiant de la réunion, deux balayages
+/// simultanés ne peuvent pas produire deux rappels — la seconde insertion
+/// échoue. C'est la contrainte qui garantit l'unicité, pas un verrou applicatif.
+///
+/// Table à NOUS, et non une colonne ajoutée à `meeting` : ce modèle-là vient du
+/// référentiel de l'équipe, et cette information ne les concerne pas.
+model MeetingRappel {
+  idMeeting Int      @id
+  meeting   Meeting  @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
+  envoyeA   DateTime @default(now()) @db.Timestamptz
+
+  @@map("meeting_rappel")
 }
 
 model MeetingParticipant {
