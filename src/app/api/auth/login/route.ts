@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
-import { loginSchema } from "@/lib/validation";
+import { ALANYA_ID_REGEX, loginSchema } from "@/lib/validation";
 import { verifyPassword } from "@/lib/password";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
@@ -18,11 +18,12 @@ export async function POST(req: NextRequest) {
 
     const { identifier, password, deviceId } = loginSchema.parse(await req.json());
 
-    // Un identifiant est un publicNumber si c'est 6 OU 8 chiffres.
-    // (Les nouveaux comptes ont 8 chiffres, cf. generateUniquePublicNumber.
-    // Le format 6 chiffres reste supporté pour rétrocompatibilité avec les
-    // éventuels comptes historiques.)
-    const isPublicNumber = /^(\d{6}|\d{8})$/.test(identifier);
+    // Un identifiant est un publicNumber s'il n'est fait que de chiffres, dans
+    // les bornes admises. La règle vit dans `validation.ts` et n'est plus
+    // recopiée ici : les comptes de 3, 4 ou 10 chiffres (centres d'appels,
+    // numéros courts) ne pouvaient pas se connecter, leur identifiant étant
+    // cherché du côté des adresses email.
+    const isPublicNumber = ALANYA_ID_REGEX.test(identifier);
     const user = await prisma.user.findFirst({
       where: isPublicNumber
         ? { publicNumber: identifier }

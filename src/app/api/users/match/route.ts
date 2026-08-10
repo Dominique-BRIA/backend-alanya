@@ -5,12 +5,14 @@ import { withAuth } from "@/lib/auth-context";
 import { z } from "zod";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { publicNumberSchema } from "@/lib/validation";
 
+// La regex était RECOPIÉE ici au lieu d'être importée : elle est restée sur
+// « 6 ou 8 chiffres » alors que la règle a bougé, et la synchronisation du
+// répertoire aurait donc continué d'ignorer les numéros de toute autre
+// longueur. Une règle partagée n'a qu'un seul endroit où vivre.
 const matchSchema = z.object({
-  numbers: z
-    .array(z.string().trim().regex(/^(\d{6}|\d{8})$/, "Numéro invalide"))
-    .min(1)
-    .max(500),
+  numbers: z.array(publicNumberSchema).min(1).max(500),
 });
 
 export async function OPTIONS() {

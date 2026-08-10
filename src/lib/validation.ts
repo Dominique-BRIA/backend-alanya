@@ -73,7 +73,41 @@ export const refreshSchema = z.object({
   refreshToken: z.string().min(1),
 });
 
-export const publicNumberSchema = z.string().trim().regex(/^(\d{6}|\d{8})$/, "Le numero doit comporter 6 ou 8 chiffres");
+/**
+ * Longueurs acceptées pour un Alanya ID **référencé** (recherche, contact,
+ * membre de groupe, invitation d'appel, participant de réunion).
+ *
+ * ⚠️ À ne pas confondre avec la GÉNÉRATION, qui reste à 8 chiffres
+ * (`src/lib/publicNumber.ts`). Ce schéma dit ce qu'on accepte de DÉSIGNER, pas
+ * ce qu'on fabrique.
+ *
+ * La règle était « 6 ou 8 chiffres exactement », et elle rendait des comptes
+ * réels injoignables : les **numéros de centre d'appels font 4 chiffres**
+ * (`0000` en production), tout comme les numéros courts d'entreprise
+ * (`company.numero_court`, `6938`). Le serveur répondait `422 BAD_NUMBER` sur
+ * un compte qui existe pourtant en base — un refus qui ne portait sur rien
+ * d'autre que la longueur.
+ *
+ * 3 au minimum : en deçà, la saisie ne peut pas être un identifiant. 10 au
+ * maximum : c'est le plafond que le client web s'est déjà donné, et la colonne
+ * `users.alanyaPhone` est en `VarChar(20)`. Les deux bornes vivent ici, et
+ * nulle part ailleurs.
+ */
+export const ALANYA_ID_MIN_LENGTH = 3;
+export const ALANYA_ID_MAX_LENGTH = 10;
+
+/** Vrai si la chaîne a la FORME d'un Alanya ID. Ne dit rien de son existence. */
+export const ALANYA_ID_REGEX = new RegExp(
+  `^\\d{${ALANYA_ID_MIN_LENGTH},${ALANYA_ID_MAX_LENGTH}}$`,
+);
+
+export const publicNumberSchema = z
+  .string()
+  .trim()
+  .regex(
+    ALANYA_ID_REGEX,
+    `Le numéro doit comporter ${ALANYA_ID_MIN_LENGTH} à ${ALANYA_ID_MAX_LENGTH} chiffres`,
+  );
 
 export const updateProfileSchema = z.object({
   // Aligné sur la longueur de la colonne — voir setupSchema.
@@ -90,7 +124,7 @@ export const addContactSchema = z.object({
   publicNumber: (d.publicNumber ?? d.number) as string,
   alias: d.alias,
 })).refine((d) => Boolean(d.publicNumber), {
-  message: "publicNumber est requis (6 chiffres)",
+  message: "publicNumber est requis",
   path: ["publicNumber"],
 });
 

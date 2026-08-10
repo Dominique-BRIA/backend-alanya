@@ -21,7 +21,12 @@ export async function OPTIONS() {
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const raw = req.nextUrl.searchParams.get("number") ?? "";
   const parsed = publicNumberSchema.safeParse(raw);
-  if (!parsed.success) return fail("Numéro invalide (6 chiffres exactement)", 422, "BAD_NUMBER");
+  // Le message vient du schéma : c'est lui qui porte les bornes, et un message
+  // écrit en dur ici a déjà menti pendant des mois (« 6 chiffres exactement »
+  // alors que 8 était accepté).
+  if (!parsed.success) {
+    return fail(parsed.error.issues[0]?.message ?? "Numéro invalide", 422, "BAD_NUMBER");
+  }
 
   const number = parsed.data;
   const found = await prisma.user.findUnique({
