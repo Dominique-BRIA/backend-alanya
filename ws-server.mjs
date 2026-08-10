@@ -1657,6 +1657,16 @@ async function handleCallRing(ws, msg) {
       },
     });
     if (estCompteCentre(cible)) {
+      /**
+       * ⚠️ GARDE DE RÉ-ENTRÉE. `call_ring` n'arrive pas forcément une seule
+       * fois : le client web le RENVOIE à 4 s et à 10 s, au cas où le premier se
+       * serait perdu pendant une reconnexion du WebSocket. Inoffensif pour un
+       * appel ordinaire — le destinataire ignore un appel déjà connu — mais
+       * dévastateur ici : le menu repartirait de zéro, l'invite se rejouerait
+       * par-dessus, et surtout un agent déjà sollicité se retrouverait à sonner
+       * pour une session que plus personne ne référence.
+       */
+      if (sessionsIvr.has(callId)) return;
       await ouvrirSessionIvr(ws, call, cible);
       return; // personne ne sonne
     }
