@@ -150,6 +150,17 @@ export const createPaysSchema = z.object({
 
 export const updatePaysSchema = createPaysSchema.partial();
 
+/// Ajout de participants à une réunion existante.
+///
+/// Borné à 50 par appel : au-delà, ce n'est plus un ajout mais un import, et
+/// autant de notifications partiraient d'un seul geste.
+export const addMeetingParticipantsSchema = z.object({
+  publicNumbers: z
+    .array(publicNumberSchema)
+    .min(1, "Au moins un participant est requis")
+    .max(50),
+});
+
 export const createMeetingSchema = z.object({
   objet: z.string().trim().min(1, "L'objet est requis").max(200),
   type_media: z.number().int().min(1).max(2),
