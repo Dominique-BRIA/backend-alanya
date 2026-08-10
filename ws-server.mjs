@@ -17,6 +17,14 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
+import {
+  DELAI_MENU_MS,
+  choisirMusiqueAttente,
+  estCompteCentre,
+  lireMenuCentre,
+  optionsPubliques,
+  urlInviteCentre,
+} from "./src/lib/ivr.mjs";
 
 const prisma = new PrismaClient();
 // Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
@@ -1140,6 +1148,176 @@ async function callParticipantIds(callId) {
   return parts.map((p) => p.userId);
 }
 
+// ===============================================================
+// Centre d'appels (IVR)
+// ===============================================================
+//
+// Le numéro d'un centre n'est le téléphone de PERSONNE : c'est le serveur qui
+// répond à sa place. Quand l'appelé porte `type_compte = 3`, on ne fait sonner
+// personne — on ouvre une session, on envoie le menu, et c'est la touche tapée
+// qui déclenchera la vraie sonnerie chez un agent, DANS LE MÊME APPEL.
+//
+// « Dans le même appel » est ce qui fait tout tenir : la salle WebRTC d'Alanya
+// est le `callId`. L'agent n'est donc pas mis en relation avec l'appelant — il
+// REJOINT l'appel que l'appelant a déjà ouvert, exactement comme un invité de
+// transfert. Rien à ponter, rien à réimplémenter : le push, la sonnerie native,
+// l'historique et la détection « déjà en ligne » suivent d'eux-mêmes.
+//
+// ⚠️ Registre SÉPARÉ de tout le reste. Tant que l'appelant est dans le menu, il
+// n'y a pas de conversation : polluer les registres d'appel ferait apparaître un
+// interlocuteur qui n'existe pas encore.
+//
+// callId -> {
+//   callId, convId, appelantId,
+//   centreId, nomCentre, centrePublicNumber,
+//   options,       // [{ digit, label, agentIds }] — agentIds NE SORT JAMAIS
+//   urlAttente,
+//   agentId, agentLabel,
+//   etape,         // 'menu' (attend une touche) | 'sonnerie' | 'ponte'
+//   minuteur,
+// }
+const sessionsIvr = new Map();
+
+function sessionIvr(callId) {
+  return callId ? sessionsIvr.get(callId) ?? null : null;
+}
+
+/**
+ * Ferme une session — LE SEUL endroit qui la retire du registre.
+ *
+ * Appelée depuis tous les chemins de sortie : fin d'appel, départ, déconnexion
+ * de l'appelant, expiration du menu. Une session oubliée continuerait de router
+ * la signalisation d'un appel terminé, et son minuteur tuerait l'appel SUIVANT.
+ */
+function fermerSessionIvr(callId) {
+  const session = sessionsIvr.get(callId);
+  if (!session) return;
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  sessionsIvr.delete(callId);
+}
+
+/**
+ * Clôt en base un appel qui n'a jamais atteint d'agent.
+ *
+ * `updateMany` avec `status: "RINGING"` dans le filtre, et non un `update` :
+ * c'est ce qui rend l'opération sans effet si l'appel a bougé entre-temps —
+ * décroché par un agent, raccroché par l'appelant. Le minuteur du menu peut
+ * ainsi se déclencher en retard sans rien casser.
+ */
+async function cloreAppelIvr(callId) {
+  try {
+    const maj = await prisma.call.updateMany({
+      where: { id: callId, status: "RINGING" },
+      data: { status: "NO_ANSWER", endedAt: new Date() },
+    });
+    if (maj.count === 0) return;
+    await prisma.callParticipant.updateMany({
+      where: { callId, leftAt: null },
+      data: { leftAt: new Date() },
+    });
+  } catch (e) {
+    console.error("[ivr] cloreAppelIvr:", e?.message ?? e);
+  }
+}
+
+function envoieAAppelant(session, payload) {
+  sendTo(session.appelantId, payload);
+}
+
+/**
+ * 60 s sans toucher une touche → on referme.
+ *
+ * ⚠️ On envoie `ivr_error` et RIEN D'AUTRE. Y ajouter un `call_ended` fermerait
+ * l'écran dans la même milliseconde et le message n'aurait pas le temps d'être
+ * lu. L'appel est clos en base ; c'est le client qui décide quand refermer.
+ */
+function armerMinuteurMenu(session) {
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.etape = "menu";
+  session.minuteur = setTimeout(async () => {
+    const vivante = sessionsIvr.get(session.callId);
+    if (!vivante || vivante.etape !== "menu") return;
+    envoieAAppelant(vivante, {
+      type: "ivr_error",
+      callId: vivante.callId,
+      code: "timeout",
+      retry: false,
+      message: "Aucun choix effectué. Rappelez quand vous voudrez.",
+    });
+    fermerSessionIvr(vivante.callId);
+    await cloreAppelIvr(vivante.callId);
+  }, DELAI_MENU_MS);
+}
+
+/**
+ * Ouvre le standard : personne ne sonne, l'appelant reçoit le menu.
+ *
+ * L'appelant est déjà « occupé » sans qu'on ait rien à écrire : `estOccupe` se
+ * calcule sur les lignes `callParticipant` d'un appel en sonnerie, et l'appel
+ * existe depuis `POST /api/calls`. Un appel entrant ne viendra donc pas sonner
+ * en pleine sélection de service.
+ */
+async function ouvrirSessionIvr(ws, call, centre) {
+  const nomCentre = nomAffichage(centre) ?? centre.publicNumber;
+  const options = await lireMenuCentre(prisma, centre.id);
+
+  if (options.length === 0) {
+    sendTo(ws.userId, {
+      type: "ivr_error",
+      callId: call.id,
+      code: "no_service",
+      retry: false,
+      message: `${nomCentre} n'a aucun service joignable pour le moment.`,
+    });
+    await cloreAppelIvr(call.id);
+    return;
+  }
+
+  // Une session résiduelle sur le même identifiant ne doit pas emporter le
+  // nouvel appel avec elle : on la jette SANS ses effets de bord (ni clôture en
+  // base, ni message à l'appelant — il est en train de rappeler).
+  fermerSessionIvr(call.id);
+
+  const session = {
+    callId: call.id,
+    convId: call.convId,
+    appelantId: ws.userId,
+    centreId: centre.id,
+    nomCentre,
+    centrePublicNumber: centre.publicNumber,
+    options,
+    // Tirée MAINTENANT, pas au moment de la touche : le client la met en cache
+    // pendant que l'invite se joue.
+    urlAttente: choisirMusiqueAttente(),
+    agentId: null,
+    agentLabel: null,
+    etape: "menu",
+    minuteur: null,
+  };
+  sessionsIvr.set(call.id, session);
+  armerMinuteurMenu(session);
+
+  // La socket déclare l'appel qu'elle porte dès maintenant — même rôle que le
+  // `socket.join(roomId)` d'une pile Socket.IO : quand l'agent décrochera, il
+  // n'y aura plus rien à préparer pour que la signalisation trouve sa cible.
+  ws.callIdActif = call.id;
+
+  sendTo(ws.userId, {
+    type: "ivr_menu",
+    callId: call.id,
+    convId: call.convId,
+    centerId: centre.id,
+    centerName: nomCentre,
+    centerNumber: centre.publicNumber,
+    centerAvatarUrl: centre.avatarUrl ?? null,
+    promptUrl: urlInviteCentre(centre.publicNumber),
+    holdUrl: session.urlAttente,
+    options: optionsPubliques(options),
+  });
+  console.log(`[ivr] menu ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} service(s)`);
+}
+
 async function handleCallRing(ws, msg) {
   const { callId } = msg;
   if (!callId) return;
@@ -1180,6 +1358,44 @@ async function handleCallRing(ws, msg) {
     return;
   }
 
+  const targets = await callParticipantIds(callId);
+
+  /**
+   * AIGUILLAGE CENTRE D'APPELS — avant tout le reste, et rien de plus.
+   *
+   * C'est ici que se décide « personne ne sonne », donc c'est ici que
+   * l'aiguillage doit tomber : `POST /api/calls` a déjà créé l'appel et ses
+   * participants, mais aucun téléphone n'a encore bougé.
+   *
+   * Uniquement en tête-à-tête. Un appel de groupe qui compterait un centre parmi
+   * ses membres n'est pas un appel vers un standard : le faire basculer
+   * priverait les autres membres de leur appel.
+   *
+   * ⚠️ Le CLIENT NE SAIT PAS qu'il appelle un centre, et c'est délibéré. Aucun
+   * pré-contrôle avant l'appel : ce serait un aller-retour réseau devant chaque
+   * appel, une règle métier dupliquée chez trois clients, et à terme une route
+   * publique qui laisserait énumérer l'annuaire. Le serveur décide, le client
+   * bascule d'écran quand il reçoit `ivr_menu` au lieu d'une sonnerie.
+   */
+  const autresQueMoi = targets.filter((uid) => uid !== ws.userId);
+  if (autresQueMoi.length === 1) {
+    const cible = await prisma.user.findUnique({
+      where: { id: autresQueMoi[0] },
+      select: {
+        id: true,
+        typeCompte: true,
+        nom: true,
+        pseudo: true,
+        publicNumber: true,
+        avatarUrl: true,
+      },
+    });
+    if (estCompteCentre(cible)) {
+      await ouvrirSessionIvr(ws, call, cible);
+      return; // personne ne sonne
+    }
+  }
+
   const callerName = nomAffichage(call.initiator);
   const callerAvatarUrl = call.initiator.avatarUrl ?? null;
   let isGroup = false;
@@ -1194,7 +1410,6 @@ async function handleCallRing(ws, msg) {
     groupName = conv?.name ?? null;
     memberCount = conv?.participants.length ?? 0;
   }
-  const targets = await callParticipantIds(callId);
   for (const uid of targets) {
     if (uid === ws.userId) continue;
     // Blocage : ne fait pas sonner une personne bloquée (ou qui a bloqué l'appelant).
@@ -1443,6 +1658,18 @@ async function handleCallState(ws, msg) {
   };
   for (const uid of ids) {
     sendTo(uid, payload);
+  }
+
+  /**
+   * Session IVR : elle sert au routage de la signalisation, elle doit donc
+   * SURVIVRE au décrochage et ne mourir qu'avec l'appel.
+   *
+   * `left` est traité à part : un agent qui quitte ne referme pas la session —
+   * l'appelant, lui, est toujours là. Seul le départ de L'APPELANT y met fin.
+   */
+  const finPourTous = ["ended", "rejected", "declined", "cancelled"].includes(state);
+  if (finPourTous || (state === "left" && sessionIvr(callId)?.appelantId === ws.userId)) {
+    fermerSessionIvr(callId);
   }
 
   // Si l'appel est clos, pousser l'enregistrement COMPLET dans la foulée.
@@ -2083,6 +2310,16 @@ wss.on("connection", (ws, req) => {
 
   ws.on("close", () => {
     markOfflineIfGone(userId, ws); // hors-ligne + lastSeen si dernière socket
+
+    // Sessions IVR de ce compte : elles n'ont plus de destinataire. Leurs appels
+    // sont déjà clos par `markOfflineIfGone` — il reste à retirer la session et
+    // surtout son MINUTEUR, qui autrement se réveillerait plus tard et
+    // clôturerait un appel du même identifiant.
+    if (!isUserOnline(userId)) {
+      for (const [callId, session] of sessionsIvr) {
+        if (session.appelantId === userId) fermerSessionIvr(callId);
+      }
+    }
     // On ne libere PAS ses reservations : elles lui appartiennent jusqu'a ce
     // qu'il revienne les rendre. Une deconnexion n'est pas une fin de prise en
     // charge.

@@ -11,6 +11,7 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
+import { estCompteCentre } from "@/lib/ivr.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/calls — historique des appels de l'utilisateur (50 derniers).
@@ -119,7 +120,26 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const autresMembres = memberIds.filter((id) => id !== userId);
   if (autresMembres.length === 1) {
     const calleeId = autresMembres[0];
-    if (await estOccupe(calleeId)) {
+    /**
+     * ⚠️ EXCEPTION CENTRE D'APPELS — sans elle, un standard ne prend qu'un seul
+     * appel à la fois.
+     *
+     * `estOccupe` se calcule sur les lignes `callParticipant` d'un appel en
+     * sonnerie ou en cours. Or le numéro d'un centre est participant de CHAQUE
+     * appel qu'on lui passe : dès le premier appelant, le centre serait déclaré
+     * occupé et tous les suivants recevraient `CALLEE_BUSY`. C'est exactement
+     * l'inverse de ce qu'on attend d'un standard, dont le rôle est justement de
+     * recevoir plusieurs appelants en parallèle.
+     *
+     * Le contrôle d'occupation n'est pas perdu pour autant : il est reporté sur
+     * L'AGENT, au moment de la touche, où il a un sens — c'est lui qui ne peut
+     * tenir qu'une conversation à la fois.
+     */
+    const cible = await prisma.user.findUnique({
+      where: { id: calleeId },
+      select: { typeCompte: true },
+    });
+    if (!estCompteCentre(cible) && (await estOccupe(calleeId))) {
       // L'appel est tracé plutôt que simplement refusé : sans cette ligne,
       // l'appelant ne verrait aucune trace de sa tentative dans l'historique.
       // Les deux participants sont marqués `leftAt` : l'appel est clos d'emblée
