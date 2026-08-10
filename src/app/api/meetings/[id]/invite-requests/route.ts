@@ -135,6 +135,40 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     );
   }
 
+  // ORGANISATEUR ABSENT : le participant ajoute directement.
+  //
+  // Une demande n'a de sens que si quelqu'un peut la trancher. L'organisateur
+  // parti, elles s'empilaient sans destinataire et plus personne n'entrait
+  // dans une réunion pourtant en cours — un blocage d'autant plus penible que
+  // rien à l'écran n'en donnait la raison.
+  //
+  // « Absent » se lit sur `connecte`, pas sur la présence dans le salon
+  // WebSocket : la seconde bascule à chaque coupure réseau, et la règle
+  // changerait sous les pieds des participants au gré de la connexion de
+  // l'organisateur. `connecte` ne retombe que sur un départ délibéré ou la
+  // fermeture de la réunion.
+  //
+  // L'organisateur n'a pas forcément de ligne `participant` — il peut avoir
+  // convoqué sans jamais entrer. Dans ce cas il n'est pas dans la salle non
+  // plus, et la même règle s'applique.
+  const ligneOrganisateur = meeting.participants.find(
+    (p) => p.IDparticipant === meeting.idOrganiser,
+  );
+  const organisateurAbsent = !ligneOrganisateur || ligneOrganisateur.connecte !== 1;
+
+  if (organisateurAbsent) {
+    await prisma.meetingParticipant.create({
+      data: { idMeeting: id, IDparticipant: invite.id, status: 0 },
+    });
+    return ok(
+      {
+        ajouteDirectement: true,
+        invite: { id: invite.id },
+      },
+      201,
+    );
+  }
+
   const demande = await prisma.meetingInviteRequest.create({
     data: { idMeeting: id, demandeurId: userId, inviteId: invite.id },
     include: { demandeur: true, invite: true },
