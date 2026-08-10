@@ -1378,6 +1378,45 @@ async function diffuseAppelTermine(callId, ids) {
   }
 }
 
+/**
+ * Pousse son propre enregistrement à un participant qui vient de QUITTER un
+ * appel qui continue sans lui.
+ *
+ * `diffuseAppelTermine` ne dit rien dans ce cas, et c'est volontaire : l'appel
+ * n'est pas terminé, il se poursuit entre les deux autres. Mais pour celui qui
+ * sort — le transféreur — il l'est bel et bien. Sans cet envoi, sa liste
+ * d'appels et son fil restaient sur « en cours » jusqu'au prochain rechargement
+ * complet, et affichaient de nouveau « en cours » puisque le serveur renvoyait
+ * le statut global. `serialiseAppelPour` corrige la lecture, ceci corrige le
+ * temps réel.
+ */
+async function pousseDepartParticipant(callId, userId) {
+  try {
+    const call = await prisma.call.findUnique({
+      where: { id: callId },
+      include: { participants: { include: { user: true } } },
+    });
+    if (!call) return;
+    // Appel déjà clos pour tout le monde : `diffuseAppelTermine` s'en est chargé.
+    if (STATUTS_TERMINAUX.includes(call.status)) return;
+    const moi = call.participants.find((p) => p.userId === userId);
+    // `leftAt` est posé par `POST /api/calls/:id/leave`. S'il manque, le départ
+    // n'a pas été enregistré : ne rien annoncer plutôt qu'annoncer du faux.
+    if (!moi?.leftAt) return;
+
+    const conv = call.convId
+      ? await prisma.conversation.findUnique({
+          where: { id: call.convId },
+          select: { isGroup: true, name: true },
+        })
+      : null;
+
+    sendTo(userId, { type: "call_ended", call: serialiseAppelPour(call, conv, userId) });
+  } catch (e) {
+    console.error("[ws] pousseDepartParticipant:", e?.message ?? e);
+  }
+}
+
 async function handleCallState(ws, msg) {
   const { callId, state, userId: joinedUserId, displayName } = msg;
   if (!callId || !state) return;
@@ -1408,6 +1447,9 @@ async function handleCallState(ws, msg) {
 
   // Si l'appel est clos, pousser l'enregistrement COMPLET dans la foulée.
   await diffuseAppelTermine(callId, ids);
+
+  // Départ sans clôture (transfert) : seul celui qui part change d'état.
+  if (state === "left") await pousseDepartParticipant(callId, ws.userId);
 
   // Push data-only pour retirer la notification d'appel plein écran chez les
   // destinataires dont l'application est FERMÉE : le WebSocket ne les atteint

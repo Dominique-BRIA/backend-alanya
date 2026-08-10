@@ -91,6 +91,81 @@ export function libelleAppel(status, isOutgoing, durationSec) {
 }
 
 /**
+ * Statut d'un appel DU POINT DE VUE d'un participant, quand celui-ci en est
+ * sorti alors qu'il continuait sans lui.
+ *
+ * C'est le cas du TRANSFERT : A est en communication avec B, B transfère à C.
+ * `POST /api/calls/:id/leave` pose `leftAt` sur la ligne de B — ce qui le rend
+ * de nouveau joignable, `estOccupe` le regarde — mais `Call.status` reste
+ * `ONGOING`, et c'est correct : A et C sont toujours en ligne. Marquer l'appel
+ * `ENDED` raccrocherait A et C, donc casserait le transfert.
+ *
+ * Le statut global n'est donc PAS le statut de B. Sans cette fonction, B voyait
+ * « en cours » indéfiniment dans sa liste d'appels et dans son fil avec A, pour
+ * un appel qu'il avait quitté.
+ *
+ * La durée suit la même logique : c'est celle de la PARTICIPATION de B, pas
+ * celle de l'appel, qui court encore. Le début retenu est le plus tardif entre
+ * son `joinedAt` et le `answeredAt` de l'appel : chez l'appelant, `joinedAt` est
+ * posé à la création, alors que l'appel sonne encore, et compter la sonnerie
+ * dans la durée de conversation serait faux.
+ *
+ * @returns {{status: string, endedAt: Date|string|null, durationSec: number|null,
+ *            hasLeft: boolean, leftAt: Date|string|null}}
+ */
+export function vueDuParticipant(call, pourUserId) {
+  const moi = (call.participants ?? []).find((p) => p.userId === pourUserId);
+  const leftAt = moi?.leftAt ?? null;
+  const finGlobale = call.endedAt ?? null;
+
+  const dureeEntre = (debut, fin) =>
+    debut && fin
+      ? Math.round((new Date(fin).getTime() - new Date(debut).getTime()) / 1000)
+      : null;
+
+  const vueGlobale = {
+    status: call.status,
+    endedAt: finGlobale,
+    durationSec: call.answeredAt && finGlobale ? dureeEntre(call.answeredAt, finGlobale) : null,
+    hasLeft: leftAt != null,
+    leftAt,
+  };
+
+  if (leftAt == null) return vueGlobale;
+
+  // Sorti AVANT la fin de l'appel ? La marge de 2 s absorbe l'écart normal entre
+  // le `leftAt` d'un raccrochage ordinaire et le `endedAt` écrit dans la foulée :
+  // sans elle, tout appel normal basculerait sur ce chemin.
+  const sortiAvantLaFin =
+    finGlobale == null ||
+    new Date(leftAt).getTime() < new Date(finGlobale).getTime() - 2000;
+  if (!sortiAvantLaFin) return vueGlobale;
+
+  // Un appel qu'on quitte sans l'avoir décroché n'est pas un appel « terminé » :
+  // même règle que dans `leave/route.ts`, c'est `answeredAt` qui décide.
+  const aParticipe = moi?.joinedAt != null && call.answeredAt != null;
+  if (!aParticipe) {
+    return { status: "NO_ANSWER", endedAt: leftAt, durationSec: null, hasLeft: true, leftAt };
+  }
+
+  const debut =
+    new Date(call.answeredAt).getTime() > new Date(moi.joinedAt).getTime()
+      ? call.answeredAt
+      : moi.joinedAt;
+  // Plancher à 1 s, jamais 0 ni nul : `libelleAppel` lit un ENDED sans durée
+  // comme « personne n'a décroché » et afficherait « Appel manqué » à quelqu'un
+  // qui a bel et bien conversé, simplement très brièvement.
+  const duree = dureeEntre(debut, leftAt);
+  return {
+    status: "ENDED",
+    endedAt: leftAt,
+    durationSec: Math.max(duree ?? 0, 1),
+    hasLeft: true,
+    leftAt,
+  };
+}
+
+/**
  * Construit l'objet d'appel tel que le client l'attend, POUR UN DESTINATAIRE.
  *
  * ⚠️ Le résultat n'est pas le même pour tout le monde, et c'est toute la
@@ -112,16 +187,22 @@ export function serialiseAppelPour(call, conv, pourUserId) {
   const peerName = isGroup
     ? (conv?.name ?? "Groupe")
     : (peer ? nomAffichage(peer) : null) ?? "Inconnu";
-  const durationSec =
-    call.answeredAt && call.endedAt
-      ? Math.round((new Date(call.endedAt).getTime() - new Date(call.answeredAt).getTime()) / 1000)
-      : null;
+
+  // `status`, `endedAt` et `durationSec` sont ceux de CE participant, pas ceux
+  // de l'appel : après un transfert, celui qui a passé la main est sorti alors
+  // que les deux autres conversent encore. Voir `vueDuParticipant`.
+  const vue = vueDuParticipant(call, pourUserId);
 
   return {
     id: call.id,
     convId: call.convId,
     type: call.type,
-    status: call.status,
+    status: vue.status,
+    // Statut brut de l'appel, conservé pour le diagnostic et pour un client qui
+    // aurait besoin de savoir que la conversation se poursuit sans lui.
+    callStatus: call.status,
+    hasLeft: vue.hasLeft,
+    leftAt: vue.leftAt,
     isOutgoing,
     callerId: call.initiatorId,
     isGroup,
@@ -131,9 +212,9 @@ export function serialiseAppelPour(call, conv, pourUserId) {
     participantCount: (call.participants ?? []).length,
     startedAt: call.startedAt,
     answeredAt: call.answeredAt,
-    endedAt: call.endedAt,
-    durationSec,
-    ...libelleAppel(call.status, isOutgoing, durationSec),
+    endedAt: vue.endedAt,
+    durationSec: vue.durationSec,
+    ...libelleAppel(vue.status, isOutgoing, vue.durationSec),
   };
 }
 

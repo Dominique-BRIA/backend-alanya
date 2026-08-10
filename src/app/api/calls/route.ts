@@ -6,7 +6,7 @@ import { createCallSchema } from "@/lib/validation";
 import { assertParticipant } from "@/modules/messaging/access";
 import {
   conversationMeta,
-  libelleAppel,
+  serialiseAppelPour,
   estOccupe,
   DELAI_SANS_REPONSE_MS,
 } from "@/lib/calls";
@@ -36,45 +36,21 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   });
   const convMap = new Map(convs.map((c) => [c.id, c]));
 
-  const calls = parts.map((p) => {
-    const c = p.call;
-    const others = c.participants.filter((pp) => pp.userId !== userId);
-    const conv = c.convId ? convMap.get(c.convId) : null;
-    const isGroup = conv?.isGroup ?? false;
-    const peer = others[0]?.user;
-    const peerName = isGroup
-      ? (conv?.name ?? "Groupe")
-      : (peer ? nomAffichage(peer) : null) ?? "Inconnu";
-    // `isOutgoing` est DÉRIVÉ de l'initiateur réel, il n'est pas stocké : c'est
-    // ce qui garantit que la bulle sort du bon côté chez chacun. Le même appel
-    // est sortant pour l'un et entrant pour l'autre — un booléen en base ne
-    // pourrait pas dire les deux.
-    const isOutgoing = c.initiatorId === userId;
-    const durationSec =
-      c.answeredAt && c.endedAt
-        ? Math.round((c.endedAt.getTime() - c.answeredAt.getTime()) / 1000)
-        : null;
-    return {
-      id: c.id,
-      convId: c.convId,
-      type: c.type,
-      status: c.status,
-      isOutgoing,
-      callerId: c.initiatorId,
-      isGroup,
-      peerName,
-      peerNumber: isGroup ? null : (peer?.publicNumber ?? null),
-      peerAvatarUrl: isGroup ? null : (peer?.avatarUrl ?? null),
-      participantCount: c.participants.length,
-      startedAt: c.startedAt,
-      answeredAt: c.answeredAt,
-      endedAt: c.endedAt,
-      durationSec,
-      // Libellé déjà formulé pour CE destinataire. Le client affiche, il ne
-      // déduit plus rien du statut brut ni de la durée.
-      ...libelleAppel(c.status, isOutgoing, durationSec),
-    };
-  });
+  // Formulé pour CE destinataire par le point commun `serialiseAppelPour` —
+  // `isOutgoing` dérivé de l'initiateur réel, libellé déjà écrit, et statut du
+  // POINT DE VUE du participant (un transféreur sorti d'un appel qui continue
+  // voit « terminé », pas « en cours »).
+  //
+  // Cette route reconstruisait la même charge à la main, à quelques lignes près.
+  // C'est exactement la divergence que le fichier partagé existe pour empêcher :
+  // le statut virtuel n'aurait été appliqué qu'aux deux autres lectures.
+  const calls = parts.map((p) =>
+    serialiseAppelPour(
+      p.call,
+      p.call.convId ? convMap.get(p.call.convId) ?? null : null,
+      userId,
+    ),
+  );
 
   // Déduplique (un appel = une entrée par participant).
   const seen = new Set<string>();
