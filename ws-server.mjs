@@ -1321,6 +1321,35 @@ async function ouvrirSessionIvr(ws, call, centre) {
 }
 
 /**
+ * Réécrit un `call_state` POUR L'APPELANT, et pour lui seul.
+ *
+ * L'appelant n'a jamais eu affaire qu'au centre : c'est le centre qui décroche,
+ * c'est le centre qui raccroche. Tout ce qui désigne l'agent est renommé.
+ *
+ * ⚠️ Ce n'est pas cosmétique. Le client range ses pairs WebRTC par identifiant :
+ * l'identifiant annoncé ici DEVIENT la clé de la connexion chez l'appelant, et
+ * c'est celle que `relaisIvr` s'attend à voir revenir dans ses signaux. Les deux
+ * réécritures forment une paire — changer l'une sans l'autre casse l'appel.
+ *
+ * Les autres destinataires — l'agent, ses propres appareils — reçoivent la
+ * charge telle quelle : eux savent parfaitement qui ils sont.
+ */
+function chargeCallStatePour(session, destinataireId, payload) {
+  if (!session || !session.agentId) return payload;
+  if (destinataireId !== session.appelantId) return payload;
+  const parleDeLAgent =
+    payload.from === session.agentId || payload.userId === session.agentId;
+  if (!parleDeLAgent) return payload;
+  return {
+    ...payload,
+    from: payload.from === session.agentId ? session.centreId : payload.from,
+    userId: payload.userId === session.agentId ? session.centreId : payload.userId,
+    displayName:
+      payload.userId === session.agentId ? session.nomCentre : payload.displayName,
+  };
+}
+
+/**
  * Fait sonner un agent DANS L'APPEL QUE L'APPELANT A DÉJÀ OUVERT.
  *
  * C'est tout le principe : l'agent n'est pas mis en relation avec l'appelant, il
@@ -1772,9 +1801,82 @@ function envoieAuxSocketsDeLAppel(userId, callId, payload) {
   return sendTo(userId, payload);
 }
 
+/**
+ * CENTRE D'APPELS — LE PIÈGE, et il n'est pas celui du guide.
+ *
+ * Sur une pile où les pairs se désignent par leur numéro de téléphone, masquer
+ * l'agent CASSE la connexion : la réponse SDP arrive au nom d'un pair inconnu et
+ * le client la jette en silence. Chez nous, l'inverse : la mesh est indexée par
+ * `userId`, l'appelant apprend celui de l'agent par `call_state "joined"`, et
+ * tout fonctionnerait — en révélant l'agent.
+ *
+ * C'est donc le MASQUAGE qui impose la réécriture, et non la connexion. Mais la
+ * conclusion du guide tient mot pour mot : une identité masquée doit l'être
+ * jusqu'au bout de la pile, y compris dans les champs techniques que l'interface
+ * n'affiche jamais. À moitié masquée, elle ne casse pas seulement le secret :
+ * elle casse le protocole.
+ *
+ * Les deux camps n'ont pas le même nom pour la même connexion :
+ *
+ *   | émetteur | croit parler à | reçoit `from` |
+ *   |----------|----------------|---------------|
+ *   | appelant | LE CENTRE      | le centre     |
+ *   | agent    | l'appelant     | l'appelant    |
+ *
+ * D'où une réécriture ASYMÉTRIQUE : on redirige dans un sens, on renomme dans
+ * l'autre. Elle répare deux choses à la fois — l'appariement des pairs chez
+ * l'appelant, et l'anonymat, que le seul masquage d'interface laissait fuir à
+ * chaque candidat ICE.
+ */
+function relaisIvr(ws, session, toUserId, callId, signal) {
+  if (!session || !session.agentId) return false;
+
+  // APPELANT → il adresse ses signaux AU CENTRE, seul pair qu'il connaisse.
+  // On les redirige vers l'agent ; `from` reste intact, l'agent doit voir le
+  // vrai appelant, c'est lui qu'il prend en charge.
+  if (ws.userId === session.appelantId && toUserId === session.centreId) {
+    envoieAuxSocketsDeLAppel(session.agentId, callId, {
+      type: "call_signal",
+      callId,
+      from: session.appelantId,
+      signal,
+    });
+    return true;
+  }
+
+  // AGENT → APPELANT : la cible est la bonne, c'est l'expéditeur qu'il faut
+  // renommer. Sans cette ligne, le vrai identifiant de l'agent remontait jusqu'à
+  // l'appelant à chaque candidat ICE, dans un champ que personne ne regarde.
+  if (ws.userId === session.agentId && toUserId === session.appelantId) {
+    envoieAuxSocketsDeLAppel(session.appelantId, callId, {
+      type: "call_signal",
+      callId,
+      from: session.centreId,
+      signal,
+    });
+    return true;
+  }
+
+  return false;
+}
+
 async function handleCallSignal(ws, msg) {
   const { callId, toUserId, signal } = msg;
   if (!callId || !toUserId || !signal) return;
+
+  // Avant le contrôle de participation : l'appelant vise le CENTRE, qui est bien
+  // participant, mais c'est l'agent qui doit recevoir. Le chemin est très chaud
+  // — des dizaines de candidats ICE par appel — d'où une simple lecture en
+  // mémoire, sans requête.
+  const session = sessionIvr(callId);
+  if (session && relaisIvr(ws, session, toUserId, callId, signal)) {
+    if (!session.tracee) {
+      session.tracee = true;
+      console.log(`[ivr] pont de signalisation actif — appel ${callId}`);
+    }
+    return;
+  }
+
   const ids = await callParticipantIds(callId);
   if (!ids.includes(ws.userId) || !ids.includes(toUserId)) return;
   envoieAuxSocketsDeLAppel(toUserId, callId, {
@@ -1926,8 +2028,11 @@ async function handleCallState(ws, msg) {
     userId: joinedUserId ?? ws.userId,
     displayName: displayName ?? null,
   };
+  // ⚠️ UNE CHARGE PAR DESTINATAIRE. C'est ici que l'appelant apprend qui vient
+  // de décrocher : diffuser la même charge à tous lui livrerait l'identifiant de
+  // l'agent, et sa mesh WebRTC s'appuierait dessus. Voir `chargeCallStatePour`.
   for (const uid of ids) {
-    sendTo(uid, payload);
+    sendTo(uid, chargeCallStatePour(sessionCourante, uid, payload));
   }
 
   /**

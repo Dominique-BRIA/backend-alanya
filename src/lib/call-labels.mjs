@@ -12,6 +12,7 @@
 // de libellé selon le chemin par lequel il arrive.
 
 import { nomAffichage } from "./display-name.mjs";
+import { TYPE_COMPTE_CENTRE } from "./ivr.mjs";
 
 /// Délai au bout duquel un appel qui sonne est considéré sans réponse.
 ///
@@ -183,7 +184,30 @@ export function serialiseAppelPour(call, conv, pourUserId) {
   const isOutgoing = call.initiatorId === pourUserId;
   const isGroup = conv?.isGroup ?? false;
   const others = (call.participants ?? []).filter((p) => p.userId !== pourUserId);
-  const peer = others[0]?.user;
+
+  /**
+   * CENTRE D'APPELS — le correspondant n'est pas « le premier autre participant ».
+   *
+   * Un appel passé à un standard compte TROIS participants : l'appelant, le
+   * numéro du centre (qui ne décroche jamais) et l'agent qui a pris la main.
+   * `others[0]` donnait le bon résultat par le seul hasard de l'ordre
+   * d'insertion — Prisma ne garantit aucun ordre ici, et le jour où il change,
+   * l'historique de l'appelant afficherait le nom de l'agent. L'anonymat ne peut
+   * pas reposer là-dessus.
+   *
+   * La règle, explicite : l'appelant n'a jamais vu QUE le centre, et l'agent
+   * prend en charge l'appelant. Chacun retrouve dans son historique ce qu'il a
+   * vécu.
+   */
+  const centre = others.find((p) => Number(p.user?.typeCompte) === TYPE_COMPTE_CENTRE);
+  let retenu = others[0];
+  if (centre) {
+    retenu = isOutgoing
+      ? centre
+      : others.find((p) => p.userId === call.initiatorId) ?? others[0];
+  }
+
+  const peer = retenu?.user;
   const peerName = isGroup
     ? (conv?.name ?? "Groupe")
     : (peer ? nomAffichage(peer) : null) ?? "Inconnu";
@@ -209,7 +233,10 @@ export function serialiseAppelPour(call, conv, pourUserId) {
     peerName,
     peerNumber: isGroup ? null : (peer?.publicNumber ?? null),
     peerAvatarUrl: isGroup ? null : (peer?.avatarUrl ?? null),
-    participantCount: (call.participants ?? []).length,
+    // Un appel via un standard reste un tête-à-tête pour les deux personnes qui
+    // se parlent. Annoncer trois participants révélerait qu'un tiers a été
+    // sollicité — l'anonymat se perd aussi par un simple compteur.
+    participantCount: centre ? 2 : (call.participants ?? []).length,
     startedAt: call.startedAt,
     answeredAt: call.answeredAt,
     endedAt: vue.endedAt,

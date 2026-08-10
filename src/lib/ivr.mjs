@@ -8,7 +8,6 @@
 // l'anonymat décoratif.
 
 import { existsSync, readdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 /**
@@ -48,14 +47,18 @@ export function estCompteCentre(user) {
  * accéder, lui qui ne sait pas joindre d'en-tête `Authorization`. Aucune route
  * dédiée à écrire, donc aucune garde anti-traversée de répertoire à oublier.
  *
- * `process.cwd()` d'abord : les deux process (PM2 `alanya-api` et `alanya-ws`)
- * sont lancés depuis la racine du dépôt. Le repli par `import.meta.url` couvre
- * le cas d'un lancement depuis ailleurs.
+ * ⚠️ Résolu par `process.cwd()`, et SURTOUT PAS par
+ * `new URL(..., import.meta.url)` : Turbopack résout cette forme **à la
+ * compilation** et fait échouer le build de Next avec « Can't resolve
+ * '../../public/ivr/' ». `tsc --noEmit` ne voit rien de tout ça — c'est bien
+ * `npm run build` qui fait foi ici, pas le contrôle de types.
+ *
+ * Les deux process (PM2 `alanya-api` et `alanya-ws`) sont lancés depuis la
+ * racine du dépôt. `IVR_SOUNDS_DIR` reste là pour un déploiement qui servirait
+ * les sons depuis ailleurs.
  */
 function dossierSons() {
-  const parCwd = path.join(process.cwd(), "public", "ivr");
-  if (existsSync(parCwd)) return parCwd;
-  return fileURLToPath(new URL("../../public/ivr/", import.meta.url));
+  return process.env.IVR_SOUNDS_DIR ?? path.join(process.cwd(), "public", "ivr");
 }
 
 function urlPublique(fichier) {
