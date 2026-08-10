@@ -6,6 +6,7 @@ import { createMeetingSchema } from "@/lib/validation";
 import { randomUUID } from "crypto";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { notifieInvitationReunion } from "@/lib/push";
 
 // GET /api/meetings — liste les meetings de l'utilisateur (organisés ou participés).
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -100,8 +101,37 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     },
     include: {
       participants: true,
+      organiser: true,
     },
   });
+
+  // Prévenir les invités.
+  //
+  // Rien ne les avertissait : la réunion se créait, les lignes `participant`
+  // étaient posées, et personne ne l'apprenait avant d'ouvrir l'onglet Réunions
+  // par hasard. Une invitation à laquelle on ne peut pas répondre parce qu'on
+  // l'ignore n'en est pas une.
+  //
+  // Le push est le SEUL canal disponible depuis une route HTTP : le serveur
+  // WebSocket est un process séparé, l'API n'a aucun moyen de lui parler. C'est
+  // aussi le bon canal — il atteint un téléphone dont l'application est fermée,
+  // ce que le WebSocket ne fait pas.
+  //
+  // En arrière-plan et sans `await` : une panne de Firebase ne doit pas faire
+  // échouer une création de réunion parfaitement valide, déjà écrite en base.
+  const organiserName = nomAffichage(meeting.organiser);
+  const enCours = meeting.start_time.getTime() <= Date.now();
+  for (const id of participantIds) {
+    notifieInvitationReunion({
+      recipientId: id,
+      meetingId: meeting.idMeeting,
+      objet: meeting.objet,
+      organiserName: organiserName ?? "Un contact",
+      enCours,
+    }).catch((e) =>
+      console.error("[meetings] notification d'invitation:", e?.message ?? e),
+    );
+  }
 
   return ok(
     {

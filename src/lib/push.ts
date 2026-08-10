@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
+import { pushMeetingInvitation } from "../../push.mjs";
 
 export function isPushConfigured(): boolean {
   return env.push.enabled();
@@ -21,15 +22,26 @@ export async function unregisterPushToken(userId: string, token: string): Promis
   await prisma.pushDevice.deleteMany({ where: { userId, token } });
 }
 
-/** Envoie une notification FCM (v2 — implémenté dans push.mjs côté WebSocket). */
-export async function sendPushToUser(
-  _userId: string,
-  _payload: {
-    title: string;
-    body: string;
-    data?: Record<string, string>;
-  },
-): Promise<void> {
-  // v1 : push désactivé ; voir backend/push.mjs pour la v2.
-  if (!env.push.enabled()) return;
+/**
+ * Notifie quelqu'un qu'il vient d'être ajouté à une réunion.
+ *
+ * Délègue à `push.mjs`, la SEULE implémentation d'envoi FCM du projet, celle
+ * qu'utilise déjà `ws-server.mjs`. Même raison qu'à `calls.ts` → `call-labels
+ * .mjs` : le serveur WebSocket est un process Node séparé, hors compilation
+ * Next, et ne peut pas importer de TypeScript. Une seconde implémentation ici
+ * finirait par diverger de celle qui envoie les appels et les messages.
+ *
+ * ⚠️ Cette fonction remplace un `sendPushToUser` qui ne faisait RIEN : un
+ * vestige de la v1, resté exporté avec un corps vide. Aucune route ne s'en
+ * servait, mais sa seule présence donnait à croire que les routes HTTP
+ * pouvaient notifier — elles ne le pouvaient pas.
+ */
+export async function notifieInvitationReunion(args: {
+  recipientId: string;
+  meetingId: number;
+  objet: string;
+  organiserName: string;
+  enCours?: boolean;
+}): Promise<void> {
+  await pushMeetingInvitation(prisma, args);
 }

@@ -211,6 +211,40 @@ export async function pushIncomingCall(prisma, {
   });
 }
 
+/**
+ * Notifie quelqu'un qu'il vient d'être ajouté à une réunion.
+ *
+ * ⚠️ AUCUNE DATE N'EST ÉCRITE DANS LE TEXTE, et c'est délibéré. Le serveur
+ * tourne en UTC, ses utilisateurs non : formater ici « à 14 h 30 » afficherait
+ * une heure fausse d'un décalage horaire, et une notification ne peut pas être
+ * corrigée après coup. La date exacte est lisible dans l'application, qui la
+ * rend dans le fuseau du téléphone ; on ne dit ici que ce qui reste vrai
+ * partout — le sujet, l'organisateur, et le fait qu'elle ait déjà commencé.
+ */
+export async function pushMeetingInvitation(prisma, {
+  recipientId,
+  meetingId,
+  objet,
+  organiserName,
+  enCours = false,
+}) {
+  if (!isPushEnabled()) return;
+  const sujet = objet?.trim() || "Réunion";
+  await sendPushToUser(prisma, recipientId, {
+    title: enCours ? "Réunion en cours" : "Invitation à une réunion",
+    body: enCours
+      ? `${organiserName} vous a ajouté à « ${sujet} », déjà commencée`
+      : `${organiserName} vous a ajouté à « ${sujet} »`,
+    data: {
+      type: "meeting_invitation",
+      meetingId: String(meetingId),
+      objet: sujet,
+      organiserName: organiserName ?? "",
+      enCours: String(Boolean(enCours)),
+    },
+  });
+}
+
 /** Notifie (data-only) que l'appel est terminé/annulé → le client retire la
  *  notif d'appel plein écran, même app fermée. Ciblé par le callId partagé. */
 export async function pushCallCancelled(prisma, { recipientId, callId }) {
