@@ -109,7 +109,7 @@ export function choisirMusiqueAttente() {
  * `center_alanyaID` le numéro du centre, `menuNro` la touche, `users_alanyaID`
  * l'agent, `libelle` le nom du service. Rien à créer.
  *
- * Deux points que la table permet et que le guide n'envisageait pas :
+ * Trois points que la table permet et que le guide n'envisageait pas :
  *
  *  - **plusieurs agents sur une même touche.** Une touche est un SERVICE, pas
  *    une personne ; le référentiel prévoit d'ailleurs `maxAgentsPerCenter`. On
@@ -120,13 +120,19 @@ export function choisirMusiqueAttente() {
  *    C'est ce qui rend l'anonymat gratuit : changer d'agent ne change rien à ce
  *    que l'appelant voit.
  *
+ *  - **une touche ANNONCÉE mais pas encore ouverte.** Une ligne sans
+ *    `users_alanyaID` décrit un service que l'invite vocale promet et qu'aucun
+ *    agent ne dessert encore. Ce n'est pas la même chose qu'une touche
+ *    inexistante : le vocal l'annonce, l'appelant l'a entendue, lui répondre
+ *    « choix invalide » serait un mensonge. On la renvoie donc au client, marquée
+ *    indisponible, et l'appui dessus a son propre message.
+ *
  * Ajouter un service = une ligne en base. Aucun redéploiement.
  */
 export async function lireMenuCentre(prisma, centreId) {
   const lignes = await prisma.center.findMany({
     where: {
       center_alanyaID: centreId,
-      users_alanyaID: { not: null },
       menuNro: { not: null },
     },
     orderBy: { menuNro: "asc" },
@@ -140,18 +146,66 @@ export async function lireMenuCentre(prisma, centreId) {
     if (!parTouche.has(touche)) {
       parTouche.set(touche, { digit: touche, label: l.libelle, agentIds: [] });
     }
-    parTouche.get(touche).agentIds.push(l.users_alanyaID);
+    if (l.users_alanyaID) parTouche.get(touche).agentIds.push(l.users_alanyaID);
   }
   return [...parTouche.values()];
 }
 
 /**
- * Ce qu'on envoie au CLIENT : la touche et son libellé, rien d'autre.
+ * Ce qu'on envoie au CLIENT : la touche, son libellé, et si elle mène quelque
+ * part. Rien d'autre.
  *
  * ⚠️ Jamais `agentIds`. Le client n'en a aucun besoin, et le lui transmettre
  * ruinerait l'anonymat même s'il ne l'affiche pas — un identifiant qui arrive
  * jusqu'au client est un identifiant public.
+ *
+ * `disponible` est dérivé, jamais stocké : un service redevient joignable dès
+ * qu'on lui rattache un agent en base, sans rien à mettre à jour ailleurs.
  */
 export function optionsPubliques(options) {
-  return options.map(({ digit, label }) => ({ digit, label }));
+  return options.map(({ digit, label, agentIds }) => ({
+    digit,
+    label,
+    disponible: agentIds.length > 0,
+  }));
+}
+
+/**
+ * Cet agent peut-il prendre un appel ?
+ *
+ * Même définition que `estOccupe` de `src/lib/calls.ts`, et pour la même raison
+ * qu'il en existe une copie : `ws-server.mjs` ne peut pas importer de
+ * TypeScript. La SOURCE AUTORITAIRE est la base — pas la présence d'une socket,
+ * ni la colonne `center.in_call`. Un agent peut être en ligne sur un autre
+ * appareil, ou son application avoir été tuée en pleine conversation.
+ *
+ * `leftAt: null` sans exiger `joinedAt` : un agent dont le téléphone SONNE déjà
+ * pour un autre appelant est occupé, même s'il n'a pas encore décroché. Sans
+ * cela, deux appelants du standard pourraient le faire sonner en même temps.
+ */
+export async function agentDisponible(prisma, agentId) {
+  const occupe = await prisma.callParticipant.findFirst({
+    where: {
+      userId: agentId,
+      leftAt: null,
+      call: { status: { in: ["RINGING", "ONGOING"] } },
+    },
+    select: { callId: true },
+  });
+  return occupe === null;
+}
+
+/**
+ * Premier agent libre d'un service, ou `null` s'ils sont tous en ligne.
+ *
+ * Séquentiel et non parallèle : dès qu'on en trouve un, les suivants n'ont pas
+ * à être interrogés. Un service compte au plus `maxAgentsPerCenter` agents (5
+ * par défaut dans le référentiel), l'ordre de la table fait donc office de
+ * priorité — le premier inscrit est le premier sollicité.
+ */
+export async function choisirAgentLibre(prisma, agentIds) {
+  for (const id of agentIds) {
+    if (await agentDisponible(prisma, id)) return id;
+  }
+  return null;
 }

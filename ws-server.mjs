@@ -19,6 +19,8 @@ import {
 import { nomAffichage } from "./src/lib/display-name.mjs";
 import {
   DELAI_MENU_MS,
+  DELAI_SONNERIE_AGENT_MS,
+  choisirAgentLibre,
   choisirMusiqueAttente,
   estCompteCentre,
   lireMenuCentre,
@@ -1318,6 +1320,241 @@ async function ouvrirSessionIvr(ws, call, centre) {
   console.log(`[ivr] menu ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} service(s)`);
 }
 
+/**
+ * Fait sonner un agent DANS L'APPEL QUE L'APPELANT A DÉJÀ OUVERT.
+ *
+ * C'est tout le principe : l'agent n'est pas mis en relation avec l'appelant, il
+ * REJOINT le `callId` existant — exactement comme l'invité d'un transfert. La
+ * salle WebRTC d'Alanya EST le `callId`, donc le pont se fait de lui-même au
+ * décrochage. Rien à réimplémenter : la mise en tampon quand l'agent n'a pas de
+ * socket, le push quand son application est fermée, l'historique et la détection
+ * « déjà en ligne » suivent tout seuls.
+ *
+ * L'agent voit le VRAI appelant — c'est lui qu'il prend en charge, et il ne
+ * pourrait rien tracer d'un correspondant anonyme. `ivrFrom` porte le nom du
+ * centre pour la mention « via … » sur son écran de sonnerie ; c'est un champ
+ * additif, qu'un client qui l'ignore traite comme un appel ordinaire.
+ */
+async function sonnerAgentIvr(session, agentId) {
+  const [appelant, call] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: session.appelantId },
+      select: { nom: true, pseudo: true, publicNumber: true, avatarUrl: true },
+    }),
+    prisma.call.findUnique({
+      where: { id: session.callId },
+      select: { convId: true, type: true },
+    }),
+  ]);
+  if (!call) return false;
+
+  await prisma.callParticipant.upsert({
+    where: { callId_userId: { callId: session.callId, userId: agentId } },
+    update: { leftAt: null, joinedAt: null },
+    create: { callId: session.callId, userId: agentId, joinedAt: null },
+  });
+
+  const nomAppelant = appelant ? nomAffichage(appelant) : "Appel";
+  const charge = {
+    type: "incoming_call",
+    callId: session.callId,
+    convId: call.convId,
+    callType: call.type,
+    callerId: session.appelantId,
+    callerName: nomAppelant,
+    callerAvatarUrl: appelant?.avatarUrl ?? null,
+    // Un appel à deux, et non un groupe : le numéro du centre est participant en
+    // base mais ne décrochera jamais. Annoncer un groupe donnerait à l'agent une
+    // interface à plusieurs pour une conversation en tête-à-tête.
+    isGroup: false,
+    groupName: null,
+    memberCount: 2,
+    ivrFrom: session.nomCentre,
+  };
+  if (!sendTo(agentId, charge)) bufferPendingCall(agentId, charge);
+  if (isPushEnabled()) {
+    await pushIncomingCall(prisma, {
+      recipientId: agentId,
+      callId: session.callId,
+      convId: call.convId,
+      callerName: `${nomAppelant} (via ${session.nomCentre})`,
+      callType: call.type,
+      isGroup: false,
+      groupName: null,
+    });
+  }
+  return true;
+}
+
+/**
+ * Ramène l'appelant au menu après un agent injoignable, occupé ou qui refuse.
+ *
+ * ⚠️ C'EST CE QUI DISTINGUE UN STANDARD D'UN JOUET. Un agent indisponible ne
+ * doit jamais raccrocher au nez de l'appelant : celui-ci revient au menu et
+ * choisit autre chose, comme sur n'importe quel vrai standard téléphonique.
+ */
+async function ivrRetourAuMenu(session, { code, message }) {
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  const agentId = session.agentId;
+  session.agentId = null;
+  session.agentLabel = null;
+  session.etape = "menu";
+
+  // L'agent sort de l'appel. Sans cette ligne, il resterait « occupé » aux yeux
+  // de tous les autres appelants alors qu'il ne parle à personne — et le
+  // standard le sauterait à chaque nouvelle demande.
+  if (agentId) {
+    try {
+      await prisma.callParticipant.updateMany({
+        where: { callId: session.callId, userId: agentId, leftAt: null },
+        data: { leftAt: new Date() },
+      });
+    } catch (e) {
+      console.error("[ivr] sortie de l'agent:", e?.message ?? e);
+    }
+  }
+
+  envoieAAppelant(session, {
+    type: "ivr_error",
+    callId: session.callId,
+    code,
+    retry: true,
+    message,
+    // Le menu est renvoyé avec l'erreur : une touche a pu devenir disponible ou
+    // indisponible depuis l'ouverture, et l'écran doit se remettre à jour sans
+    // avoir à redemander quoi que ce soit.
+    options: optionsPubliques(session.options),
+  });
+  armerMinuteurMenu(session);
+}
+
+/**
+ * L'agent ne décroche pas → retour au menu, et on arrête sa sonnerie.
+ *
+ * L'annulation chez l'agent n'est pas cosmétique : sans elle son téléphone
+ * continuerait de sonner jusqu'à son propre minuteur, et il décrocherait sur un
+ * appelant déjà reparti dans le menu.
+ */
+function armerMinuteurAgent(session) {
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = setTimeout(async () => {
+    const vivante = sessionsIvr.get(session.callId);
+    if (!vivante || vivante.etape !== "sonnerie") return;
+    const agentId = vivante.agentId;
+    const libelle = vivante.agentLabel;
+    if (agentId) {
+      sendTo(agentId, {
+        type: "call_state",
+        callId: vivante.callId,
+        state: "cancelled",
+        from: vivante.appelantId,
+        userId: vivante.appelantId,
+        displayName: null,
+      });
+      if (isPushEnabled()) {
+        await pushCallCancelled(prisma, {
+          recipientId: agentId,
+          callId: vivante.callId,
+        }).catch(() => {});
+      }
+    }
+    await ivrRetourAuMenu(vivante, {
+      code: "no_answer",
+      message: `${libelle} n'a pas répondu. Choisissez un autre service.`,
+    });
+  }, DELAI_SONNERIE_AGENT_MS);
+}
+
+/**
+ * L'appelant tape une touche.
+ *
+ * Trois refus possibles, et ils ne disent PAS la même chose :
+ *
+ *  - `invalid` — la touche ne correspond à rien ;
+ *  - `unavailable` — le service existe, l'invite vocale l'annonce, mais aucun
+ *    agent ne le dessert encore. Répondre « choix invalide » à quelqu'un qui
+ *    vient d'entendre « tapez 2 » serait un mensonge ;
+ *  - `busy` — tous les agents du service sont en ligne.
+ *
+ * Les trois ramènent au menu (`retry: true`), aucun ne raccroche.
+ */
+async function handleIvrDtmf(ws, msg) {
+  const { callId, digit } = msg;
+  const session = sessionIvr(callId);
+
+  // Identité vérifiée par le JETON porté par la socket, jamais par la charge
+  // utile : sans cela, n'importe qui connaissant un identifiant d'appel pourrait
+  // faire sonner les agents d'un centre.
+  if (!session || session.appelantId !== ws.userId) return;
+  // Une touche pendant l'attente est ignorée en silence — l'agent sonne déjà.
+  if (session.etape !== "menu") return;
+
+  const touche = Number(digit);
+  const option = session.options.find((o) => o.digit === touche);
+  const menu = optionsPubliques(session.options);
+
+  if (!option) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId,
+      code: "invalid",
+      retry: true,
+      message: "Ce choix ne correspond à aucun service.",
+      options: menu,
+    });
+  }
+  if (option.agentIds.length === 0) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId,
+      code: "unavailable",
+      retry: true,
+      message: `${option.label} n'est pas encore disponible.`,
+      options: menu,
+    });
+  }
+
+  const agentId = await choisirAgentLibre(prisma, option.agentIds);
+  if (!agentId) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId,
+      code: "busy",
+      retry: true,
+      message: `${option.label} est en ligne. Choisissez un autre service.`,
+      options: menu,
+    });
+  }
+
+  // ⚠️ L'ÉTAT BASCULE AVANT LE MOINDRE ENVOI. Un double appui — sur un réseau
+  // lent, l'utilisateur insiste — lancerait sinon deux sonneries d'agent pour
+  // une seule intention. Le verrouillage du clavier côté client est un confort ;
+  // la garantie est ici.
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  session.agentId = agentId;
+  session.agentLabel = option.label;
+  session.etape = "sonnerie";
+
+  envoieAAppelant(session, {
+    type: "ivr_hold",
+    callId,
+    digit: touche,
+    label: option.label,
+    holdUrl: session.urlAttente,
+  });
+
+  if (!(await sonnerAgentIvr(session, agentId))) {
+    return ivrRetourAuMenu(session, {
+      code: "offline",
+      message: `${option.label} est momentanément injoignable.`,
+    });
+  }
+  armerMinuteurAgent(session);
+  console.log(`[ivr] touche ${touche} « ${option.label} » — appel ${callId}, agent sollicité`);
+}
+
 async function handleCallRing(ws, msg) {
   const { callId } = msg;
   if (!callId) return;
@@ -1637,6 +1874,39 @@ async function handleCallState(ws, msg) {
   if (!callId || !state) return;
   const ids = await callParticipantIds(callId);
   if (!ids.includes(ws.userId)) return;
+
+  /**
+   * CENTRE D'APPELS — ce qui vient de l'AGENT ne se propage pas tel quel.
+   *
+   * Deux cas, et le second est celui qui sépare un standard d'un jouet :
+   *
+   *  - il DÉCROCHE : la session doit SURVIVRE. C'est elle qui, à partir de
+   *    maintenant, route la signalisation et tient l'identité du centre. Seul le
+   *    minuteur de sonnerie est annulé ;
+   *
+   *  - il REFUSE, ou son application se ferme pendant la sonnerie : ne surtout
+   *    pas relayer. Un `call_state rejected` fermerait l'écran de l'appelant —
+   *    autrement dit le standard lui raccrocherait au nez parce qu'un agent est
+   *    absent. On le ramène au menu.
+   */
+  const sessionCourante = sessionIvr(callId);
+  if (sessionCourante && ws.userId === sessionCourante.agentId) {
+    if (state === "joined" || state === "accepted") {
+      if (sessionCourante.minuteur) clearTimeout(sessionCourante.minuteur);
+      sessionCourante.minuteur = null;
+      sessionCourante.etape = "ponte";
+    } else if (
+      sessionCourante.etape === "sonnerie" &&
+      ["rejected", "declined", "ended", "cancelled"].includes(state)
+    ) {
+      ws.callIdActif = null;
+      await ivrRetourAuMenu(sessionCourante, {
+        code: "declined",
+        message: `${sessionCourante.agentLabel} n'est pas disponible. Choisissez un autre service.`,
+      });
+      return;
+    }
+  }
 
   // La socket déclare l'appel qu'elle porte, ce qui permet d'adresser la
   // signalisation WebRTC à L'APPAREIL et non au compte — voir
@@ -2293,6 +2563,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
       else if (msg.type === "call_state") await handleCallState(ws, msg);
       else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
+      else if (msg.type === "ivr_dtmf") await handleIvrDtmf(ws, msg);
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
       else if (msg.type === "edit_message") await handleEditMessage(ws, msg);
       else if (msg.type === "pin_message") await handlePinMessage(ws, msg);
