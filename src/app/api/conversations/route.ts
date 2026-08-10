@@ -129,6 +129,12 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
           publicNumber: pp.user.publicNumber,
           isOnline: hidePresence ? 0 : pp.user.isOnline,
           lastSeen: hidePresence ? null : (pp.user.lastSeen ?? null),
+          // Le rôle est posé à la création — le créateur naît ADMIN — mais il
+          // n'était pas renvoyé. Faute de le connaître, le client le devinait à
+          // la position dans la liste : chacun désignait donc un administrateur
+          // différent, et aucun n'était le créateur. Une seule colonne, lue par
+          // tout le monde, et les membres d'un groupe voient enfin les mêmes.
+          role: pp.role,
         };
       }),
       lastMessage: lastContent != null
