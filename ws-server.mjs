@@ -1810,6 +1810,67 @@ async function handleMeetingLeave(ws, msg) {
   }, ws.userId);
 }
 
+/// Borne haute de la durée prévue d'une réunion. Une valeur absurde envoyée par
+/// un client (bug d'arrondi, entier négatif retourné) figerait un minuteur pour
+/// tout le monde ; on la refuse plutôt que de l'écrire.
+const DUREE_REUNION_MAX_SEC = 24 * 3600;
+
+/**
+ * Prolonge la durée prévue d'une réunion en cours.
+ *
+ * Passe par le WebSocket et non par une route REST : c'est ici que vit la
+ * salle, donc le seul endroit d'où l'information atteint tous les participants
+ * dans la seconde. Une route HTTP aurait écrit en base sans que personne ne
+ * l'apprenne avant son prochain rechargement.
+ *
+ * ⚠️ ORGANISATEUR SEUL. La durée est le cadre qu'il a posé en créant la
+ * réunion ; laisser n'importe qui la repousser lui retirerait ce cadre.
+ *
+ * La nouvelle durée est calculée par le client qui prolonge (temps déjà écoulé
+ * + 15 min), pas ici : le serveur ne sait pas depuis quand CHACUN est connecté,
+ * le minuteur affiché courant depuis l'entrée de chacun dans la salle. Il se
+ * borne donc à valider et à refuser tout ce qui raccourcirait la réunion.
+ */
+async function handleMeetingExtend(ws, msg) {
+  const { meetingId, duree } = msg;
+  if (!meetingId || typeof duree !== "number" || !Number.isFinite(duree)) return;
+  const nouvelle = Math.round(duree);
+  if (nouvelle <= 0 || nouvelle > DUREE_REUNION_MAX_SEC) return;
+
+  const meeting = await prisma.meeting.findUnique({
+    where: { idMeeting: meetingId },
+    select: { idMeeting: true, isEnd: true, idOrganiser: true, duree: true },
+  });
+  if (!meeting || meeting.isEnd === 1) return;
+  if (meeting.idOrganiser !== ws.userId) {
+    ws.send(JSON.stringify({
+      type: "error",
+      message: "Seul l'organisateur peut prolonger la réunion",
+      meetingId,
+    }));
+    return;
+  }
+  // Ne jamais RACCOURCIR par ce chemin : deux organisateurs sur deux appareils,
+  // ou un message rejoué après une reconnexion, ramèneraient la réunion à une
+  // durée déjà dépassée et rallumeraient l'alerte chez tout le monde.
+  if (nouvelle <= meeting.duree) return;
+
+  await prisma.meeting.update({
+    where: { idMeeting: meetingId },
+    data: { duree: nouvelle },
+  });
+
+  // Diffusé à TOUS, l'organisateur compris : son application n'applique donc
+  // pas sa prolongation sur sa seule foi, elle attend la confirmation du
+  // serveur — le même chemin pour tout le monde, donc le même minuteur.
+  sendToMeeting(meetingId, {
+    type: "meeting_extended",
+    meetingId,
+    duree: nouvelle,
+    by: ws.userId,
+  });
+}
+
 async function handleMeetingSignal(ws, msg) {
   const { meetingId, toUserId, signal } = msg;
   if (!meetingId || !toUserId || !signal) return;
@@ -1921,6 +1982,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "meeting_join") await handleMeetingJoin(ws, msg);
       else if (msg.type === "meeting_leave") await handleMeetingLeave(ws, msg);
       else if (msg.type === "meeting_signal") await handleMeetingSignal(ws, msg);
+      else if (msg.type === "meeting_extend") await handleMeetingExtend(ws, msg);
     } catch (e) {
       console.error("[ws] erreur de traitement:", e);
       ws.send(JSON.stringify({ type: "error", message: "Erreur serveur", tempId: msg?.tempId }));
