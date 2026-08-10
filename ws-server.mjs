@@ -2501,6 +2501,56 @@ async function handleMeetingSignal(ws, msg) {
   }
 }
 
+/// Longueur maximale d'un message de salle. Le fil est éphémère et sert à
+/// glisser un lien ou une précision pendant qu'on parle : au-delà, c'est une
+/// conversation, et elle a son propre écran.
+const MESSAGE_REUNION_MAX = 2000;
+
+/**
+ * Relaie un message texte aux autres participants de la salle.
+ *
+ * ÉPHÉMÈRE, ET C'EST VOULU. Rien n'est écrit en base : le fil vit le temps de
+ * la réunion et disparaît avec elle, comme dans les autres outils de
+ * visioconférence. Persister demanderait de rattacher une vraie conversation à
+ * la réunion — donc une migration — pour un fil que personne ne relit.
+ *
+ * Conséquence assumée : qui arrive en cours de route ne voit pas ce qui a été
+ * dit avant. Le serveur ne garde aucun historique à lui renvoyer.
+ *
+ * L'expéditeur est renvoyé par le serveur, jamais pris du message : un client
+ * pourrait sinon écrire sous le nom d'un autre. Même raison pour l'horodatage.
+ *
+ * Le message part aussi à l'expéditeur — `sendToMeeting` sans exclusion — pour
+ * que tout le monde reçoive le même fil dans le même ordre, celui du serveur.
+ * L'afficher localement avant confirmation le placerait ailleurs chez lui que
+ * chez les autres.
+ */
+async function handleMeetingMessage(ws, msg) {
+  const { meetingId } = msg;
+  const texte = typeof msg.text === "string" ? msg.text.trim() : "";
+  if (!meetingId || !texte) return;
+  if (texte.length > MESSAGE_REUNION_MAX) return;
+
+  // Seuls les gens PRÉSENTS dans la salle écrivent : être invité ne suffit pas,
+  // sinon on pourrait alimenter un fil sans y assister.
+  const room = meetingRooms.get(meetingId);
+  if (!room || !room.has(ws.userId)) return;
+
+  const user = await prisma.user.findUnique({
+    where: { id: ws.userId },
+    select: { pseudo: true, publicNumber: true },
+  });
+
+  sendToMeeting(meetingId, {
+    type: "meeting_message",
+    meetingId,
+    fromUserId: ws.userId,
+    displayName: user?.pseudo ?? user?.publicNumber ?? "Participant",
+    text: texte,
+    sentAt: new Date().toISOString(),
+  });
+}
+
 /// Combien de temps avant le début d'une réunion part le rappel.
 const RAPPEL_REUNION_AVANT_MS = 5 * 60 * 1000;
 
@@ -2688,6 +2738,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "meeting_leave") await handleMeetingLeave(ws, msg);
       else if (msg.type === "meeting_signal") await handleMeetingSignal(ws, msg);
       else if (msg.type === "meeting_extend") await handleMeetingExtend(ws, msg);
+      else if (msg.type === "meeting_message") await handleMeetingMessage(ws, msg);
     } catch (e) {
       console.error("[ws] erreur de traitement:", e);
       ws.send(JSON.stringify({ type: "error", message: "Erreur serveur", tempId: msg?.tempId }));
