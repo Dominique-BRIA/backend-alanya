@@ -2551,6 +2551,38 @@ async function handleMeetingMessage(ws, msg) {
   });
 }
 
+/**
+ * Main levée : signale qu'on demande la parole, ou qu'on la rend.
+ *
+ * Relayé, jamais stocké. L'état d'une main vit le temps de la réunion, comme le
+ * fil de discussion — le persister obligerait à le nettoyer à la fin, et à
+ * gérer le cas d'une main restée levée par une déconnexion brutale.
+ *
+ * Diffusé à TOUS, l'auteur compris : sa propre main s'allume sur la réponse du
+ * serveur et non sur sa seule foi, donc tout le monde voit le même état.
+ *
+ * Comme pour le chat, l'expéditeur est posé par le serveur : sans cela on
+ * lèverait la main d'un autre.
+ *
+ * Qui arrive en cours de route ne voit pas les mains déjà levées — rien n'est
+ * conservé pour le lui dire. Le geste est bref par nature, et une main levée
+ * finit par se baisser.
+ */
+async function handleMeetingHand(ws, msg) {
+  const { meetingId } = msg;
+  if (!meetingId) return;
+
+  const room = meetingRooms.get(meetingId);
+  if (!room || !room.has(ws.userId)) return;
+
+  sendToMeeting(meetingId, {
+    type: "meeting_hand",
+    meetingId,
+    fromUserId: ws.userId,
+    levee: msg.levee === true,
+  });
+}
+
 /// Combien de temps avant le début d'une réunion part le rappel.
 const RAPPEL_REUNION_AVANT_MS = 5 * 60 * 1000;
 
@@ -2739,6 +2771,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "meeting_signal") await handleMeetingSignal(ws, msg);
       else if (msg.type === "meeting_extend") await handleMeetingExtend(ws, msg);
       else if (msg.type === "meeting_message") await handleMeetingMessage(ws, msg);
+      else if (msg.type === "meeting_hand") await handleMeetingHand(ws, msg);
     } catch (e) {
       console.error("[ws] erreur de traitement:", e);
       ws.send(JSON.stringify({ type: "error", message: "Erreur serveur", tempId: msg?.tempId }));
