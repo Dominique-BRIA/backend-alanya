@@ -419,9 +419,15 @@ async function clotureAppelsDeLUtilisateur(userId) {
         const restants = await prisma.callParticipant.count({
           where: { callId: appel.id, joinedAt: { not: null }, leftAt: null },
         });
-        clos = restants === 0;
+        clos = restants < 2;
       }
-      if (!clos) continue;
+      if (!clos) {
+        // Les autres participants restent en appel mais sont prévenus du départ.
+        for (const uid of participants) {
+          if (uid !== userId) sendTo(uid, { type: "call_state", callId: appel.id, state: "left", from: userId, userId });
+        }
+        continue;
+      }
 
       await prisma.call.update({
         where: { id: appel.id },
