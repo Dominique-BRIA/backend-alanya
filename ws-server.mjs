@@ -970,6 +970,78 @@ async function handleTyping(ws, msg) {
 // La révocation en base (DELETE /api/appareils/:id) reste indispensable : elle
 // couvre l'appareil hors ligne au moment du clic, qui sera éjecté à son retour.
 // Cet événement ne fait qu'accélérer le cas courant.
+/**
+ * Éjecte les sockets dont l'appareil a été fermé, sans attendre que le client
+ * s'en aperçoive.
+ *
+ * ⚠️ POURQUOI CE BALAYAGE EXISTE. Une socket ne s'authentifie QU'À SON
+ * OUVERTURE : passé ce moment, plus rien ne la revérifie. Un appareil évincé
+ * garde donc son temps réel — messages, appels, présence — aussi longtemps qu'il
+ * ne se déconnecte pas, c'est-à-dire potentiellement des heures. La révocation
+ * des jetons ne l'atteint pas : elle ne joue que sur l'API HTTP.
+ *
+ * Les deux autres chemins couvrent déjà le cas courant — le nouvel arrivant
+ * annonce l'éviction, et l'appareil éteint l'apprend à son rafraîchissement.
+ * Celui-ci ferme le trou qui reste : un appareil ALLUMÉ dont personne n'a pu
+ * prévenir, parce que le réseau de l'arrivant a lâché au mauvais moment.
+ *
+ * Il ne coûte rien : la requête ne porte que sur les appareils réellement
+ * connectés, et chaque socket n'est traitée qu'une fois.
+ */
+async function ejecteLesAppareilsFermes() {
+  // On ne peut viser que les sockets qui se sont annoncées. Une socket muette
+  // reste hors de portée — c'est la même limite que le verrou de conversation.
+  const parAppareil = new Map();
+  for (const set of clients.values()) {
+    for (const ws of set) {
+      if (ws.readyState !== ws.OPEN) continue;
+      if (ws.appareilId == null || ws.evictionNotifiee) continue;
+      if (!parAppareil.has(ws.appareilId)) parAppareil.set(ws.appareilId, []);
+      parAppareil.get(ws.appareilId).push(ws);
+    }
+  }
+  if (parAppareil.size === 0) return;
+
+  try {
+    const fermes = await prisma.appareil.findMany({
+      where: { appareilId: { in: [...parAppareil.keys()] }, destroy: 1 },
+      select: { appareilId: true, cookiesWebId: true },
+    });
+
+    for (const appareil of fermes) {
+      for (const ws of parAppareil.get(appareil.appareilId) ?? []) {
+        // Une seule fois par socket : sans ce drapeau, le balayage suivant
+        // renverrait l'ordre toutes les 30 s à un client qui n'a peut-être pas
+        // encore fini de se déconnecter.
+        ws.evictionNotifiee = true;
+        try {
+          ws.send(
+            JSON.stringify({
+              type: "session_revoked",
+              deviceId: appareil.cookiesWebId,
+              raison: "eviction",
+            }),
+          );
+        } catch {}
+        /*
+         * On laisse au client le temps de traiter l'annonce avant de couper :
+         * fermer dans la foulée lui retirerait le message qu'il doit afficher.
+         * Passé ce délai, la socket tombe quoi qu'il arrive — c'est ce qui rend
+         * l'éviction réelle, et non une demande polie.
+         */
+        setTimeout(() => {
+          try {
+            ws.close(4003, "Session fermée depuis un autre appareil");
+          } catch {}
+        }, 2000);
+      }
+      console.log(`[ws] appareil ${appareil.appareilId} éjecté (session fermée ailleurs)`);
+    }
+  } catch (e) {
+    console.error("[ws] ejecteLesAppareilsFermes:", e?.message ?? e);
+  }
+}
+
 async function handleSessionRevoked(ws, msg) {
   const deviceId = typeof msg.deviceId === "string" ? msg.deviceId.trim() : "";
   if (!deviceId) return;
@@ -2722,6 +2794,11 @@ wss.on("listening", () => {
   // — aucune réunion ne peut la franchir sans être vue.
   envoieRappelsReunion();
   setInterval(envoieRappelsReunion, 30 * 1000);
+  // Éviction des appareils fermés : même cadence. C'est le filet du dernier
+  // recours — les deux autres chemins agissent en une seconde — donc 30 s de
+  // latence suffisent, là où quinze minutes ne suffisaient pas.
+  ejecteLesAppareilsFermes();
+  setInterval(ejecteLesAppareilsFermes, 30 * 1000);
 });
 
 wss.on("connection", (ws, req) => {

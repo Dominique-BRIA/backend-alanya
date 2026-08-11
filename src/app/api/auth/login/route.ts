@@ -2,7 +2,11 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { ALANYA_ID_REGEX, loginSchema } from "@/lib/validation";
-import { fermeLesAutresSessions, typeDeviceDeLAppareil } from "@/lib/sessions";
+import {
+  fermeLesAutresSessions,
+  reactiveAppareil,
+  typeDeviceDeLAppareil,
+} from "@/lib/sessions";
 import { verifyPassword } from "@/lib/password";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
@@ -63,6 +67,9 @@ export async function POST(req: NextRequest) {
      */
     const famille = await typeDeviceDeLAppareil(user.id, deviceId, typeDevice);
     const sessionsFermees = await fermeLesAutresSessions(user.id, deviceId, famille);
+    // Cet appareil vient de prouver son identité : c'est le seul moment où une
+    // révocation précédente peut être levée. Voir `reactiveAppareil`.
+    await reactiveAppareil(user.id, deviceId);
 
     const tokens = await issueTokenPair(user.id, deviceId);
     return ok({

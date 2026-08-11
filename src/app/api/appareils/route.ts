@@ -59,10 +59,22 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
         ...(body.system !== undefined ? { system: body.system } : {}),
         isOnline: body.isOnline ?? 1,
         lastLogin: now,
-        // Une reconnexion réactive un appareil précédemment déconnecté à
-        // distance : c'est bien le même matériel, et l'utilisateur vient de s'y
-        // authentifier.
-        destroy: 0,
+        /*
+         * ⚠️ `destroy` N'EST PLUS REMIS À ZÉRO ICI (11/08/2026).
+         *
+         * Cette route s'appelle à chaque démarrage, avec un jeton d'accès
+         * existant. La remise à zéro donnait donc à un appareil RÉVOQUÉ le
+         * pouvoir d'annuler sa propre révocation : il lui suffisait de
+         * redémarrer dans les quinze minutes qui suivent, avant l'expiration de
+         * son jeton. Le bouton « Déconnecter » de l'écran « Appareils
+         * connectés » se laissait défaire de la même façon — c'est un défaut
+         * qui précède la session unique, pas une conséquence.
+         *
+         * Une révocation ne peut désormais être levée que par une AUTHENTIFI-
+         * CATION NEUVE : `POST /api/auth/login` s'en charge pour l'appareil qui
+         * vient de prouver son identité. C'est le seul moment où « c'est bien le
+         * même matériel, et l'utilisateur vient de s'y authentifier » est vrai.
+         */
       },
     });
 

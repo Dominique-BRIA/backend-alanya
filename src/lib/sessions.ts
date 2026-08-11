@@ -139,3 +139,28 @@ export async function fermeLesAutresSessions(
 
   return idsClients;
 }
+
+/**
+ * Lève une révocation sur l'appareil qui vient de s'authentifier.
+ *
+ * ⚠️ SEULE UNE AUTHENTIFICATION NEUVE peut le faire, et c'est pour cela que
+ * cette fonction vit ici et n'est appelée que par `login`. `POST /api/appareils`
+ * s'en chargeait auparavant — mais cette route s'appelle à chaque démarrage avec
+ * un jeton déjà en main, ce qui donnait à un appareil révoqué le pouvoir
+ * d'annuler sa propre révocation en redémarrant avant l'expiration de son jeton
+ * d'accès.
+ *
+ * `updateMany` et non `update` : à la toute première connexion d'un appareil, sa
+ * ligne n'existe pas encore — elle sera créée par `POST /api/appareils`, avec
+ * `destroy = 0` par défaut. Sans ligne, l'opération ne fait simplement rien.
+ */
+export async function reactiveAppareil(
+  userId: string,
+  deviceId: string | undefined,
+): Promise<void> {
+  if (!deviceId) return;
+  await prisma.appareil.updateMany({
+    where: { alanyaId: userId, cookiesWebId: deviceId, destroy: 1 },
+    data: { destroy: 0 },
+  });
+}
