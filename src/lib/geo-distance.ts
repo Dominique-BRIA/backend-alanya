@@ -33,21 +33,27 @@ export const INTERVALLE_RELEVE_MIN = 5;
  * sur les téléphones déjà déployés. C'est précisément pour ça qu'elle est une
  * fonction et non une condition écrite dans la route.
  *
- * **TOUT LE MONDE est suivi** — décision du user, 11/08/2026.
+ * **Seuls les comptes RATTACHÉS À UNE ENTREPRISE sont suivis** — décision du
+ * user, revenue au 11/08/2026 après un court passage par « tout le monde ».
  *
- * 🔴 CE CHOIX FRAGILISE LE PASSAGE EN REVUE DU PLAY STORE, et il faut le savoir
- * avant de soumettre. Un examinateur Google lit « une messagerie grand public
- * qui suit la position de TOUS ses utilisateurs en arrière-plan » : c'est le cas
- * le plus sévèrement examiné, et le plus souvent refusé. Restreindre aux comptes
- * rattachés à une entreprise (`idCompany != null`) se justifierait comme de la
- * gestion de personnel — c'est le repli si la soumission est rejetée, et il ne
- * coûte qu'une ligne ici.
+ * Ce n'est pas une prudence gratuite. L'application part en distribution
+ * PUBLIQUE sur le Play Store, et un examinateur Google lit « une messagerie
+ * grand public qui suit la position de TOUS ses utilisateurs en arrière-plan » :
+ * c'est le cas le plus sévèrement examiné, et le plus souvent refusé. La même
+ * fonctionnalité limitée aux agents d'une entreprise cliente se justifie comme
+ * de la gestion de personnel, ce qu'elle est réellement.
  *
- * Le paramètre est conservé pour cette raison : il documente le repli et évite
- * d'avoir à retoucher les appelants le jour où on l'active.
+ * Un compte sans `idCompany` est un particulier : l'application se comporte pour
+ * lui comme si la fonctionnalité n'existait pas — ni écran de divulgation, ni
+ * demande de permission, ni relevé.
+ *
+ * ⚠️ Un compte qui QUITTE son entreprise cesse d'être suivi au rechargement
+ * suivant de son profil : le client relit `suiviPosition` à chaque `/api/me`. Ce
+ * qui a déjà été relevé reste en base — la règle décide de la collecte à venir,
+ * pas de l'effacement du passé.
  */
-export function suiviPositionApplicable(_idCompany: number | null | undefined): boolean {
-  return true;
+export function suiviPositionApplicable(idCompany: number | null | undefined): boolean {
+  return idCompany != null;
 }
 
 /**
