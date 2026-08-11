@@ -38,6 +38,17 @@ export const verifySchema = z.object({
  */
 const deviceIdSchema = z.string().trim().min(8).max(255).optional();
 
+/**
+ * Famille de l'appareil qui se connecte — 0 = web, 1 = Android, 2 = iOS,
+ * 3 = bureau, mêmes valeurs que `Appareil.typeDevice`.
+ *
+ * Facultatif à dessein : un client plus ancien continue de se connecter. Le
+ * serveur retombe alors sur ce que le registre sait déjà de cet appareil, et
+ * n'évince personne s'il ne sait rien — mieux vaut une session de trop qu'un
+ * utilisateur éjecté de son ordinateur parce qu'il a ouvert son téléphone.
+ */
+const typeDeviceSchema = z.number().int().min(0).max(9).optional();
+
 export const setupSchema = z.object({
   // Reste OBLIGATOIRE : le formulaire ne le demande plus, mais il y recopie le
   // nom avant l'envoi. Le contrat d'API est donc inchangé, et un client plus
@@ -60,6 +71,9 @@ export const setupSchema = z.object({
   // c'est l'interface qui impose la saisie.
   mobile: z.string().trim().min(1).max(20, "Téléphone trop long (20 caractères maximum)").optional(),
   idPays: z.number().int().positive().optional(),
+  // Pas de `typeDevice` ici : `setup` configure un compte qui vient d'être créé
+  // et n'a encore aucun mot de passe (`ALREADY_SETUP` l'interdit ensuite). Il ne
+  // peut donc exister aucune autre session à évincer.
   deviceId: deviceIdSchema,
 });
 
@@ -67,6 +81,7 @@ export const loginSchema = z.object({
   identifier: z.string().trim().min(1, "Identifiant requis"),
   password: z.string().min(1, "Mot de passe requis"),
   deviceId: deviceIdSchema,
+  typeDevice: typeDeviceSchema,
 });
 
 export const refreshSchema = z.object({

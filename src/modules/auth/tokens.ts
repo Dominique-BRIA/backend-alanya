@@ -1,6 +1,19 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "@/lib/jwt";
+import { RAISON_EVICTION } from "@/lib/sessions";
+
+/**
+ * La session a été fermée par l'ouverture d'une autre, sur un appareil de la
+ * même famille. Distincte d'un jeton simplement expiré ou déjà tourné : elle
+ * seule justifie de dire à l'utilisateur que son compte a été ouvert ailleurs.
+ */
+export class SessionEvinceeError extends Error {
+  constructor() {
+    super("Session fermée depuis un autre appareil");
+    this.name = "SessionEvinceeError";
+  }
+}
 
 function sha256(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -65,9 +78,21 @@ export async function rotateRefreshToken(refreshToken: string): Promise<TokenPai
   const stored = await prisma.refreshToken.findFirst({
     where: { userId: payload.sub, tokenHash: sha256(refreshToken) },
   });
-  if (!stored || stored.revoked || stored.expiresAt < new Date()) {
-    throw new Error("Refresh token invalide ou expiré");
+  if (!stored) throw new Error("Refresh token inconnu");
+  /*
+   * ⚠️ « Révoqué » ne dit PAS pourquoi. La rotation révoque l'ancien jeton à
+   * chaque rafraîchissement : c'est le cas le plus fréquent, et il n'a rien
+   * d'anormal — un client qui réessaie après une réponse perdue tombe dessus.
+   *
+   * Seule une révocation posée par l'éviction mérite un message. Sans cette
+   * distinction, un simple réessai afficherait « votre compte a été ouvert sur
+   * un autre appareil » : alarmant, et faux.
+   */
+  if (stored.revoked) {
+    if (stored.revokedReason === RAISON_EVICTION) throw new SessionEvinceeError();
+    throw new Error("Refresh token révoqué");
   }
+  if (stored.expiresAt < new Date()) throw new Error("Refresh token expiré");
 
   await prisma.refreshToken.update({ where: { id: stored.id }, data: { revoked: true } });
   // Le lien avec l'appareil doit survivre à la rotation : sans ce report, il

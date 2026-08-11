@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { ALANYA_ID_REGEX, loginSchema } from "@/lib/validation";
+import { fermeLesAutresSessions, typeDeviceDeLAppareil } from "@/lib/sessions";
 import { verifyPassword } from "@/lib/password";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
@@ -16,7 +17,9 @@ export async function POST(req: NextRequest) {
     const rl = rateLimit(`login:${clientIp(req)}`, 5, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
-    const { identifier, password, deviceId } = loginSchema.parse(await req.json());
+    const { identifier, password, deviceId, typeDevice } = loginSchema.parse(
+      await req.json(),
+    );
 
     // Un identifiant est un publicNumber s'il n'est fait que de chiffres, dans
     // les bornes admises. La règle vit dans `validation.ts` et n'est plus
@@ -51,8 +54,25 @@ export async function POST(req: NextRequest) {
     // Journal des connexions : trace horodatee, jamais bloquante.
     await recordAccess(prisma, { userId: user.id, req });
 
+    /*
+     * Session unique par famille d'appareil : au plus un mobile et un poste.
+     *
+     * ⚠️ AVANT `issueTokenPair`, jamais après : la révocation touche les jetons
+     * du compte, et le couple qu'on s'apprête à émettre serait emporté avec les
+     * autres. Voir `src/lib/sessions.ts`.
+     */
+    const famille = await typeDeviceDeLAppareil(user.id, deviceId, typeDevice);
+    const sessionsFermees = await fermeLesAutresSessions(user.id, deviceId, famille);
+
     const tokens = await issueTokenPair(user.id, deviceId);
     return ok({
+      /*
+       * Les appareils qu'on vient d'évincer. Le client les annonce au serveur
+       * temps réel une fois sa connexion ouverte : l'API Next et `ws-server.mjs`
+       * sont deux process sans canal entre eux, et c'est le client qui fait le
+       * lien — exactement comme pour la déconnexion à distance existante.
+       */
+      sessionsFermees,
       user: {
         id: user.id,
         email: user.email,

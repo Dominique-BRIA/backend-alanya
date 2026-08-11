@@ -495,6 +495,17 @@ model RefreshToken {
   /// individuellement.
   deviceId String? @map("device_id") @db.VarChar(255)
 
+  /// Pourquoi ce jeton a été révoqué. `null` = par la rotation ordinaire,
+  /// `"evicted"` = par l'ouverture d'une session sur un autre appareil de la
+  /// même famille.
+  ///
+  /// ⚠️ Sans cette distinction, le message serait FAUX : la rotation révoque
+  /// l'ancien jeton à chaque rafraîchissement, donc un simple réessai après une
+  /// réponse perdue afficherait « votre compte a été ouvert sur un autre
+  /// appareil ». Elle sert aussi l'appareil qui était HORS LIGNE au moment de
+  /// l'éviction — le seul cas que l'événement temps réel ne peut pas couvrir.
+  revokedReason String? @map("revoked_reason") @db.VarChar(20)
+
   @@index([userId])
   /// Sert la révocation : retrouver les sessions d'un appareil donné.
   @@index([userId, deviceId], map: "refresh_tokens_user_device_idx")
