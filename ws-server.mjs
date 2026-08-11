@@ -973,7 +973,24 @@ async function handleTyping(ws, msg) {
 async function handleSessionRevoked(ws, msg) {
   const deviceId = typeof msg.deviceId === "string" ? msg.deviceId.trim() : "";
   if (!deviceId) return;
-  sendTo(ws.userId, { type: "session_revoked", deviceId });
+  /**
+   * `raison` est relayée telle quelle, et c'est ce qui permet à l'appareil visé
+   * de dire la VÉRITÉ à son utilisateur. Deux causes très différentes passent
+   * par le même événement :
+   *
+   *  - `"eviction"` — quelqu'un vient d'ouvrir une session sur un autre
+   *    appareil de la même famille ;
+   *  - absente — l'utilisateur a lui-même déconnecté ce poste depuis l'écran
+   *    « Appareils connectés ».
+   *
+   * Sans elle, le second cas afficherait « votre compte a été ouvert sur un
+   * autre appareil » à quelqu'un qui vient simplement de faire le ménage.
+   *
+   * La diffusion reste bornée à `ws.userId` : on ne peut couper que ses propres
+   * appareils, quelle que soit la raison annoncée.
+   */
+  const raison = typeof msg.raison === "string" ? msg.raison.trim().slice(0, 20) : null;
+  sendTo(ws.userId, { type: "session_revoked", deviceId, raison });
 }
 
 // Indicateur "en train d'enregistrer un vocal…" — miroir de handleTyping.
