@@ -163,7 +163,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const resultats = new Map<string, { texte: string; source: string; moteur: string }>();
   const aTraduire: Element[] = [];
   for (const item of valides) {
-    const connu = cache.get(cleCache(moteur.id, item.empreinte, item.source ?? "", cible));
+    const connu = cache.get(cleCache(moteur.id, item.texte, item.source ?? "", cible));
     if (connu) resultats.set(item.empreinte, connu);
     else aTraduire.push(item);
   }
@@ -204,12 +204,16 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
             moteur: moteur.id,
           };
           resultats.set(item.empreinte, valeur);
-          retenir(cleCache(moteur.id, item.empreinte, item.source ?? "", cible), valeur);
+          retenir(cleCache(moteur.id, item.texte, item.source ?? "", cible), valeur);
         });
       }
     } catch {
       // L'exception ne porte que le nom du moteur et un code HTTP (voir
       // `appeler` dans le registre) : rien du texte envoye ne peut fuir ici.
+      //
+      // Le quota a ete debite AVANT l'appel : on le rend, sinon une panne du
+      // fournisseur amputerait la journee de quelqu'un qui n'a rien recu.
+      rendre(userId, caracteres);
       return fail("Service de traduction indisponible", 502, "PROVIDER_UNAVAILABLE");
     }
   }
