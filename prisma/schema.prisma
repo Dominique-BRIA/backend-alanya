@@ -120,6 +120,7 @@ model User {
   accessLogs      UserAccess[]
   /// Relevés de position — alimentés par le MOBILE uniquement. Voir [Geo].
   positions       Geo[]
+  geoConsentement GeoConsentement?
   callsMade       CallHistory[]         @relation("CallCaller")
   callsReceived   CallHistory[]         @relation("CallReceiver")
   reservedPhones  ReservedAlanyaPhone[]
@@ -1095,6 +1096,30 @@ model Geo {
   /// utilisateur, consultée à chaque relevé.
   @@index([userId, collectTime], map: "geo_user_id_collect_time_idx")
   @@map("geo")
+}
+
+/// Décision de l'utilisateur sur le suivi de sa position.
+///
+/// ⚠️ Elle DOIT remonter au serveur : l'écran de divulgation promet que
+/// l'entreprise sera informée si le suivi n'est pas actif. Tant que la décision
+/// ne vivait que dans les préférences du téléphone, cette phrase était une
+/// promesse que rien ne tenait.
+///
+/// Table à NOUS, pas une colonne sur `users` : le référentiel équipe décrit
+/// `users`, et y ajouter notre information serait un écart de plus à défendre à
+/// chaque harmonisation.
+///
+/// Migration : `prisma/manual/2026-08_geo_consentement.sql`.
+model GeoConsentement {
+  /// L'utilisateur EST la clé : une seule décision courante par compte, la
+  /// ré-affirmer écrase la précédente. Aucun historique — ce qui compte est
+  /// l'état actuel, un journal des refus successifs n'aiderait personne.
+  userId   String   @id @map("user_id") @db.Uuid
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accepte  Boolean
+  decideAt DateTime @default(now()) @map("decide_at") @db.Timestamptz
+
+  @@map("geo_consentement")
 }
 
 model UserAccess {

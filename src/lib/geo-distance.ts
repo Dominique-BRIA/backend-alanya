@@ -30,22 +30,24 @@ export const INTERVALLE_RELEVE_MIN = 5;
  *
  * ⚠️ LA RÈGLE VIT ICI, CÔTÉ SERVEUR, et le mobile ne fait que l'appliquer : la
  * changer ne demande donc aucun nouvel APK, ni aucune mise à jour à installer
- * sur les téléphones déjà déployés.
+ * sur les téléphones déjà déployés. C'est précisément pour ça qu'elle est une
+ * fonction et non une condition écrite dans la route.
  *
- * Seuls les comptes **rattachés à une entreprise** sont suivis. Ce n'est pas une
- * prudence gratuite : l'application est destinée au Play Store, et un
- * examinateur Google lit « une messagerie grand public qui suit la position de
- * tous ses utilisateurs en arrière-plan » — le cas le plus sévèrement examiné,
- * et le plus souvent refusé. La même fonctionnalité limitée aux agents d'une
- * entreprise cliente se justifie comme de la gestion de personnel, ce qu'elle
- * est réellement.
+ * **TOUT LE MONDE est suivi** — décision du user, 11/08/2026.
  *
- * Un compte sans `idCompany` est un particulier : il n'a rien à voir avec un
- * centre d'appels, et l'application se comporte pour lui comme si la
- * fonctionnalité n'existait pas.
+ * 🔴 CE CHOIX FRAGILISE LE PASSAGE EN REVUE DU PLAY STORE, et il faut le savoir
+ * avant de soumettre. Un examinateur Google lit « une messagerie grand public
+ * qui suit la position de TOUS ses utilisateurs en arrière-plan » : c'est le cas
+ * le plus sévèrement examiné, et le plus souvent refusé. Restreindre aux comptes
+ * rattachés à une entreprise (`idCompany != null`) se justifierait comme de la
+ * gestion de personnel — c'est le repli si la soumission est rejetée, et il ne
+ * coûte qu'une ligne ici.
+ *
+ * Le paramètre est conservé pour cette raison : il documente le repli et évite
+ * d'avoir à retoucher les appelants le jour où on l'active.
  */
-export function suiviPositionApplicable(idCompany: number | null | undefined): boolean {
-  return idCompany != null;
+export function suiviPositionApplicable(_idCompany: number | null | undefined): boolean {
+  return true;
 }
 
 /**
