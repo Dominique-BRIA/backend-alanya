@@ -85,6 +85,29 @@ function consommer(userId: string, caracteres: number): boolean {
   return true;
 }
 
+/**
+ * Rend le quota debite avant un appel qui a echoue.
+ *
+ * ⚠️ FONCTION MANQUANTE, qui cassait la compilation : le chemin d'erreur
+ * l'appelait sans qu'elle existe (`TS2304: Cannot find name 'rendre'`), et
+ * `npm run build` echouait donc completement. Ecrite en miroir de `consommer`.
+ *
+ * Le controle du jour n'est pas une precaution de style : si minuit tombe entre
+ * le debit et l'echec, le compteur a deja ete remis a zero pour la journee
+ * suivante. Rendre alors des caracteres reviendrait a creer du quota negatif —
+ * l'utilisateur commencerait sa journee avec un credit qu'il n'a jamais paye.
+ * Le plancher a zero couvre le meme accident dans l'autre sens.
+ */
+function rendre(userId: string, caracteres: number): void {
+  const jour = jourCourant();
+  const actuel = quotas.get(userId);
+  if (!actuel || actuel.jour !== jour) return;
+  quotas.set(userId, {
+    jour,
+    caracteres: Math.max(0, actuel.caracteres - caracteres),
+  });
+}
+
 function retenir(cle: string, valeur: { texte: string; source: string; moteur: string }) {
   // Eviction grossiere : on vide la moitie la plus ancienne quand c'est plein.
   // Une LRU exacte ne vaut pas sa complexite pour un cache qu'un redemarrage
