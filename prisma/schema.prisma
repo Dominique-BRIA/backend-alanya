@@ -118,6 +118,8 @@ model User {
 
   // --- Relations vers les nouvelles tables du référentiel ---
   accessLogs      UserAccess[]
+  /// Relevés de position — alimentés par le MOBILE uniquement. Voir [Geo].
+  positions       Geo[]
   callsMade       CallHistory[]         @relation("CallCaller")
   callsReceived   CallHistory[]         @relation("CallReceiver")
   reservedPhones  ReservedAlanyaPhone[]
@@ -1039,6 +1041,39 @@ model ConversationLock {
 // ---------------------------------------------------------------------------
 // USER_ACCESS (journal de connexions) — table du référentiel, ajoutée
 // ---------------------------------------------------------------------------
+
+/// Relevés de position d'un utilisateur, alimentés par le MOBILE uniquement.
+///
+/// ⚠️ UNE LIGNE = UN LIEU, PAS UN RELEVÉ. Le téléphone relève sa position toutes
+/// les cinq minutes, mais on n'écrit une ligne que s'il a changé d'endroit ;
+/// sinon on repousse `collectTime` de la ligne existante. `collectTime` se lit
+/// donc « vu à cet endroit jusqu'à », et la durée passée quelque part est
+/// l'écart avec le `collectTime` de la ligne précédente.
+///
+/// C'est ce que la table PERMET, et rien d'autre : elle n'a aucune colonne de
+/// durée ni d'heure d'arrivée. Voir `src/lib/geo.ts` pour la règle « a-t-il
+/// bougé ? ».
+///
+/// La table existait déjà en production sans figurer ici — Prisma ne pouvait
+/// donc pas l'écrire. Migration : `prisma/manual/2026-08_geo_positions.sql`.
+model Geo {
+  idGeo BigInt @id @default(autoincrement()) @map("idGeo")
+  /// `Decimal(10,7)` : environ un centimètre de résolution. Bien au-delà de la
+  /// précision d'un GPS de téléphone, mais c'est le type déjà en base.
+  lat   Decimal @db.Decimal(10, 7)
+  lon   Decimal @db.Decimal(10, 7)
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Heure du DERNIER relevé ayant confirmé cette position.
+  collectTime DateTime @map("collect_time") @db.Timestamptz
+
+  /// Sert la seule lecture chaude : la dernière position connue d'un
+  /// utilisateur, consultée à chaque relevé.
+  @@index([userId, collectTime], map: "geo_user_id_collect_time_idx")
+  @@map("geo")
+}
 
 model UserAccess {
   idLogin   BigInt   @id @default(autoincrement())

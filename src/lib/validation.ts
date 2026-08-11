@@ -109,6 +109,20 @@ export const publicNumberSchema = z
     `Le numéro doit comporter ${ALANYA_ID_MIN_LENGTH} à ${ALANYA_ID_MAX_LENGTH} chiffres`,
   );
 
+/**
+ * Un relevé de position envoyé par le mobile.
+ *
+ * `collectedAt` est l'heure du RELEVÉ, pas celle de l'envoi : le téléphone met
+ * ses relevés en file quand il est hors ligne, et les deux diffèrent alors de
+ * plusieurs minutes. Facultatif — un client qui ne l'envoie pas est horodaté à
+ * l'arrivée, ce qui reste juste tant qu'il est connecté.
+ */
+export const positionSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+  collectedAt: z.string().datetime().optional(),
+});
+
 export const updateProfileSchema = z.object({
   // Aligné sur la longueur de la colonne — voir setupSchema.
   pseudo: z.string().trim().min(2).max(50, "Pseudo trop long (50 caractères maximum)").optional(),
