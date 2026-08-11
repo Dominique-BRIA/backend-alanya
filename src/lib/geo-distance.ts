@@ -26,6 +26,29 @@ export const RAYON_MEME_LIEU_M = 50;
 export const INTERVALLE_RELEVE_MIN = 5;
 
 /**
+ * Ce compte est-il concerné par le suivi de position ?
+ *
+ * ⚠️ LA RÈGLE VIT ICI, CÔTÉ SERVEUR, et le mobile ne fait que l'appliquer : la
+ * changer ne demande donc aucun nouvel APK, ni aucune mise à jour à installer
+ * sur les téléphones déjà déployés.
+ *
+ * Seuls les comptes **rattachés à une entreprise** sont suivis. Ce n'est pas une
+ * prudence gratuite : l'application est destinée au Play Store, et un
+ * examinateur Google lit « une messagerie grand public qui suit la position de
+ * tous ses utilisateurs en arrière-plan » — le cas le plus sévèrement examiné,
+ * et le plus souvent refusé. La même fonctionnalité limitée aux agents d'une
+ * entreprise cliente se justifie comme de la gestion de personnel, ce qu'elle
+ * est réellement.
+ *
+ * Un compte sans `idCompany` est un particulier : il n'a rien à voir avec un
+ * centre d'appels, et l'application se comporte pour lui comme si la
+ * fonctionnalité n'existait pas.
+ */
+export function suiviPositionApplicable(idCompany: number | null | undefined): boolean {
+  return idCompany != null;
+}
+
+/**
  * Au-delà, un relevé est jugé périmé et refusé.
  *
  * Le téléphone met ses relevés en file quand il est hors ligne : ils peuvent
