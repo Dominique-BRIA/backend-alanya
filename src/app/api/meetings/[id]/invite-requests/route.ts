@@ -112,6 +112,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     );
   }
 
+  if (meeting.invitationAuto === 1) {
+    await prisma.meetingParticipant.create({ data: { idMeeting: id, IDparticipant: invite.id, status: 0 } });
+    return ok({ ajouteDirectement: true, invite: { id: invite.id } }, 201);
+  }
+
   // Une demande existe déjà pour cette personne ? Le message dépend de son
   // sort, car les deux situations n'appellent pas la même conduite : attendre,
   // ou renoncer.

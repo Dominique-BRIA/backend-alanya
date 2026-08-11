@@ -935,6 +935,7 @@ model Meeting {
   room        String   @default("default-room") @db.VarChar(200) // MySQL varchar(200)
   isEnd       Int      @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT
   type_media  Int      @default(1) @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
+  invitationAuto Int @default(0) @db.SmallInt @map("invitation_auto")
 
   participants MeetingParticipant[]
   rappel       MeetingRappel?

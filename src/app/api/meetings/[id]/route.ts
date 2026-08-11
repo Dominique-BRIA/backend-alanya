@@ -35,6 +35,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     idMeeting: meeting.idMeeting,
     objet: meeting.objet,
     type_media: meeting.type_media,
+    invitationAuto: meeting.invitationAuto === 1,
     room: meeting.room,
     isEnd: meeting.isEnd,
     start_time: meeting.start_time,
