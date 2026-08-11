@@ -8,6 +8,10 @@ import { registerPushToken, unregisterPushToken } from "@/lib/push";
 const schema = z.object({
   token: z.string().min(1).max(512),
   platform: z.enum(["android", "ios", "web"]),
+  // Même identifiant que `Appareil.cookies_WebID`. Facultatif : un client plus
+  // ancien continue de s'enregistrer, mais ses notifications ne pourront pas
+  // être coupées appareil par appareil.
+  deviceId: z.string().trim().min(8).max(255).optional(),
 });
 
 // POST /api/push/register — enregistre un jeton FCM pour l'utilisateur connecté (v2).
@@ -16,8 +20,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     if (!env.push.enabled()) {
       return fail("Notifications push désactivées (v2)", 503, "PUSH_DISABLED");
     }
-    const { token, platform } = schema.parse(await req.json());
-    await registerPushToken(userId, token, platform);
+    const { token, platform, deviceId } = schema.parse(await req.json());
+    await registerPushToken(userId, token, platform, deviceId);
     return ok({ registered: true });
   } catch (err) {
     return handleError(err);

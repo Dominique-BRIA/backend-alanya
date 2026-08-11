@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { supprimeJetonsPushDAppareils } from "@/lib/push";
 
 /**
  * Un compte s'ouvre sur au plus DEUX appareils : un mobile et un poste.
@@ -12,6 +13,20 @@ import { prisma } from "@/lib/prisma";
  */
 export const TYPES_MOBILE = [1, 2];
 export const TYPES_POSTE = [0, 3];
+
+/**
+ * Les mêmes familles, dans le vocabulaire de `push_devices.platform`.
+ *
+ * Deux nomenclatures pour une même notion, et c'est l'existant : le registre des
+ * appareils vient du référentiel équipe et compte en entiers, les jetons de
+ * notification sont à nous et comptent en chaînes. On les fait correspondre ici,
+ * à un seul endroit, plutôt que de les traduire à chaque appel.
+ *
+ * Le « bureau » n'a pas de plateforme à lui : une application de bureau reçoit
+ * ses notifications comme le web.
+ */
+export const PLATEFORMES_MOBILE = ["android", "ios"];
+export const PLATEFORMES_POSTE = ["web"];
 
 export type FamilleAppareil = "mobile" | "poste";
 
@@ -136,6 +151,20 @@ export async function fermeLesAutresSessions(
     },
     data: { revoked: true, revokedReason: RAISON_EVICTION },
   });
+
+  /*
+   * ⚠️ COUPER AUSSI LES NOTIFICATIONS. Sans cela, l'éviction est incomplète de
+   * la façon la plus visible qui soit : le téléphone sortant n'a plus accès à
+   * rien, mais continue de faire sonner les appels et d'afficher les messages,
+   * parce que l'envoi FCM cible un COMPTE et arrose tous ses jetons. Un appareil
+   * qu'on a coupé mais qui sonne encore donne l'impression que rien n'a
+   * fonctionné.
+   */
+  await supprimeJetonsPushDAppareils(
+    userId,
+    idsClients,
+    famille === "mobile" ? PLATEFORMES_MOBILE : PLATEFORMES_POSTE,
+  );
 
   return idsClients;
 }

@@ -458,7 +458,18 @@ model PushDevice {
   createdAt DateTime @default(now()) @db.Timestamptz
   updatedAt DateTime @updatedAt @db.Timestamptz
 
+  /// Appareil qui a obtenu ce jeton — même identifiant que
+  /// `Appareil.cookies_WebID`.
+  ///
+  /// ⚠️ Sans lui, l'envoi ne pouvait cibler qu'un COMPTE : un téléphone
+  /// déconnecté ou évincé continuait de recevoir messages et appels, parce que
+  /// rien en base ne disait quel jeton lui appartenait. Nul pour les
+  /// enregistrements antérieurs, traités comme « appareil indéterminé ».
+  deviceId String? @map("device_id") @db.VarChar(255)
+
   @@index([userId])
+  /// Sert la déconnexion et l'éviction : retrouver les jetons d'un appareil.
+  @@index([userId, deviceId], map: "push_devices_user_device_idx")
   @@map("push_devices")
 }
 
