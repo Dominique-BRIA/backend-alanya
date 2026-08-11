@@ -79,7 +79,15 @@ model User {
   // --- F7 : Biométrie / état d'appel / device (colonnes du référentiel) ---
   inCall            Int       @default(0) @map("in_call") @db.SmallInt
   biometric         Int       @default(0) @db.SmallInt
-  appareilTotal     Int       @default(1) @map("appareil_total") @db.SmallInt
+  /// Nombre de sessions simultanées autorisées : **1 mobile + (ce nombre − 1)
+  /// navigateurs**. Réglé par compte depuis la plateforme d'administration.
+  ///
+  /// ⚠️ LE DÉFAUT EST 2 — un mobile et un navigateur — et il DOIT rester
+  /// identique ici et en base. Prisma envoie sa propre valeur par défaut dans
+  /// l'ordre d'insertion : laissé à 1, il créerait des comptes sans accès web
+  /// alors que la base, elle, dirait 2. Migration :
+  /// `prisma/manual/2026-08_sessions_par_compte.sql`.
+  appareilTotal     Int       @default(2) @map("appareil_total") @db.SmallInt
   fcmToken          String?   @map("fcm_token") @db.VarChar(255)
   deviceId          String?   @map("device_ID") @db.VarChar(255)
   resetOtp          String?   @map("reset_otp") @db.VarChar(6)

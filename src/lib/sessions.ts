@@ -38,6 +38,29 @@ export function familleDeAppareil(typeDevice: number | null | undefined): Famill
 export const RAISON_EVICTION = "evicted";
 
 /**
+ * Combien de sessions simultanées cette famille tolère-t-elle ?
+ *
+ * `users.appareil_total` compte **le mobile ET le web** : réglé à 2 — le défaut —
+ * il autorise un téléphone et un navigateur. Le mobile reste plafonné à 1 quoi
+ * qu'il arrive ; tout ce qui dépasse va au web.
+ *
+ * ⚠️ Plancher à 1 pour le web, et c'est une conséquence directe du choix
+ * « on déconnecte le plus ancien » plutôt que « on refuse la nouvelle
+ * connexion ». Un compte réglé à 1 devrait, à la lettre, n'avoir aucun accès
+ * web ; mais nous sommes appelés APRÈS l'authentification, quand il est trop
+ * tard pour refuser. Lui rendre une session vaut mieux que d'en ouvrir une qui
+ * s'évincerait elle-même. Un vrai « mobile uniquement » demanderait de refuser
+ * la connexion, donc un autre parcours — voir l'option B écartée le 11/08/2026.
+ */
+export function limiteDeLaFamille(
+  famille: FamilleAppareil,
+  appareilTotal: number,
+): number {
+  if (famille === "mobile") return 1;
+  return Math.max(1, (appareilTotal || 2) - 1);
+}
+
+/**
  * De quelle famille est l'appareil qui se connecte ?
  *
  * Le client l'annonce, mais le champ est facultatif : un client plus ancien ne
@@ -86,6 +109,7 @@ export async function fermeLesAutresSessions(
   userId: string,
   deviceId: string | undefined,
   typeDevice: number | null | undefined,
+  appareilTotal: number,
 ): Promise<string[]> {
   /*
    * Famille inconnue → ON N'ÉVINCE PERSONNE.
@@ -101,10 +125,11 @@ export async function fermeLesAutresSessions(
 
   const famille = familleDeAppareil(typeDevice);
   const typesDeLaFamille = famille === "mobile" ? TYPES_MOBILE : TYPES_POSTE;
+  const limite = limiteDeLaFamille(famille, appareilTotal);
 
   const familleEntiere = await prisma.appareil.findMany({
     where: { alanyaId: userId, typeDevice: { in: typesDeLaFamille } },
-    select: { appareilId: true, cookiesWebId: true },
+    select: { appareilId: true, cookiesWebId: true, lastLogin: true },
   });
 
   /*
@@ -120,8 +145,56 @@ export async function fermeLesAutresSessions(
    */
   const autres = familleEntiere.filter((a) => a.cookiesWebId !== deviceId);
 
-  const idsAppareils = autres.map((a) => a.appareilId);
-  const idsClients = autres
+  /*
+   * ⚠️ ON NE COMPTE PAS LES LIGNES DU REGISTRE, ON COMPTE LES SESSIONS VIVANTES.
+   *
+   * `Appareil` accumule sans jamais se vider : un navigateur privé, un
+   * changement de navigateur, un vidage de cache créent chacun une ligne qui
+   * reste. En production, un compte compte 17 postes enregistrés pour une seule
+   * session réelle, un autre 12. Compter ces lignes rendrait un utilisateur
+   * « à la limite » à cause de fantômes, et lui ferait perdre une vraie session
+   * au profit d'une entrée morte.
+   *
+   * La seule mesure juste est le jeton de rafraîchissement encore valide : c'est
+   * lui, et lui seul, qui donne un accès. Les appareils sans jeton vivant ne
+   * concourent pas pour une place et ne sont pas touchés.
+   */
+  const sessionsVivantes = await prisma.refreshToken.findMany({
+    where: {
+      userId,
+      revoked: false,
+      expiresAt: { gt: new Date() },
+      deviceId: { not: null },
+    },
+    select: { deviceId: true, createdAt: true },
+  });
+  const vueLe = new Map<string, Date>();
+  for (const s of sessionsVivantes) {
+    const connu = vueLe.get(s.deviceId!);
+    if (!connu || s.createdAt > connu) vueLe.set(s.deviceId!, s.createdAt);
+  }
+
+  const concurrents = autres.filter(
+    (a) => a.cookiesWebId != null && vueLe.has(a.cookiesWebId),
+  );
+
+  /*
+   * Du plus RÉCENT au plus ancien, puis on garde les `limite - 1` premiers :
+   * l'appareil qui vient de se connecter occupe déjà une place.
+   *
+   * L'ancienneté se lit sur la session, pas sur `lastLogin` du registre —
+   * celui-ci est rafraîchi à chaque démarrage de l'application, y compris par un
+   * poste dont la session est morte depuis longtemps.
+   */
+  concurrents.sort(
+    (x, y) =>
+      vueLe.get(y.cookiesWebId!)!.getTime() -
+      vueLe.get(x.cookiesWebId!)!.getTime(),
+  );
+  const aEvincer = concurrents.slice(Math.max(0, limite - 1));
+
+  const idsAppareils = aEvincer.map((a) => a.appareilId);
+  const idsClients = aEvincer
     .map((a) => a.cookiesWebId)
     .filter((c): c is string => Boolean(c));
 
@@ -133,21 +206,30 @@ export async function fermeLesAutresSessions(
   }
 
   /*
-   * Les sessions SANS `device_id` sont révoquées elles aussi.
+   * Les sessions SANS `device_id` — ouvertes avant que le lien appareil↔session
+   * n'existe, ou par un client qui ne l'envoie pas — ne se rattachent à aucune
+   * famille. Les laisser vivre laisserait une session dont on ne sait rien
+   * contourner la règle.
    *
-   * Ce sont celles ouvertes avant que le lien appareil↔session n'existe, ou par
-   * un client qui ne l'envoie pas. On ne peut les rattacher à aucune famille :
-   * les laisser vivre laisserait une session dont on ne sait rien contourner la
-   * règle, et la règle ne serait alors qu'une apparence.
+   * ⚠️ MAIS SEULEMENT QUAND LA LIMITE EST DE 1. Au-delà, une de ces sessions
+   * anonymes peut appartenir à un poste qui a parfaitement le droit de rester :
+   * la couper reviendrait à déconnecter quelqu'un qui n'était pas de trop. Tant
+   * qu'une seule session est permise, tout le reste part de toute façon — le
+   * doute est sans conséquence. Dès que plusieurs le sont, il faut savoir, et on
+   * ne sait pas.
    *
-   * Sans risque pour l'appareil courant : son propre couple n'est émis
-   * qu'APRÈS cet appel, et il porte son `device_id`.
+   * Sans risque pour l'appareil courant : son propre couple n'est émis qu'APRÈS
+   * cet appel, et il porte son `device_id`.
    */
+  const anonymesAussi = limite <= 1;
   await prisma.refreshToken.updateMany({
     where: {
       userId,
       revoked: false,
-      OR: [{ deviceId: { in: idsClients } }, { deviceId: null }],
+      OR: [
+        { deviceId: { in: idsClients } },
+        ...(anonymesAussi ? [{ deviceId: null }] : []),
+      ],
     },
     data: { revoked: true, revokedReason: RAISON_EVICTION },
   });
@@ -163,7 +245,10 @@ export async function fermeLesAutresSessions(
   await supprimeJetonsPushDAppareils(
     userId,
     idsClients,
-    famille === "mobile" ? PLATEFORMES_MOBILE : PLATEFORMES_POSTE,
+    // Même prudence que ci-dessus : les jetons push sans appareil connu ne
+    // partent que si tout part. Au-delà d'une session, on couperait les
+    // notifications d'un poste qui reste.
+    anonymesAussi ? (famille === "mobile" ? PLATEFORMES_MOBILE : PLATEFORMES_POSTE) : [],
   );
 
   return idsClients;

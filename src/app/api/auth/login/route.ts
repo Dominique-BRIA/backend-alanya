@@ -66,7 +66,15 @@ export async function POST(req: NextRequest) {
      * autres. Voir `src/lib/sessions.ts`.
      */
     const famille = await typeDeviceDeLAppareil(user.id, deviceId, typeDevice);
-    const sessionsFermees = await fermeLesAutresSessions(user.id, deviceId, famille);
+    // `appareil_total` compte le mobile ET le web : 2 = un téléphone et un
+    // navigateur. Réglé par compte depuis la plateforme d'administration, il
+    // n'était lu par aucun code jusqu'ici.
+    const sessionsFermees = await fermeLesAutresSessions(
+      user.id,
+      deviceId,
+      famille,
+      user.appareilTotal,
+    );
     // Cet appareil vient de prouver son identité : c'est le seul moment où une
     // révocation précédente peut être levée. Voir `reactiveAppareil`.
     await reactiveAppareil(user.id, deviceId);
