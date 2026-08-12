@@ -67,22 +67,132 @@ function urlPublique(fichier) {
 }
 
 /**
+ * Rend joignable ce que la table `vocal` contient.
+ *
+ * 🔴 `url_vocal` N'EST PAS UNE URL, C'EST UN CHEMIN. La ligne posée par la
+ * plateforme du collègue vaut `/uploads/vocaux/vocal-….wav` — un chemin relatif
+ * à SON serveur, pas au nôtre : `https://alanyavox.com/uploads/vocaux/…` répond
+ * 404 (vérifié le 12/08/2026). Lu tel quel, le téléphone demanderait un fichier
+ * inexistant et le menu serait muet **sans la moindre erreur**, ce qui est le
+ * pire des échecs : rien à voir dans les journaux, juste un silence.
+ *
+ * D'où `VOCAL_BASE_URL` : l'adresse de la plateforme qui héberge réellement ces
+ * fichiers. Le jour où elle change, c'est une ligne de `.env` et un redémarrage,
+ * pas un déploiement de code. Une valeur DÉJÀ absolue (`http…`) est respectée
+ * telle quelle : la plateforme peut se mettre à écrire des URL complètes sans
+ * que rien ne casse ici.
+ */
+export function resoudreUrlVocal(valeur, urlServeurEntreprise) {
+  const brut = typeof valeur === "string" ? valeur.trim() : "";
+  if (!brut) return null;
+  if (/^https?:\/\//i.test(brut)) return brut;
+
+  /*
+   * L'ORDRE DES DEUX BASES N'EST PAS ARBITRAIRE.
+   *
+   * `company.url_serveur` d'abord : c'est la colonne que le user a demandée
+   * (`docs/- Dans la table company ajouter une url_.md` — « pointer vers le
+   * serveur des données de l'entreprise »), et elle existe en base. C'est la
+   * seule des deux qui soit JUSTE en multi-entreprises : deux entreprises n'ont
+   * aucune raison d'héberger leurs fichiers au même endroit, et une variable
+   * d'environnement les forcerait à partager un serveur. Elle est vide au
+   * 12/08/2026, d'où le repli.
+   *
+   * `VOCAL_BASE_URL` ensuite, pour faire marcher la seule entreprise existante
+   * sans attendre que la colonne soit remplie.
+   */
+  const base =
+    [urlServeurEntreprise, process.env.VOCAL_BASE_URL]
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .find((v) => v.length > 0) ?? "";
+
+  /*
+   * 🔴 AUCUNE DES DEUX → ON REFUSE LA LIGNE, ON NE DEVINE PAS.
+   *
+   * Retomber sur notre propre domaine serait le pire choix possible : il
+   * fabriquerait une URL en 404 pour la ligne qui existe déjà en production, et
+   * le standard passerait de « l'invite se joue » à « silence », **sans erreur
+   * nulle part** — une régression provoquée par un simple oubli de `.env`, sur
+   * un déploiement dont rien n'aurait signalé le problème.
+   *
+   * Renvoyer `null` fait retomber `urlInviteCentre` sur les fichiers, c'est-à-dire
+   * sur le comportement d'avant ce lot. L'ordre entre le déploiement du code et
+   * le réglage de la base cesse ainsi d'avoir la moindre importance.
+   */
+  if (!base) {
+    console.warn(
+      "[ivr] `vocal` ignorée : chemin relatif, et ni `company.url_serveur` ni VOCAL_BASE_URL",
+    );
+    return null;
+  }
+  return `${base.replace(/\/+$/, "")}/${brut.replace(/^\/+/, "")}`;
+}
+
+/**
  * Invite vocale d'un centre : « Bienvenue… tapez 1 pour… ».
  *
- * Convention de nommage plutôt qu'une colonne en base — un centre qui dépose
- * `public/ivr/<son Alanya ID>.mp3` a son propre message, les autres partagent
- * `accueil.mp3`. C'est ce qui permet le multi-entreprises sans toucher au
- * schéma de l'équipe.
+ * ⚠️ LA TABLE `vocal` FAIT FOI DEPUIS LE 12/08/2026, à la demande du user. Avant,
+ * une convention de nommage : un centre qui déposait `public/ivr/<son Alanya
+ * ID>.mp3` avait son message, les autres partageaient `accueil.mp3`. Elle
+ * marchait, mais elle liait le message au NUMÉRO et exigeait un accès au
+ * serveur de fichiers pour changer une invite ; la table permet à la plateforme
+ * du collègue de le faire elle-même.
  *
- * Renvoie `null` si aucun fichier n'existe : l'écran du menu doit rester
- * utilisable en silence, les options étant de toute façon affichées à l'écran.
+ * **Les deux replis sont conservés, et ce n'est pas de la timidité** : la ligne
+ * de production ne couvre qu'un centre sur deux, et `202020` n'a que
+ * `accueil.mp3`. Retirer la convention rendrait muet un menu qui fonctionne
+ * aujourd'hui.
+ *
+ * L'ordre est donc : la table, puis le fichier au nom du numéro, puis
+ * `accueil.mp3`. Et `null` si rien n'existe — l'écran du menu doit rester
+ * utilisable en silence, les options étant de toute façon affichées.
+ *
+ * ⚠️ Une panne de base ne doit pas emporter l'invite : la lecture est gardée,
+ * et un échec retombe sur les fichiers au lieu de faire échouer l'ouverture du
+ * standard.
  */
-export function urlInviteCentre(publicNumber) {
+export async function urlInviteCentre(prisma, centre) {
+  const url = await urlVocalEnBase(prisma, centre);
+  if (url) return url;
+
   const dossier = dossierSons();
-  const propre = publicNumber ? `${publicNumber}.mp3` : null;
+  const propre = centre?.publicNumber ? `${centre.publicNumber}.mp3` : null;
   if (propre && existsSync(path.join(dossier, propre))) return urlPublique(propre);
   if (existsSync(path.join(dossier, "accueil.mp3"))) return urlPublique("accueil.mp3");
   return null;
+}
+
+/**
+ * La ligne `vocal` d'un centre, résolue en URL joignable.
+ *
+ * L'unicité de la table porte sur **(entreprise, centre)** : un même numéro peut
+ * donc porter plusieurs lignes. On préfère celle de l'entreprise du centre
+ * lui-même, et à défaut la plus récente — un `idVocal` plus grand désigne le
+ * dernier vocal téléversé, qui est celui qu'on vient de vouloir mettre en place.
+ */
+async function urlVocalEnBase(prisma, centre) {
+  if (!prisma?.vocal || !centre?.id) return null;
+  try {
+    const lignes = await prisma.vocal.findMany({
+      where: { center_alanyaID: centre.id },
+      orderBy: { idVocal: "desc" },
+      // L'entreprise est jointe pour son `url_serveur` : c'est elle qui dit où
+      // vivent SES fichiers, et la lire ici évite une seconde requête.
+      select: {
+        idCompany: true,
+        urlVocal: true,
+        company: { select: { urlServeur: true } },
+      },
+    });
+    if (lignes.length === 0) return null;
+    const sienne =
+      lignes.find((l) => centre.idCompany != null && l.idCompany === centre.idCompany) ??
+      lignes[0];
+    return resoudreUrlVocal(sienne.urlVocal, sienne.company?.urlServeur);
+  } catch (e) {
+    console.error("[ivr] lecture de `vocal`:", e?.message ?? e);
+    return null;
+  }
 }
 
 /**

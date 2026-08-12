@@ -1408,7 +1408,7 @@ async function ouvrirSessionIvr(ws, call, centre) {
     centerName: nomCentre,
     centerNumber: centre.publicNumber,
     centerAvatarUrl: centre.avatarUrl ?? null,
-    promptUrl: urlInviteCentre(centre.publicNumber),
+    promptUrl: await urlInviteCentre(prisma, centre),
     holdUrl: session.urlAttente,
     options: optionsPubliques(options),
   });
@@ -1749,6 +1749,9 @@ async function handleCallRing(ws, msg) {
         pseudo: true,
         publicNumber: true,
         avatarUrl: true,
+        // Départage les lignes `vocal` quand un même numéro en porte plusieurs :
+        // l'unicité de cette table est (entreprise, centre), pas le centre seul.
+        idCompany: true,
       },
     });
     if (estCompteCentre(cible)) {

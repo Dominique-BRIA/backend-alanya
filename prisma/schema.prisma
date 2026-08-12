@@ -150,6 +150,7 @@ model User {
   GestionCompany  GestionCompany[]
   centerUsers     Center[]         @relation("centerUser")
   assignedCenters Center[]         @relation("assignedUser")
+  vocaux          Vocal[]          @relation("vocalCentre")
 
   @@index([publicNumber])
   @@index([idCompany])
@@ -1340,6 +1341,7 @@ model Company {
   Services   Service[]
   CenterComs CenterCom[]
   Centers    Center[]
+  Vocaux     Vocal[]
 
   /// Existait en base sans etre declare ici : supprime par un `db push` le
   /// 06/08/2026. Le re-declarer empeche Prisma de vouloir le retirer.
@@ -1475,6 +1477,39 @@ model Center {
   @@index([users_alanyaID], map: "center_users_alanyaid_idx")
   @@index([idCompany], map: "center_idcompany_idx")
   @@map("center")
+}
+
+/// Invite vocale d'un centre d'appels : « Bienvenue chez… tapez 1 pour… ».
+///
+/// ⚠️ CETTE TABLE N'EST PAS DE NOUS ET EXISTAIT DÉJÀ EN PRODUCTION, posée par la
+/// plateforme du collègue — elle contenait une ligne avant qu'une seule de ces
+/// lignes de schéma ne soit écrite. Elle est déclarée ici, à l'identique, pour
+/// la même raison que `geo` l'a été : tant qu'un modèle manque, **Prisma ne peut
+/// pas lire la table**, et une base neuve repartirait sans elle. Ne rien y
+/// ajouter sans l'équipe : c'est leur objet, pas le nôtre.
+///
+/// Elle remplace la convention de nommage `public/ivr/<Alanya ID>.mp3`, qui
+/// liait le message au numéro et obligeait à déposer un fichier sur le serveur
+/// pour changer une invite.
+///
+/// `url_vocal` est un CHEMIN, pas forcément une URL : la ligne de production
+/// vaut `/uploads/vocaux/vocal-….wav`, servi par la plateforme du collègue et
+/// non par nous. La résolution est dans `src/lib/ivr.mjs`.
+///
+/// L'unicité porte sur **(entreprise, centre)** et non sur le centre seul : le
+/// même numéro peut donc théoriquement porter une invite par entreprise.
+model Vocal {
+  idVocal         Int    @id @default(autoincrement()) @map("idVocal")
+  idCompany       Int    @map("idCompany")
+  center_alanyaID String @map("center_alanyaID") @db.Uuid
+  urlVocal        String @map("url_vocal") @db.VarChar(255)
+
+  company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User    @relation("vocalCentre", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([idCompany, center_alanyaID], map: "vocal_company_center_key")
+  @@index([idCompany], map: "vocal_idCompany_idx")
+  @@map("vocal")
 }
 
 model AccesAdmin {
