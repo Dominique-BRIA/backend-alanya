@@ -67,22 +67,28 @@ function urlPublique(fichier) {
 }
 
 /**
- * Rend joignable ce que la table `vocal` contient.
+ * Rend joignable un chemin déposé par la plateforme — vocal comme musique.
  *
- * 🔴 `url_vocal` N'EST PAS UNE URL, C'EST UN CHEMIN. La ligne posée par la
- * plateforme du collègue vaut `/uploads/vocaux/vocal-….wav` — un chemin relatif
- * à SON serveur, pas au nôtre : `https://alanyavox.com/uploads/vocaux/…` répond
- * 404 (vérifié le 12/08/2026). Lu tel quel, le téléphone demanderait un fichier
- * inexistant et le menu serait muet **sans la moindre erreur**, ce qui est le
- * pire des échecs : rien à voir dans les journaux, juste un silence.
+ * 🔴 `url_vocal` ET `url_music` NE SONT PAS DES URL, CE SONT DES CHEMINS. Les
+ * lignes posées par la plateforme valent `/uploads/vocaux/…` ou
+ * `/uploads/musiques/…` — relatifs à SON serveur, pas au nôtre :
+ * `https://alanyavox.com/uploads/…` répond 404 (vérifié le 12/08/2026). Lus tels
+ * quels, le téléphone demanderait un fichier inexistant et le standard serait
+ * muet **sans la moindre erreur**, ce qui est le pire des échecs : rien à voir
+ * dans les journaux, juste un silence.
  *
  * D'où `VOCAL_BASE_URL` : l'adresse de la plateforme qui héberge réellement ces
  * fichiers. Le jour où elle change, c'est une ligne de `.env` et un redémarrage,
  * pas un déploiement de code. Une valeur DÉJÀ absolue (`http…`) est respectée
  * telle quelle : la plateforme peut se mettre à écrire des URL complètes sans
  * que rien ne casse ici.
+ *
+ * ⚠️ Le nom de la variable parle de vocal parce qu'elle est née avec lui ; elle
+ * désigne en réalité LE SERVEUR de la plateforme, musiques comprises. La
+ * renommer coûterait une modification de `.env` sur une production qui tourne,
+ * pour un gain nul.
  */
-export function resoudreUrlVocal(valeur, urlServeurEntreprise) {
+export function resoudreUrlPlateforme(valeur, urlServeurEntreprise) {
   const brut = typeof valeur === "string" ? valeur.trim() : "";
   if (!brut) return null;
   if (/^https?:\/\//i.test(brut)) return brut;
@@ -121,11 +127,56 @@ export function resoudreUrlVocal(valeur, urlServeurEntreprise) {
    */
   if (!base) {
     console.warn(
-      "[ivr] `vocal` ignorée : chemin relatif, et ni `company.url_serveur` ni VOCAL_BASE_URL",
+      "[ivr] ligne plateforme ignorée : chemin relatif, et ni `company.url_serveur` ni VOCAL_BASE_URL",
     );
     return null;
   }
   return `${base.replace(/\/+$/, "")}/${brut.replace(/^\/+/, "")}`;
+}
+
+/**
+ * La ressource d'un centre déposée par la plateforme, résolue en URL joignable.
+ *
+ * ⚠️ FACTORISÉ PARCE QUE `vocal` ET `center_music` SONT DES JUMELLES : mêmes
+ * colonnes, même unicité **(entreprise, centre)**, même serveur d'origine. Deux
+ * lectures écrites séparément auraient fini par diverger sur le point délicat —
+ * lequel de plusieurs enregistrements retenir — et la divergence ne se serait
+ * signalée que par une musique jouée pour la mauvaise entreprise.
+ *
+ * L'unicité portant sur le COUPLE, un même numéro peut porter plusieurs lignes.
+ * On préfère celle de l'entreprise du centre, et à défaut la plus récente : un
+ * identifiant plus grand désigne le dernier fichier téléversé, c'est-à-dire
+ * celui qu'on vient de vouloir mettre en place.
+ *
+ * Une panne de base ne doit jamais empêcher le standard d'ouvrir : l'échec est
+ * journalisé puis traité comme une absence, et l'appelant retombe sur les
+ * fichiers du dépôt.
+ */
+async function urlRessourceDeCentre(prisma, centre, { table, cleId, champUrl }) {
+  const delegue = prisma?.[table];
+  if (!delegue || !centre?.id) return null;
+  try {
+    const lignes = await delegue.findMany({
+      where: { center_alanyaID: centre.id },
+      orderBy: { [cleId]: "desc" },
+      // L'entreprise est jointe pour son `url_serveur` : c'est elle qui dit où
+      // vivent SES fichiers, et la lire ici évite une seconde requête.
+      select: {
+        idCompany: true,
+        [champUrl]: true,
+        company: { select: { urlServeur: true } },
+      },
+    });
+    if (lignes.length === 0) return null;
+    const sienne =
+      lignes.find(
+        (l) => centre.idCompany != null && l.idCompany === centre.idCompany,
+      ) ?? lignes[0];
+    return resoudreUrlPlateforme(sienne[champUrl], sienne.company?.urlServeur);
+  } catch (e) {
+    console.error(`[ivr] lecture de \`${table}\`:`, e?.message ?? e);
+    return null;
+  }
 }
 
 /**
@@ -152,7 +203,11 @@ export function resoudreUrlVocal(valeur, urlServeurEntreprise) {
  * standard.
  */
 export async function urlInviteCentre(prisma, centre) {
-  const url = await urlVocalEnBase(prisma, centre);
+  const url = await urlRessourceDeCentre(prisma, centre, {
+    table: "vocal",
+    cleId: "idVocal",
+    champUrl: "urlVocal",
+  });
   if (url) return url;
 
   const dossier = dossierSons();
@@ -163,47 +218,32 @@ export async function urlInviteCentre(prisma, centre) {
 }
 
 /**
- * La ligne `vocal` d'un centre, résolue en URL joignable.
+ * Musique d'attente d'un centre, jouée pendant qu'on cherche un agent.
  *
- * L'unicité de la table porte sur **(entreprise, centre)** : un même numéro peut
- * donc porter plusieurs lignes. On préfère celle de l'entreprise du centre
- * lui-même, et à défaut la plus récente — un `idVocal` plus grand désigne le
- * dernier vocal téléversé, qui est celui qu'on vient de vouloir mettre en place.
+ * ⚠️ LA TABLE `center_music` FAIT FOI DEPUIS LE 12/08/2026 (créée par la
+ * collègue). Elle **change la règle**, et pas seulement l'endroit où l'on
+ * range les fichiers : le dossier tirait AU SORT parmi plusieurs titres, la
+ * table donne UN titre PAR CENTRE. Deux appelants d'un même standard entendent
+ * donc désormais la même chose, et deux standards peuvent avoir chacun leur
+ * ambiance — ce que le tirage rendait impossible.
+ *
+ * Le dossier `attente-*.mp3` reste en repli, pour un centre sans ligne. Le
+ * retirer rendrait le silence à tous ceux que la collègue n'a pas encore
+ * configurés.
+ *
+ * ⚠️ À CHOISIR À L'OUVERTURE DE LA SESSION, pas au moment de la touche. L'URL
+ * part avec `ivr_menu` : le client a ainsi toute la durée de l'invite pour la
+ * mettre en cache, et la musique démarre à l'instant de l'appui au lieu de
+ * laisser trois secondes de silence.
  */
-async function urlVocalEnBase(prisma, centre) {
-  if (!prisma?.vocal || !centre?.id) return null;
-  try {
-    const lignes = await prisma.vocal.findMany({
-      where: { center_alanyaID: centre.id },
-      orderBy: { idVocal: "desc" },
-      // L'entreprise est jointe pour son `url_serveur` : c'est elle qui dit où
-      // vivent SES fichiers, et la lire ici évite une seconde requête.
-      select: {
-        idCompany: true,
-        urlVocal: true,
-        company: { select: { urlServeur: true } },
-      },
-    });
-    if (lignes.length === 0) return null;
-    const sienne =
-      lignes.find((l) => centre.idCompany != null && l.idCompany === centre.idCompany) ??
-      lignes[0];
-    return resoudreUrlVocal(sienne.urlVocal, sienne.company?.urlServeur);
-  } catch (e) {
-    console.error("[ivr] lecture de `vocal`:", e?.message ?? e);
-    return null;
-  }
-}
+export async function choisirMusiqueAttente(prisma, centre) {
+  const enBase = await urlRessourceDeCentre(prisma, centre, {
+    table: "centerMusic",
+    cleId: "idMusic",
+    champUrl: "urlMusic",
+  });
+  if (enBase) return enBase;
 
-/**
- * Musique d'attente, tirée au sort parmi `public/ivr/attente-*.mp3`.
- *
- * ⚠️ À TIRER À L'OUVERTURE DE LA SESSION, pas au moment de la touche. L'URL part
- * avec `ivr_menu` : le client a ainsi toute la durée de l'invite pour la mettre
- * en cache, et la musique démarre à l'instant de l'appui au lieu de laisser
- * trois secondes de silence.
- */
-export function choisirMusiqueAttente() {
   const dossier = dossierSons();
   let fichiers = [];
   try {

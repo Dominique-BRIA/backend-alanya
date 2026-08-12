@@ -1386,7 +1386,7 @@ async function ouvrirSessionIvr(ws, call, centre) {
     options,
     // Tirée MAINTENANT, pas au moment de la touche : le client la met en cache
     // pendant que l'invite se joue.
-    urlAttente: choisirMusiqueAttente(),
+    urlAttente: await choisirMusiqueAttente(prisma, centre),
     agentId: null,
     agentLabel: null,
     etape: "menu",

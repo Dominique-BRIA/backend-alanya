@@ -151,6 +151,7 @@ model User {
   centerUsers     Center[]         @relation("centerUser")
   assignedCenters Center[]         @relation("assignedUser")
   vocaux          Vocal[]          @relation("vocalCentre")
+  musiques        CenterMusic[]    @relation("musiqueCentre")
 
   @@index([publicNumber])
   @@index([idCompany])
@@ -1342,6 +1343,7 @@ model Company {
   CenterComs CenterCom[]
   Centers    Center[]
   Vocaux     Vocal[]
+  Musiques   CenterMusic[]
 
   /// Existait en base sans etre declare ici : supprime par un `db push` le
   /// 06/08/2026. Le re-declarer empeche Prisma de vouloir le retirer.
@@ -1514,6 +1516,30 @@ model Vocal {
   @@unique([idCompany, center_alanyaID], map: "vocal_company_center_key")
   @@index([idCompany], map: "vocal_idCompany_idx")
   @@map("vocal")
+}
+
+/// Musique d'attente d'un centre, jouée pendant qu'on cherche un agent.
+///
+/// ⚠️ JUMELLE EXACTE DE [Vocal] — mêmes colonnes, même unicité, même plateforme
+/// d'origine. Créée par la collègue le 12/08/2026, elle non plus n'est pas de
+/// nous : ne rien y ajouter sans l'équipe.
+///
+/// Elle remplace la convention `public/ivr/attente-*.mp3`, et change la règle au
+/// passage : le dossier tirait **au sort parmi plusieurs titres**, la table donne
+/// **un titre par centre**. Le dossier reste comme repli, pour les centres qui
+/// n'ont pas de ligne.
+model CenterMusic {
+  idMusic         Int    @id @default(autoincrement()) @map("idMusic")
+  idCompany       Int    @map("idCompany")
+  center_alanyaID String @map("center_alanyaID") @db.Uuid
+  urlMusic        String @map("url_music") @db.VarChar(255)
+
+  company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User    @relation("musiqueCentre", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([idCompany, center_alanyaID], map: "center_music_company_center_key")
+  @@index([idCompany], map: "center_music_idCompany_idx")
+  @@map("center_music")
 }
 
 model AccesAdmin {
