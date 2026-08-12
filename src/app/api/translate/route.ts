@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -60,6 +61,25 @@ const CACHE_MAX = 50_000;
 const quotas = new Map<string, { jour: string; caracteres: number }>();
 
 /**
+ * Empreinte du texte, CALCULEE ICI.
+ *
+ * ⚠️ Point de securite, et la raison d'etre de cette fonction. Le client envoie
+ * une empreinte avec chaque element ; elle ne doit JAMAIS servir a indexer le
+ * cache, qui est partage entre tous les comptes. Un client modifie n'aurait
+ * qu'a poster « Rendez-vous annule » sous l'empreinte d'un vrai message pour
+ * que la personne suivante lise cette phrase-la a la place de la traduction du
+ * sien. L'empreinte du client ne sert donc plus qu'a CORRELER la reponse a la
+ * requete — c'est un numero de ticket, pas une cle.
+ *
+ * SHA-256 tronque a 128 bits : de quoi rendre une collision hors de portee,
+ * pour une cle deux fois plus courte. Le texte est normalise en NFC pour que
+ * deux ecritures Unicode du meme mot ne fassent pas deux entrees.
+ */
+function empreinteServeur(texte: string): string {
+  return createHash("sha256").update(texte.normalize("NFC")).digest("hex").slice(0, 32);
+}
+
+/**
  * La cle de cache porte le FOURNISSEUR en tete.
  *
  * Deux moteurs ne rendent pas la meme traduction du meme texte. Les melanger
@@ -67,6 +87,8 @@ const quotas = new Map<string, { jour: string; caracteres: number }>();
  * l'explique — et rendrait le choix des Parametres sans effet visible tant que
  * le cache repond. Le prix a payer est une entree par moteur, ce qui est
  * exactement ce que l'on veut.
+ *
+ * `empreinte` est toujours celle d'`empreinteServeur`, jamais celle du client.
  */
 function cleCache(moteur: string, empreinte: string, source: string, cible: string): string {
   return `${moteur}|${empreinte}|${source}|${cible}`;
@@ -120,17 +142,43 @@ function retenir(cle: string, valeur: { texte: string; source: string; moteur: s
 }
 
 interface Element {
+  /**
+   * Identifiant de correlation choisi par le client, rendu tel quel dans la
+   * reponse pour qu'il retrouve ses elements. N'entre dans AUCUNE cle : voir
+   * `empreinteServeur`.
+   */
   empreinte: string;
   texte: string;
   source?: string;
 }
+
+/** Un element et la cle de cache que le SERVEUR lui a calculee. */
+interface Prepare {
+  item: Element;
+  cle: string;
+}
+
+/**
+ * Longueur maximale de l'identifiant de correlation. Il repart dans la reponse
+ * tel qu'il est arrive : on borne ce qu'un client peut nous faire recopier.
+ */
+const EMPREINTE_MAX = 128;
 
 /**
  * Resout le fournisseur demande.
  *
  * Rend soit le fournisseur, soit la reponse d'erreur a renvoyer telle quelle.
  * Un nom inconnu est une erreur du CLIENT (400) ; une cle absente est une
- * indisponibilite du SERVICE (502), que le client sait deja mettre en pause.
+ * indisponibilite du SERVICE (502).
+ *
+ * ⚠️ `PROVIDER_UNAVAILABLE` ne sort QUE d'ici, et signifie une seule chose :
+ * ce serveur ne sert pas ce moteur — la cle n'est pas configuree. C'est un etat
+ * PERMANENT : reessayer dans trente secondes echouera pareil, la seule issue
+ * est de changer de moteur dans les Parametres. L'echec d'un appel au
+ * fournisseur, lui, est PASSAGER et porte `PROVIDER_FAILED` (voir plus bas).
+ * Confondre les deux faisait mettre le relais en pause pour une panne qui
+ * n'existait pas, et proposer « reessayer » la ou il fallait « changer de
+ * moteur ».
  */
 function resoudre(demande: string): { f: Fournisseur } | { erreur: Response } {
   if (!demande) {
@@ -175,6 +223,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     (i) =>
       i &&
       typeof i.empreinte === "string" &&
+      i.empreinte.length > 0 &&
+      i.empreinte.length <= EMPREINTE_MAX &&
       typeof i.texte === "string" &&
       i.texte.trim().length > 0 &&
       i.texte.length <= TEXTE_MAX &&
@@ -182,27 +232,48 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   );
   if (valides.length === 0) return fail("Requete invalide", 400, "BAD_REQUEST");
 
+  // La cle de cache est calculee UNE fois par element, a partir du texte recu.
+  // Rien de ce que le client raconte n'y entre.
+  const prepares: Prepare[] = valides.map((item) => ({
+    item,
+    cle: cleCache(moteur.id, empreinteServeur(item.texte), item.source ?? "", cible),
+  }));
+
   // Le cache d'abord : ce qui en sort ne coute rien et n'entame aucun quota.
+  // Les resultats sont indexes par CLE DE CACHE et non par l'identifiant du
+  // client : deux elements portant le meme identifiant — par negligence ou a
+  // dessein — ne peuvent donc pas se voler leur traduction.
   const resultats = new Map<string, { texte: string; source: string; moteur: string }>();
-  const aTraduire: Element[] = [];
-  for (const item of valides) {
-    const connu = cache.get(cleCache(moteur.id, item.texte, item.source ?? "", cible));
-    if (connu) resultats.set(item.empreinte, connu);
-    else aTraduire.push(item);
+  const aTraduire: Prepare[] = [];
+  const dejaDemande = new Set<string>();
+  for (const prepare of prepares) {
+    const connu = cache.get(prepare.cle);
+    if (connu) {
+      resultats.set(prepare.cle, connu);
+      continue;
+    }
+    // Deux fois le meme texte dans un lot — un « ok » repete, un message
+    // transfere — ne part qu'une fois, et n'est facture qu'une fois.
+    if (dejaDemande.has(prepare.cle)) continue;
+    dejaDemande.add(prepare.cle);
+    aTraduire.push(prepare);
   }
+  // Compte fige avant l'appel : `resultats` va se remplir, et le taux de cache
+  // mesure ce qui a ete evite, pas ce qui a fini par arriver.
+  const depuisCache = resultats.size;
 
   if (aTraduire.length > 0) {
-    const caracteres = aTraduire.reduce((n, i) => n + i.texte.length, 0);
+    const caracteres = aTraduire.reduce((n, p) => n + p.item.texte.length, 0);
     if (!consommer(userId, caracteres)) {
       // On dit quand reessayer plutot que de laisser deviner.
       return fail("Quota de traduction atteint pour aujourd'hui", 429, "QUOTA");
     }
 
     // Un seul appel pour tout ce qui partage la meme langue source declaree.
-    const parSource = new Map<string, Element[]>();
-    for (const item of aTraduire) {
-      const cle = item.source ?? "";
-      parSource.set(cle, [...(parSource.get(cle) ?? []), item]);
+    const parSource = new Map<string, Prepare[]>();
+    for (const prepare of aTraduire) {
+      const cle = prepare.item.source ?? "";
+      parSource.set(cle, [...(parSource.get(cle) ?? []), prepare]);
     }
 
     try {
@@ -210,11 +281,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
         // Traduction des codes de langue au dialecte du moteur, juste avant
         // l'appel : le cache et la reponse gardent les codes de l'application.
         const traduits = await moteur.traduire!(
-          lot.map((i) => i.texte),
+          lot.map((p) => p.item.texte),
           moteur.langue(cible),
           source ? moteur.langue(source) : undefined,
         );
-        lot.forEach((item, index) => {
+        lot.forEach((prepare, index) => {
           const t = traduits[index];
           if (!t?.texte) return;
           // La source rendue par le moteur est un code a LUI (« zh-Hans »,
@@ -226,18 +297,32 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
             source: source || moteur.codeApplication(t.source),
             moteur: moteur.id,
           };
-          resultats.set(item.empreinte, valeur);
-          retenir(cleCache(moteur.id, item.texte, item.source ?? "", cible), valeur);
+          resultats.set(prepare.cle, valeur);
+          retenir(prepare.cle, valeur);
         });
       }
     } catch {
       // L'exception ne porte que le nom du moteur et un code HTTP (voir
       // `appeler` dans le registre) : rien du texte envoye ne peut fuir ici.
       //
-      // Le quota a ete debite AVANT l'appel : on le rend, sinon une panne du
-      // fournisseur amputerait la journee de quelqu'un qui n'a rien recu.
-      rendre(userId, caracteres);
-      return fail("Service de traduction indisponible", 502, "PROVIDER_UNAVAILABLE");
+      // Le quota a ete debite AVANT l'appel : on rend ce qui n'a pas ete
+      // traduit, sinon une panne du fournisseur amputerait la journee de
+      // quelqu'un qui n'a rien recu.
+      //
+      // On ne rend PAS le lot entier : quand les elements sont repartis en
+      // plusieurs groupes de langue source, un groupe a pu aboutir avant que le
+      // suivant echoue. Celui-la a bien ete facture par le fournisseur, et sa
+      // traduction est desormais dans le cache partage — la rembourser serait
+      // offrir du quota pour un travail reellement paye.
+      rendre(
+        userId,
+        aTraduire.filter((p) => !resultats.has(p.cle)).reduce((n, p) => n + p.item.texte.length, 0),
+      );
+      // PASSAGER, et c'est tout l'interet de ne pas dire `PROVIDER_UNAVAILABLE`
+      // ici : le moteur est bien servi par ce serveur, c'est l'appel qui a
+      // echoue. Le client peut donc mettre le relais en pause quelques secondes
+      // et reessayer, au lieu d'envoyer l'utilisateur changer de moteur.
+      return fail("Service de traduction indisponible", 502, "PROVIDER_FAILED");
     }
   }
 
@@ -245,15 +330,18 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   // le taux de cache et le moteur, jamais ce qui est ecrit.
   // eslint-disable-next-line no-console
   console.log(
-    `[translate] ${userId.slice(0, 8)} moteur=${moteur.id} lot=${valides.length} cache=${valides.length - aTraduire.length} cible=${cible}`,
+    `[translate] ${userId.slice(0, 8)} moteur=${moteur.id} lot=${prepares.length} cache=${depuisCache} appels=${aTraduire.length} cible=${cible}`,
   );
 
+  // Chaque element repart avec l'identifiant que le CLIENT lui avait donne :
+  // c'est la seule chose que nous en faisons, et elle ne touche a rien de
+  // partage. Le texte rendu, lui, vient de la cle calculee ici.
   return ok({
-    results: valides
-      .map((i) => {
-        const r = resultats.get(i.empreinte);
+    results: prepares
+      .map(({ item, cle }) => {
+        const r = resultats.get(cle);
         return r
-          ? { empreinte: i.empreinte, texte: r.texte, source: r.source, moteur: r.moteur }
+          ? { empreinte: item.empreinte, texte: r.texte, source: r.source, moteur: r.moteur }
           : null;
       })
       .filter(Boolean),
