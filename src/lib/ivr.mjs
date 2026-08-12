@@ -249,7 +249,12 @@ export async function lireMenuCentre(prisma, centreId) {
       menuNro: { not: null },
     },
     orderBy: { menuNro: "asc" },
-    select: { menuNro: true, libelle: true, users_alanyaID: true },
+    select: {
+      menuNro: true,
+      libelle: true,
+      nomService: true,
+      users_alanyaID: true,
+    },
   });
 
   const parTouche = new Map();
@@ -257,11 +262,36 @@ export async function lireMenuCentre(prisma, centreId) {
     const touche = Number(l.menuNro);
     if (!Number.isFinite(touche)) continue;
     if (!parTouche.has(touche)) {
-      parTouche.set(touche, { digit: touche, label: l.libelle, agentIds: [] });
+      parTouche.set(touche, {
+        digit: touche,
+        label: l.libelle,
+        // ⚠️ NORMALISÉE À `null` DÈS LA LECTURE. La colonne est nullable, et une
+        // chaîne vide n'y est pas moins probable qu'un NULL — les deux veulent
+        // dire « pas de nom de service ». Trancher ici évite d'avoir à s'en
+        // souvenir dans chaque client : un seul endroit décide ce que « vide »
+        // signifie, et le client ne reçoit jamais qu'un texte utile ou `null`.
+        nomService: nomDeService(l.nomService),
+        agentIds: [],
+      });
     }
-    if (l.users_alanyaID) parTouche.get(touche).agentIds.push(l.users_alanyaID);
+    /*
+     * Plusieurs lignes pour une même touche : la PREMIÈRE qui porte un
+     * `nom_service` le donne au service. Une touche est un service, ses lignes
+     * ne sont que ses agents — mais rien n'oblige la plateforme à renseigner la
+     * colonne sur toutes, et prendre la première ligne aveuglément afficherait
+     * un nom vide alors qu'il est écrit deux lignes plus bas.
+     */
+    const service = parTouche.get(touche);
+    service.nomService ??= nomDeService(l.nomService);
+    if (l.users_alanyaID) service.agentIds.push(l.users_alanyaID);
   }
   return [...parTouche.values()];
+}
+
+/** Un nom de service utilisable, ou `null` — jamais une chaîne vide. */
+function nomDeService(valeur) {
+  const propre = typeof valeur === "string" ? valeur.trim() : "";
+  return propre.length > 0 ? propre : null;
 }
 
 /**
@@ -276,9 +306,19 @@ export async function lireMenuCentre(prisma, centreId) {
  * qu'on lui rattache un agent en base, sans rien à mettre à jour ailleurs.
  */
 export function optionsPubliques(options) {
-  return options.map(({ digit, label, agentIds }) => ({
+  return options.map(({ digit, label, nomService, agentIds }) => ({
     digit,
     label,
+    /*
+     * `nomService` est ENVOYÉ À CÔTÉ de `label`, et ne le remplace pas.
+     *
+     * Le client n'en fait pas le même usage aux deux endroits — sur le pavé, il
+     * affiche le nom du service et retombe sur `label` s'il n'y en a pas ; sous
+     * le nom du centre, il n'affiche RIEN plutôt que `label`. Un serveur qui
+     * aurait fondu les deux en un seul champ aurait rendu la seconde règle
+     * impossible à écrire : « vide » ne se distinguerait plus de « replié ».
+     */
+    nomService: nomService ?? null,
     disponible: agentIds.length > 0,
   }));
 }

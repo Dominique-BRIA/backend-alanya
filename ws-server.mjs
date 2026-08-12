@@ -1666,6 +1666,10 @@ async function handleIvrDtmf(ws, msg) {
     callId,
     digit: touche,
     label: option.label,
+    // Envoyé explicitement plutôt que laissé à retrouver dans le menu par la
+    // touche : le client afficherait sinon le nom d'un service à partir d'une
+    // liste d'options qu'un retour au menu peut avoir remplacée entre-temps.
+    nomService: option.nomService ?? null,
     holdUrl: session.urlAttente,
   });
 

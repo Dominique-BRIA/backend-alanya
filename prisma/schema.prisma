@@ -1468,6 +1468,10 @@ model Center {
   idCompany       Int?     @map("idcompany")
   menuNro         Int?     @map("menunro")
   in_call         Boolean? @default(false)
+  /// Nom du service tel qu'il doit être MONTRÉ à l'appelant, ajouté en base par
+  /// la plateforme du collègue et déclaré ici le 12/08/2026. `libelle` reste le
+  /// nom interne de la ligne et sert de repli quand celle-ci est vide.
+  nomService      String?  @map("nom_service") @db.VarChar(45)
 
   centerUser   User?    @relation("centerUser", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   assignedUser User?    @relation("assignedUser", fields: [users_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
