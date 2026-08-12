@@ -1076,15 +1076,22 @@ model ConversationLock {
 
 /// Relevés de position d'un utilisateur, alimentés par le MOBILE uniquement.
 ///
-/// ⚠️ UNE LIGNE = UN LIEU, PAS UN RELEVÉ. Le téléphone relève sa position toutes
-/// les cinq minutes, mais on n'écrit une ligne que s'il a changé d'endroit ;
-/// sinon on repousse `collectTime` de la ligne existante. `collectTime` se lit
-/// donc « vu à cet endroit jusqu'à », et la durée passée quelque part est
-/// l'écart avec le `collectTime` de la ligne précédente.
+/// ⚠️ UNE LIGNE PAR RELEVÉ — règle changée le 11/08/2026. Le téléphone relève sa
+/// position toutes les cinq minutes, et CHAQUE relevé est conservé tel quel,
+/// qu'il ait bougé ou non.
 ///
-/// C'est ce que la table PERMET, et rien d'autre : elle n'a aucune colonne de
-/// durée ni d'heure d'arrivée. Voir `src/lib/geo.ts` pour la règle « a-t-il
-/// bougé ? ».
+/// La version précédente ne créait une ligne qu'en cas de déplacement de plus de
+/// 50 m et repoussait sinon le `collectTime` existant : une ligne décrivait donc
+/// un LIEU. C'était économe, mais l'information était perdue à l'écriture —
+/// impossible ensuite de distinguer « présent en continu » de « passé deux fois
+/// au même endroit », ni de savoir si le téléphone relevait encore.
+///
+/// Le regroupement en lieux et le calcul des durées sont désormais une affaire
+/// de LECTURE, faite à l'analyse sur des données complètes.
+///
+/// ⚠️ Environ 288 lignes par jour et par utilisateur suivi : prévoir une purge
+/// par ancienneté quand le parc grandira. L'index `(user_id, collect_time)` la
+/// servira aussi bien qu'il sert la lecture.
 ///
 /// La table existait déjà en production sans figurer ici — Prisma ne pouvait
 /// donc pas l'écrire. Migration : `prisma/manual/2026-08_geo_positions.sql`.

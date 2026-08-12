@@ -5,7 +5,6 @@ import { rateLimit } from "@/lib/rate-limit";
 import { positionSchema } from "@/lib/validation";
 import {
   INTERVALLE_RELEVE_MIN,
-  RAYON_MEME_LIEU_M,
   RELEVE_PERIME_MS,
   enregistreReleve,
 } from "@/lib/geo";
@@ -50,13 +49,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const resultat = await enregistreReleve(userId, lat, lon, releveA);
 
   return ok({
-    deplace: resultat.deplace,
-    // Arrondi au mètre : le dixième de millimètre que produit le calcul n'a
-    // aucun sens face à la précision d'un GPS.
-    distanceM:
-      resultat.distanceM === null ? null : Math.round(resultat.distanceM),
     collectTime: resultat.collectTime,
-    rayonMemeLieuM: RAYON_MEME_LIEU_M,
     intervalleMin: INTERVALLE_RELEVE_MIN,
   });
 });

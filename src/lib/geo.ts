@@ -1,36 +1,45 @@
 import { prisma } from "@/lib/prisma";
-import { RAYON_MEME_LIEU_M, distanceMetres } from "@/lib/geo-distance";
 
-// Les seuils et la géométrie vivent dans `geo-distance.ts`, qui n'importe rien —
-// ce qui permet de les exécuter directement pour les vérifier. On les réexporte
-// ici pour que les appelants n'aient qu'un seul module à connaître.
+// Les seuils vivent dans `geo-distance.ts`, qui n'importe rien — ce qui permet
+// de les exécuter directement pour les vérifier. On les réexporte ici pour que
+// les appelants n'aient qu'un seul module à connaître.
 export {
   INTERVALLE_RELEVE_MIN,
-  RAYON_MEME_LIEU_M,
   RELEVE_PERIME_MS,
-  distanceMetres,
+  suiviPositionApplicable,
 } from "@/lib/geo-distance";
 
 export type ResultatReleve = {
-  /** Vrai si une NOUVELLE ligne a été créée (l'utilisateur a changé de lieu). */
-  deplace: boolean;
-  /** Distance au lieu précédent, nulle au tout premier relevé. */
-  distanceM: number | null;
-  /** Heure désormais portée par la ligne concernée. */
+  /** Heure retenue pour ce relevé. */
   collectTime: Date;
 };
 
 /**
  * Enregistre un relevé de position.
  *
- * ⚠️ UNE LIGNE = UN LIEU, PAS UN RELEVÉ. C'est la seule lecture que la table
- * permet : elle n'a ni colonne de durée, ni heure d'arrivée. `collect_time` se
- * lit donc « vu à cet endroit jusqu'à », et le temps passé quelque part est
- * l'écart avec le `collect_time` de la ligne précédente.
+ * ⚠️ UNE LIGNE PAR RELEVÉ, TOUJOURS — règle changée le 11/08/2026 à la demande
+ * du user.
  *
- * La décision « a-t-il bougé ? » est prise ICI, côté serveur, et non sur le
- * téléphone. Deux raisons : le serveur détient déjà la dernière position connue,
- * et la règle reste modifiable sans reconstruire l'application.
+ * La version précédente ne créait une ligne QUE si l'utilisateur s'était
+ * déplacé de plus de 50 m ; sinon elle repoussait le `collect_time` de la ligne
+ * existante, si bien qu'une ligne décrivait un LIEU et non un relevé. C'était
+ * économe, mais ça effaçait l'information : impossible de distinguer « présent
+ * en continu pendant deux heures » de « passé deux fois au même endroit », ni de
+ * savoir si le téléphone relevait encore.
+ *
+ * Chaque relevé est désormais conservé tel quel. Le regroupement en lieux et le
+ * calcul des durées deviennent une affaire de LECTURE, faite au moment de
+ * l'analyse, à partir de données complètes — plutôt qu'une décision prise à
+ * l'écriture et impossible à défaire.
+ *
+ * ⚠️ Conséquence à connaître : environ **288 lignes par jour et par utilisateur
+ * suivi** (un relevé toutes les cinq minutes). Une purge par ancienneté devra
+ * être prévue le jour où le parc grandira ; l'index `(user_id, collect_time)`
+ * la servira aussi bien qu'il sert la lecture.
+ *
+ * Un relevé sorti d'une file hors ligne s'insère avec SON heure : l'ordre
+ * d'arrivée n'a plus d'importance, là où l'ancienne règle pouvait perdre un
+ * relevé retardataire.
  */
 export async function enregistreReleve(
   userId: string,
@@ -38,40 +47,8 @@ export async function enregistreReleve(
   lon: number,
   releveA: Date,
 ): Promise<ResultatReleve> {
-  const derniere = await prisma.geo.findFirst({
-    where: { userId },
-    orderBy: { collectTime: "desc" },
-    select: { idGeo: true, lat: true, lon: true, collectTime: true },
+  await prisma.geo.create({
+    data: { userId, lat, lon, collectTime: releveA },
   });
-
-  const creer = async (distanceM: number | null): Promise<ResultatReleve> => {
-    await prisma.geo.create({
-      data: { userId, lat, lon, collectTime: releveA },
-    });
-    return { deplace: true, distanceM, collectTime: releveA };
-  };
-
-  if (!derniere) return creer(null);
-
-  const distanceM = distanceMetres(
-    derniere.lat.toNumber(),
-    derniere.lon.toNumber(),
-    lat,
-    lon,
-  );
-  if (distanceM > RAYON_MEME_LIEU_M) return creer(distanceM);
-
-  // Même lieu : on repousse l'heure de la ligne existante.
-  //
-  // ⚠️ JAMAIS EN ARRIÈRE. Un relevé sorti d'une file hors ligne peut être plus
-  // ancien que ce qui est déjà écrit ; le laisser passer raccourcirait le séjour
-  // au lieu de l'allonger, ce qui est exactement l'inverse du but.
-  if (releveA <= derniere.collectTime) {
-    return { deplace: false, distanceM, collectTime: derniere.collectTime };
-  }
-  await prisma.geo.update({
-    where: { idGeo: derniere.idGeo },
-    data: { collectTime: releveA },
-  });
-  return { deplace: false, distanceM, collectTime: releveA };
+  return { collectTime: releveA };
 }

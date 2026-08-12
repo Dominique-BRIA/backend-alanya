@@ -36,6 +36,11 @@ BEGIN
     END IF;
 END $$;
 
--- Sert la seule lecture chaude : « quelle est la dernière position connue de cet
--- utilisateur ? », faite à CHAQUE relevé pour décider s'il a bougé.
+-- Sert la lecture d'un parcours : « les positions de cet utilisateur, dans
+-- l'ordre du temps ».
+--
+-- ⚠️ L'écriture, elle, ne lit plus rien depuis le 11/08/2026 : chaque relevé
+-- s'insère sans consulter le précédent. Ce même index servira aussi la purge
+-- par ancienneté, à prévoir — environ 288 lignes par jour et par utilisateur
+-- suivi.
 CREATE INDEX IF NOT EXISTS geo_user_id_collect_time_idx ON geo (user_id, collect_time);
