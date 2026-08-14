@@ -1,0 +1,1022 @@
+// Schéma de données Alanya — PostgreSQL + Prisma
+// Dérivé du cahier des charges (Groupe Alanya II), enrichi : numéro public 6 chiffres,
+// statuts éphémères (stories) et IA conversationnelle (Gemini).
+//
+// Conventions (cf. cahier des charges) :
+//  - Clés primaires en UUID
+//  - Dates en TIMESTAMPTZ (DateTime @db.Timestamptz)
+//  - Mots de passe hachés (BCrypt) avant insertion
+//  - Index sur les colonnes fréquemment filtrées
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH & COMPTE
+// ---------------------------------------------------------------------------
+
+model User {
+  // Colonnes physiques alignées sur le référentiel équipe (alanya.sql).
+  // Les noms de champ Prisma restent inchangés → code applicatif et contrat API intacts ;
+  // seuls les noms de colonnes Postgres changent via @map (UUID conservés).
+  id            String   @id @default(uuid()) @map("alanyaID") @db.Uuid
+  email         String   @unique @db.VarChar(100)
+  passwordHash  String?  @map("password") @db.VarChar(255)
+  /// VarChar(20) depuis le 30/07/2026, pour suivre le référentiel équipe.
+  /// L'unicité est CONSERVÉE, contrairement à leur fichier : sans elle, deux
+  /// comptes pourraient porter le même Alanya ID.
+  /// La génération reste à 8 chiffres (src/lib/publicNumber.ts) et la
+  /// validation n'accepte que 6 ou 8 (src/lib/validation.ts).
+  publicNumber  String   @unique @map("alanyaPhone") @db.VarChar(20)
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  // --- F1 : Inscription avec pays ---
+  nom    String? @db.VarChar(100)
+  idPays Int?    @map("idPays") @db.SmallInt
+  pays   Pays?   @relation(fields: [idPays], references: [idPays])
+
+  // --- F3 : Type de compte & statut actif ---
+  typeCompte Int     @default(0) @map("type_compte") @db.SmallInt
+  actif      Int     @default(1) @db.SmallInt
+  mobile     String? @db.VarChar(20)
+
+  // --- F4 : Profil fusionné (anciennement dans Profile) ---
+  pseudo    String?   @map("pseudo") @db.VarChar(50)
+  /// `Text` et non `VarChar(2048)` : la plus longue valeur en base atteignait
+  /// déjà 1955 caractères le 30/07/2026. La troncature n'était plus loin.
+  avatarUrl String?   @map("avatar_url") @db.Text
+  statusMsg String?   @map("status_msg") @db.VarChar(255)
+  lastSeen  DateTime? @map("last_seen") @db.Timestamptz
+
+  // --- F5 : Présence en ligne ---
+  isOnline Int @default(0) @map("is_online") @db.SmallInt
+
+  // --- Confidentialité (Phase 3.1) ---
+  // readReceipts : 1 = envoie/reçoit les confirmations de lecture, 0 = off.
+  // lastSeenVisibility : 0 = personne, 1 = mes contacts, 2 = tout le monde.
+  readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
+  lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
+
+  // --- F6 : Exclusion de compte ---
+  exclus        Int       @default(0) @db.SmallInt
+  excludeAt     DateTime? @map("exclude_at") @db.Timestamptz
+  excludeReason String?   @map("exclude_reason") @db.VarChar(255)
+
+  // --- F7 : Biométrie / état d'appel / device (colonnes du référentiel) ---
+  inCall            Int       @default(0) @map("in_call") @db.SmallInt
+  biometric         Int       @default(0) @db.SmallInt
+  appareilTotal     Int       @default(1) @map("appareil_total") @db.SmallInt
+  fcmToken          String?   @map("fcm_token") @db.VarChar(255)
+  deviceId          String?   @map("device_ID") @db.VarChar(255)
+  resetOtp          String?   @map("reset_otp") @db.VarChar(6)
+  resetOtpExpiresAt DateTime? @map("reset_otp_expires_at") @db.Timestamptz
+
+  //  Ajouter par James
+  isDelete Boolean @default(false) @map("isDelete")
+
+
+  refreshTokens    RefreshToken[]
+  contacts         Contact[]         @relation("UserContacts")
+  contactOf        Contact[]         @relation("ContactOf")
+  participations   Participant[]
+  sentMessages     Message[]         @relation("MessageSender")
+  ownedMedia       MediaFile[]
+  statuses         Status[]
+  statusViews      StatusView[]
+  callsInitiated   Call[]            @relation("CallInitiator")
+  callParticipants CallParticipant[]
+  aiThreads        AiThread[]
+  pushDevices      PushDevice[]
+  messageHides     MessageHide[]
+  messageReactions MessageReaction[]
+  messageStars     MessageStar[]
+
+  // --- Nouvelles relations (schéma PDF) ---
+  organizedMeetings     Meeting[]            @relation("MeetingOrganizer")
+  meetingParticipations MeetingParticipant[] @relation("MeetingParticipantUser")
+  blockedUsers          Blocked[]            @relation("BlockOwner")
+  blockedByUsers        Blocked[]            @relation("BlockedUser")
+
+  // --- Relations vers les nouvelles tables du référentiel ---
+  accessLogs     UserAccess[]
+  callsMade      CallHistory[]         @relation("CallCaller")
+  callsReceived  CallHistory[]         @relation("CallReceiver")
+  reservedPhones ReservedAlanyaPhone[]
+  appareils      Appareil[]
+  customerChats  CustomerChat[]
+  rapportsAgent  RapportChat[]
+
+  // --- Organisation / centre d'appels (référentiel équipe) ---
+  // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
+  // des relations inverses, sans existence en base.
+  idCompany       Int?             @map("idcompany")
+  company         Company?         @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull)
+  Fonctions       Fonction[]
+  GestionCompany  GestionCompany[]
+  centerUsers     Center[]         @relation("centerUser")
+  assignedCenters Center[]         @relation("assignedUser")
+
+  @@index([publicNumber])
+  @@index([idCompany])
+  @@map("users")
+}
+
+/// Registre des appareils d'un compte — une ligne par appareil, mise à jour au
+/// fil de l'eau. Alimente l'écran « Appareils connectés ».
+///
+/// À distinguer de [UserAccess], qui est un journal (une ligne par connexion,
+/// jamais modifiée), et de [PushDevice], qui ne porte qu'un jeton FCM sans état
+/// présentable à l'utilisateur.
+///
+/// Conventions : `typeDevice` 0=web 1=Android 2=iOS 3=bureau ;
+/// `isOnline` 0/1 ; `destroy` 1 = déconnecté à distance (effacement logique,
+/// la ligne est conservée pour l'historique).
+model Appareil {
+  appareilId   Int       @id @default(autoincrement()) @map("appareilID")
+  /// Identifiant stable du navigateur, généré côté client et gardé en
+  /// localStorage. Nul pour les appareils mobiles.
+  cookiesWebId String?   @map("cookies_WebID") @db.VarChar(255)
+  libelle      String    @default("Appareil") @db.VarChar(45)
+  isOnline     Int       @default(0) @map("is_online") @db.SmallInt
+  createAt     DateTime  @default(now()) @map("create_at") @db.Timestamptz
+  typeDevice   Int       @default(0) @db.SmallInt
+  lastLogin    DateTime? @db.Timestamptz
+  system       String?   @db.VarChar(45)
+  /// Nom de l'agent associé à l'appareil. Nullable : les lignes existantes n'en
+  /// ont pas, et le remplir de force par un défaut inventé donnerait une
+  /// information fausse plutôt qu'absente.
+  nomAgent     String?   @db.VarChar(50)
+  /// Agent propriétaire de l'appareil — un utilisateur. La colonne s'appelait
+  /// `alanyaID` ; le renommage en `idAgent` dit ce qu'elle désigne vraiment
+  /// depuis que ce registre sert le centre d'appels.
+  ///
+  /// ⚠️ Cette colonne n'est PAS unique : un agent a plusieurs appareils. Aucune
+  /// clé étrangère ne peut donc la cibler — pointer vers `users.alanyaID`.
+  idAgent      String    @db.Uuid
+  user         User      @relation(fields: [idAgent], references: [id], onDelete: Cascade)
+  destroy      Int       @default(0) @db.SmallInt
+
+  customerChats CustomerChat[]
+
+  /// Unicité sur le COUPLE (navigateur, agent) : deux comptes utilisés tour à
+  /// tour dans le même navigateur gardent chacun leur entrée.
+  @@unique([cookiesWebId, idAgent], map: "Appareil_cookies_idAgent_key")
+  /// Couvre aussi les recherches sur le seul `idAgent` (préfixe gauche) : pas
+  /// besoin d'un second index sur cette colonne.
+  @@index([idAgent, destroy, lastLogin(sort: Desc)], map: "Appareil_idAgent_destroy_idx")
+  @@map("Appareil")
+}
+
+/// Sessions de discussion client — une ligne par session, ouverte à
+/// `startTime` et refermée à `endTime`.
+///
+/// `endTime` nul signifie « session en cours » : c'est ce qui permet de
+/// retrouver les sessions ouvertes sans colonne d'état supplémentaire.
+///
+/// `isFree` suit la convention du projet pour les booléens (0/1 en SMALLINT,
+/// comme `isOnline` ou `destroy`) plutôt qu'un vrai BOOLEAN, pour rester
+/// homogène avec le référentiel.
+model CustomerChat {
+  id         Int       @id @default(autoincrement()) @map("ID")
+  appareilId Int       @map("appareilID")
+  appareil   Appareil  @relation(fields: [appareilId], references: [appareilId], onDelete: Cascade)
+  /// Le client de la session. La colonne s'appelait `AlanyaID` ; `customerID`
+  /// la distingue de l'agent, qui est à l'autre bout de la discussion.
+  customerId String    @map("customerID") @db.Uuid
+  user       User      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  startTime  DateTime  @default(now()) @map("start_time") @db.Timestamptz
+  endTime    DateTime? @map("end_time") @db.Timestamptz
+  isFree     Int       @default(1) @db.SmallInt
+  /// Vrai BOOLEAN, contrairement à `isFree` qui suit la convention SMALLINT 0/1
+  /// du référentiel. Écart assumé : demandé explicitement en booléen.
+  isResolved Boolean   @default(false)
+
+  rapports RapportChat[]
+
+  /// Les sessions d'un client, la plus récente d'abord. Le préfixe gauche
+  /// couvre aussi les recherches sur le seul `customerId`.
+  @@index([customerId, startTime(sort: Desc)], map: "customerChat_customerID_start_idx")
+  /// PostgreSQL n'indexe pas automatiquement les clés étrangères : sans cet
+  /// index, toute suppression d'appareil imposerait un parcours complet.
+  @@index([appareilId], map: "customerChat_appareilID_idx")
+  @@map("customerChat")
+}
+
+/// Compte rendu d'une session de discussion client.
+///
+/// `idAgent` pointe vers `users.alanyaID` et NON vers `Appareil.idAgent` :
+/// cette dernière n'est pas unique (un agent a plusieurs appareils), donc
+/// aucune clé étrangère ne peut la cibler. La valeur est la même, prise à sa
+/// source — et le rapport reste rattaché à l'agent même s'il change de poste.
+model RapportChat {
+  idRapport    Int          @id @default(autoincrement())
+  idCustomer   Int
+  customerChat CustomerChat @relation(fields: [idCustomer], references: [id], onDelete: Cascade)
+  idAgent      String       @db.Uuid
+  agent        User         @relation(fields: [idAgent], references: [id], onDelete: Cascade)
+  resume       String?      @db.Text
+  subject      String?      @db.VarChar(200)
+  date         DateTime     @default(now()) @db.Timestamptz
+  type         Int?         @db.SmallInt
+
+  docs DocRapport[]
+
+  @@index([idCustomer], map: "rapportChat_idCustomer_idx")
+  /// Les rapports d'un agent, du plus récent au plus ancien.
+  @@index([idAgent, date(sort: Desc)], map: "rapportChat_idAgent_date_idx")
+  @@map("rapportChat")
+}
+
+/// Pièce jointe d'un rapport (document, capture, enregistrement).
+model DocRapport {
+  idDoc     Int         @id @default(autoincrement())
+  idRapport Int
+  rapport   RapportChat @relation(fields: [idRapport], references: [idRapport], onDelete: Cascade)
+  url       String      @db.Text
+  type      Int?        @db.SmallInt
+
+  @@index([idRapport], map: "docRapport_idRapport_idx")
+  @@map("docRapport")
+}
+
+// Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
+model PushDevice {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique @db.VarChar(512)
+  platform  String   @db.VarChar(16) // android | ios | web
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([userId])
+  @@map("push_devices")
+}
+
+// Codes de vérification email (OTP 6 chiffres) — envoyés via Firebase/email
+model EmailVerification {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String
+  codeHash  String // hash du code OTP à 6 chiffres (jamais en clair)
+  expiresAt DateTime @db.Timestamptz
+  consumed  Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([email])
+  @@map("email_verifications")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String // hash du refresh token
+  expiresAt DateTime @db.Timestamptz
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  /// Appareil ayant obtenu cette session — même identifiant que
+  /// `Appareil.cookies_WebID`. C'est ce lien qui rend la déconnexion à
+  /// distance possible : sans lui, on sait à quel utilisateur appartient un
+  /// jeton, pas depuis quel appareil il a été émis.
+  ///
+  /// Nul pour les sessions ouvertes avant cette évolution, et pour les clients
+  /// qui ne l'envoient pas : elles restent valides, simplement non révocables
+  /// individuellement.
+  deviceId String? @map("device_id") @db.VarChar(255)
+
+  @@index([userId])
+  /// Sert la révocation : retrouver les sessions d'un appareil donné.
+  @@index([userId, deviceId], map: "refresh_tokens_user_device_idx")
+  @@map("refresh_tokens")
+}
+
+model Contact {
+  id        String   @id @default(uuid()) @map("idPrefContact") @db.Uuid
+  userId    String   @map("alanyaID") @db.Uuid
+  contactId String   @map("idFriend") @db.Uuid
+  user      User     @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
+  contact   User     @relation("ContactOf", fields: [contactId], references: [id], onDelete: Cascade)
+  alias     String?  @db.VarChar(100) // extra local : nom donné par l'utilisateur dans son répertoire
+  isBlocked Boolean  @default(false) // extra local
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([userId, contactId])
+  @@index([userId])
+  @@map("preferredContact")
+}
+
+// ---------------------------------------------------------------------------
+// MESSAGERIE
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id        String   @id @default(uuid()) @map("conversID") @db.Uuid
+  isGroup   Boolean  @default(false)
+  name      String?  @map("GroupName") @db.VarChar(150) // nom du groupe (null pour les conversations directes)
+  avatarUrl String?  @map("groupPhoto")
+  createdAt DateTime @default(now()) @db.Timestamptz // extra local
+  updatedAt DateTime @updatedAt @db.Timestamptz // extra local
+
+  participants Participant[]
+  messages     Message[]
+
+  // --- F11 : Dernier message dénormalisé ---
+  lastMessage         String?   @db.Text
+  lastMessageAt       DateTime? @db.Timestamptz
+  lastMessageSenderID String?   @db.Uuid
+  lastMessageType     Int?      @db.SmallInt
+  lastMessageStatus   Int?      @db.SmallInt
+
+  // Message épinglé (partagé à toute la conversation). Null = aucun. Pas de FK :
+  // si le message est supprimé pour tous il reste consultable (deletedAt), et on
+  // filtre à la lecture au besoin.
+  pinnedMessageId String? @map("pinned_message_id") @db.Uuid
+
+  // Messages éphémères : durée de vie (en secondes) des NOUVEAUX messages.
+  // 0 = désactivé. Les valeurs usuelles : 86400 (24h), 604800 (7j), 7776000 (90j).
+  disappearingSeconds Int @default(0) @map("disappearing_seconds")
+
+  @@map("conversation")
+}
+
+enum ParticipantRole {
+  MEMBER
+  ADMIN
+}
+
+model Participant {
+  id         String          @id @default(uuid()) @db.Uuid
+  convId     String          @map("conversID") @db.Uuid
+  userId     String          @map("alanyaID") @db.Uuid
+  conv       Conversation    @relation(fields: [convId], references: [id], onDelete: Cascade)
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       ParticipantRole @default(MEMBER) // extra local
+  joinedAt   DateTime        @default(now()) @db.Timestamptz
+  // Pointeur de lecture pour calculer les non-lus (extra local)
+  lastReadAt DateTime?       @db.Timestamptz
+
+  // --- F8 : Épingler ---
+  isPinned Int @default(0) @db.SmallInt
+
+  // --- F9 : Archiver ---
+  isArchived Int @default(0) @db.SmallInt
+
+  // --- F10 : Compteur de non-lus ---
+  unreadCount Int @default(0) @db.SmallInt
+
+  @@unique([convId, userId])
+  @@index([userId])
+  @@map("conv_participants")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  AUDIO // message vocal
+  VIDEO
+  SYSTEM
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+model Message {
+  id        String            @id @default(uuid()) @map("msgID") @db.Uuid
+  convId    String            @map("conversationID") @db.Uuid
+  senderId  String            @map("senderID") @db.Uuid
+  conv      Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
+  sender    User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content   String? // texte (null pour médias purs)
+  type      MessageType       @default(TEXT)
+  status    MessageStatus     @default(SENT)
+  replyToId String?           @map("replyToID") @db.Uuid
+  replyTo   Message?          @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies   Message[]         @relation("MessageReplies")
+  media     MediaFile[]
+  createdAt DateTime          @default(now()) @map("sendAt") @db.Timestamptz
+  editedAt  DateTime?         @db.Timestamptz
+  // Message éphémère : instant d'expiration (null = permanent). Purgé après.
+  expiresAt DateTime?         @map("expires_at") @db.Timestamptz
+  deletedAt DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
+  hides     MessageHide[]
+  reactions MessageReaction[]
+  stars     MessageStar[]
+
+  @@index([convId, createdAt])
+  @@index([senderId])
+  @@map("message")
+}
+
+// Messages favoris (étoile). Privé à chaque utilisateur (comme WhatsApp) :
+// une ligne = « cet utilisateur a mis ce message en favori ». onDelete Cascade.
+model MessageStar {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([userId])
+  @@map("message_stars")
+}
+
+// Réactions emoji (extra local). Une seule réaction par utilisateur et par
+// message (@@unique) : réagir à nouveau remplace l'emoji, réagir avec le même
+// emoji le retire (géré côté handler). onDelete: Cascade nettoie automatiquement.
+model MessageReaction {
+  id        String   @id @default(uuid()) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  emoji     String   @db.VarChar(16)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+  @@map("message_reactions")
+}
+
+// Suppression « pour moi » : enregistre qu'un utilisateur a masqué un message
+// de sa vue (les autres participants le voient toujours). @@unique empêche les
+// doublons ; onDelete: Cascade nettoie automatiquement si l'utilisateur ou le
+// message est supprimé.
+model MessageHide {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  messageId String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@unique([userId, messageId])
+  @@index([userId])
+  @@map("message_hides")
+}
+
+// ---------------------------------------------------------------------------
+// MÉDIAS (binaires sur disque, métadonnées en base)
+// ---------------------------------------------------------------------------
+
+model MediaFile {
+  id           String   @id @default(uuid()) @db.Uuid
+  ownerId      String   @db.Uuid
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  messageId    String?  @db.Uuid
+  message      Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  url          String // chemin/URL d'accès (le binaire est stocké hors BD)
+  thumbnailUrl String?
+  durationMs   Int? // pour audio/vidéo (messages vocaux, appels)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  @@index([ownerId])
+  @@index([messageId])
+  @@map("media_files")
+}
+
+// ---------------------------------------------------------------------------
+// STATUTS (stories éphémères, 24 h)
+// ---------------------------------------------------------------------------
+
+enum StatusType {
+  TEXT
+  IMAGE
+  VIDEO
+}
+
+model Status {
+  id        String     @id @default(uuid()) @map("ID") @db.Uuid
+  userId    String     @map("alanyaID") @db.Uuid
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      StatusType @default(TEXT)
+  text      String?    @db.VarChar(700)
+  mediaUrl  String?
+  bgColor   String?    @map("backgroundColor") @db.VarChar(9) // couleur de fond pour les statuts texte
+  createdAt DateTime   @default(now()) @db.Timestamptz
+  expiresAt DateTime   @map("expiredAt") @db.Timestamptz // createdAt + 24 h
+
+  views StatusView[]
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("statut")
+}
+
+model StatusView {
+  id       String   @id @default(uuid()) @db.Uuid
+  statusId String   @map("statutID") @db.Uuid
+  viewerId String   @map("alanyaID") @db.Uuid
+  status   Status   @relation(fields: [statusId], references: [id], onDelete: Cascade)
+  viewer   User     @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+  viewedAt DateTime @default(now()) @map("seenAt") @db.Timestamptz
+
+  @@unique([statusId, viewerId])
+  @@map("statut_views")
+}
+
+// ---------------------------------------------------------------------------
+// APPELS (WebRTC : signaling + métadonnées)
+// ---------------------------------------------------------------------------
+
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ONGOING
+  ENDED
+  MISSED
+  REJECTED
+}
+
+model Call {
+  id          String     @id @default(uuid()) @db.Uuid
+  initiatorId String     @db.Uuid
+  initiator   User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  convId      String?    @db.Uuid
+  type        CallType   @default(AUDIO)
+  status      CallStatus @default(RINGING)
+  startedAt   DateTime   @default(now()) @db.Timestamptz
+  answeredAt  DateTime?  @db.Timestamptz
+  endedAt     DateTime?  @db.Timestamptz
+
+  participants CallParticipant[]
+
+  @@index([initiatorId])
+  @@map("calls")
+}
+
+model CallParticipant {
+  id       String    @id @default(uuid()) @db.Uuid
+  callId   String    @db.Uuid
+  userId   String    @db.Uuid
+  call     Call      @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt DateTime? @db.Timestamptz
+  leftAt   DateTime? @db.Timestamptz
+
+  @@unique([callId, userId])
+  @@map("call_participants")
+}
+
+// ---------------------------------------------------------------------------
+// IA CONVERSATIONNELLE (Gemini)
+// ---------------------------------------------------------------------------
+
+enum AiRole {
+  USER
+  MODEL
+}
+
+model AiThread {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?  @db.VarChar(150)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  messages AiMessage[]
+
+  @@index([userId])
+  @@map("ai_threads")
+}
+
+model AiMessage {
+  id        String   @id @default(uuid()) @db.Uuid
+  threadId  String   @db.Uuid
+  thread    AiThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  role      AiRole
+  content   String
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([threadId, createdAt])
+  @@map("ai_messages")
+}
+
+// ===========================================================================
+// NOUVEAUX MODÈLES — Schéma PDF cible
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// PAYS (référentiel pays — source de vérité pour les indicatifs & fuseaux)
+// ---------------------------------------------------------------------------
+
+model Pays {
+  idPays          Int    @id @default(autoincrement()) @db.SmallInt // MySQL smallint → PG SMALLINT
+  libelle         String @db.VarChar(100)
+  /// Libellé anglais du pays. NOT NULL avec défaut vide : les lignes déjà
+  /// semées n'en ont pas, et la colonne s'ajoute sans réécrire la table.
+  libelleAnglais  String @default("") @db.VarChar(100)
+  prefix          String @default("") @db.VarChar(10) // indicatif téléphonique (+237, +33…)
+  timeZone        String @default("Africa/Dakar") @db.VarChar(200) // ex: "Africa/Douala"
+  decalageHoraire Int    @default(0)
+
+  users User[]
+
+  // Relations inverses vers les tables du volet organisation. Purement
+  // virtuelles : aucune colonne ajoutée à `pays`.
+  villes          Ville[]
+  adminRoots      AdminRoot[]
+  companies       Company[]
+  prixAbonnements PrixAbonnement[]
+
+  isDelete Boolean @default(false) @map("isDelete")
+
+  @@map("pays")
+}
+
+// ---------------------------------------------------------------------------
+// MEETINGS (réunions audio/vidéo planifiées)
+// ---------------------------------------------------------------------------
+
+model Meeting {
+  idMeeting   Int      @id @default(autoincrement()) // MySQL int → PG INTEGER
+  idOrganiser String   @db.Uuid
+  organiser   User     @relation("MeetingOrganizer", fields: [idOrganiser], references: [id], onDelete: Cascade)
+  start_time  DateTime @default(now()) @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
+  duree       Int      @default(0) // MySQL int → PG INTEGER (secondes)
+  objet       String   @default("Réunion") @db.VarChar(200) // MySQL varchar(200)
+  room        String   @default("default-room") @db.VarChar(200) // MySQL varchar(200)
+  isEnd       Int      @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT
+  type_media  Int      @default(1) @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
+
+  participants MeetingParticipant[]
+
+  @@index([idOrganiser])
+  @@map("meeting")
+}
+
+model MeetingParticipant {
+  ID            Int       @id @default(autoincrement()) // MySQL int → PG INTEGER
+  idMeeting     Int // MySQL int → PG INTEGER
+  meeting       Meeting   @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
+  IDparticipant String    @db.Uuid
+  user          User      @relation("MeetingParticipantUser", fields: [IDparticipant], references: [id], onDelete: Cascade)
+  status        Int       @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT (0=invité, 1=accepté, 2=décliné)
+  start_time    DateTime? @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
+  connecte      Int       @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT (0=déconnecté, 1=connecté)
+  duree         Int? // MySQL int → PG INTEGER (secondes)
+
+  @@unique([idMeeting, IDparticipant])
+  @@index([IDparticipant])
+  @@map("participant")
+}
+
+// ---------------------------------------------------------------------------
+// BLOCKED (utilisateurs bloqués — indépendant de Contact.isBlocked)
+// ---------------------------------------------------------------------------
+
+model Blocked {
+  idBlock       Int      @id @default(autoincrement()) // MySQL int → PG INTEGER
+  alanyaID      String   @db.Uuid
+  owner         User     @relation("BlockOwner", fields: [alanyaID], references: [id], onDelete: Cascade)
+  idCallerBlock String   @db.Uuid
+  blockedUser   User     @relation("BlockedUser", fields: [idCallerBlock], references: [id], onDelete: Cascade)
+  dateBlock     DateTime @default(now()) @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
+
+  @@unique([alanyaID, idCallerBlock])
+  @@index([alanyaID])
+  @@map("blocked")
+}
+
+// ---------------------------------------------------------------------------
+// USER_ACCESS (journal de connexions) — table du référentiel, ajoutée
+// ---------------------------------------------------------------------------
+
+model UserAccess {
+  idLogin   BigInt   @id @default(autoincrement())
+  alanyaId  String   @map("alanyaID") @db.Uuid
+  user      User     @relation(fields: [alanyaId], references: [id], onDelete: Cascade)
+  device    String   @default("INDEFINI") @db.VarChar(255)
+  dateLogin DateTime @default(now()) @db.Timestamptz
+  ipAdress  String   @default("INDEFINI") @db.VarChar(255)
+  osSystem  String   @default("INDEFINI") @map("os_system") @db.VarChar(255)
+
+  /// Répond directement à la lecture de l'historique d'un compte
+  /// (filtre sur l'utilisateur, tri par date).
+  @@index([alanyaId, dateLogin(sort: Desc)], map: "userAccess_alanyaID_dateLogin_idx")
+  /// Conservé pour une purge par ancienneté.
+  @@index([dateLogin])
+  @@map("userAccess")
+}
+
+// ---------------------------------------------------------------------------
+// CALL_HISTORY (appels 1-à-1) — table du référentiel, ajoutée.
+// Nos tables `calls` / `call_participants` (appels de groupe) restent en plus.
+// ---------------------------------------------------------------------------
+
+model CallHistory {
+  idCall       BigInt    @id @default(autoincrement()) @map("IDcall")
+  idCaller     String    @db.Uuid
+  caller       User      @relation("CallCaller", fields: [idCaller], references: [id], onDelete: Cascade)
+  idReceiver   String    @db.Uuid
+  receiver     User      @relation("CallReceiver", fields: [idReceiver], references: [id], onDelete: Cascade)
+  type         Int       @default(0) @db.SmallInt // 0=audio 1=video
+  status       Int       @default(0) @db.SmallInt // 0=missed 1=answered 2=rejected
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  startTime    DateTime? @map("start_time") @db.Timestamptz
+  duree        Int       @default(0)
+  mode         Int?      @db.SmallInt
+  ip           String?   @db.VarChar(45)
+  /// « relay » (acheminé par Coturn) ou « p2p » (direct). Nul tant que
+  /// l'information n'est pas remontée par le client.
+  transmission String?   @db.VarChar(10)
+
+  @@index([idCaller, createdAt])
+  @@index([idReceiver, createdAt])
+  @@map("callHistory")
+}
+
+// ---------------------------------------------------------------------------
+// RESERVED_ALANYA_PHONE (numéros réservés admin) — table du référentiel, ajoutée
+// ---------------------------------------------------------------------------
+
+model ReservedAlanyaPhone {
+  id             Int      @id @default(autoincrement())
+  phoneCanonical String   @unique @map("phone_canonical") @db.VarChar(8)
+  label          String   @db.VarChar(100)
+  createdBy      String?  @map("created_by") @db.Uuid
+  creator        User?    @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("reserved_alanya_phone")
+}
+
+// ===========================================================================
+// ORGANISATION & CENTRE D'APPELS — volet du référentiel équipe
+// ===========================================================================
+// Ajout strictement additif (juillet 2026) : ces treize modèles ne modifient
+// aucune table existante, à la seule exception de `users.idcompany`, colonne
+// nullable ajoutée pour rattacher un compte à une entreprise.
+//
+// Les autres écarts du référentiel — changement de type de la clé primaire de
+// `Message`, disparition de `expiresAt` et `deletedAt`, perte du `@unique` sur
+// `alanyaPhone` — ont été VOLONTAIREMENT écartés : ils casseraient la
+// messagerie et les messages éphémères déjà en production.
+//
+// C'est ce volet qui donne leur sens à `Appareil.agent` et à `CustomerChat`.
+
+model Ville {
+  idville Int    @id @default(autoincrement())
+  nom     String @db.VarChar(45)
+  idPays  Int?   @map("idpays")
+  pays    Pays?  @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  
+
+  Companies Company[]
+  Agences   Agence[]
+
+  isDelete Boolean @default(false) @map("isDelete")
+
+  @@map("ville")
+}
+
+model AdminRoot {
+  idRoot      Int     @id @default(autoincrement()) @map("idroot")
+  nom         String  @db.VarChar(60)
+  email       String  @unique @db.VarChar(100)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  mobile      String? @db.VarChar(15)
+  username    String  @unique @db.VarChar(30)
+  password    String  @db.VarChar(200)
+  idPays      Int?    @map("idpays")
+  type        Int?
+  startPrefix Int?    @map("startprefix")
+  endPrefix   Int?    @map("endprefix")
+  resetPasswordToken   String?      @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime?    @map("reset_password_expires") @db.Timestamptz
+  pays        Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+
+  Abonnements Abonnement[]
+  Companies   Company[]
+  CenterComs  CenterCom[]
+  AccesAdmins AccesAdmin[]
+  Admins      Admin[]
+
+  @@map("adminroot")
+}
+
+model PrixAbonnement {
+  idAbonnement Int     @id @default(autoincrement()) @map("idabonnement")
+  libelle      String  @db.VarChar(45)
+  montant      Decimal @db.Decimal(10, 2)
+
+  isDelete Boolean @default(false) @map("isDelete")
+  description String? @db.Text
+
+  idPays       Int?    @map("idpays")
+  pays         Pays?   @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+
+
+  @@map("prixabonnement")
+}
+
+model Abonnement {
+  idAbonnement Int        @id @default(autoincrement()) @map("idabonnement")
+  prix         Decimal    @db.Decimal(10, 2)
+  libelle      String     @db.VarChar(45)
+
+  isDelete Boolean @default(false) @map("isDelete")
+
+
+  rootID       Int?       @map("rootid")
+  adminRoot    AdminRoot? @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+
+  Companies Company[]
+
+  @@map("abonnement")
+}
+
+model Company {
+  idCompany     Int     @id @default(autoincrement()) @map("idcompany")
+  libelle       String  @db.VarChar(60)
+  description   String? @db.Text
+  motcles       String? @db.VarChar(150)
+  adresse       String? @db.VarChar(150)
+  mobile        String? @db.VarChar(15)
+  email         String? @db.VarChar(60)
+  actif         Int?    @default(1) @db.SmallInt
+  idVille       Int?    @map("idville")
+  idPays        Int?    @map("idpays")
+  idAbonnement  Int?    @map("idabonnement")
+  rootID        Int?    @map("rootid")
+  prefixeAlanya Int?    @map("prefixealanya")
+
+  ville      Ville?      @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
+  pays       Pays?       @relation(fields: [idPays], references: [idPays], onDelete: SetNull, onUpdate: Cascade)
+  abonnement Abonnement? @relation(fields: [idAbonnement], references: [idAbonnement], onDelete: SetNull, onUpdate: Cascade)
+  adminRoot  AdminRoot?  @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+
+  created_at         DateTime? @default(dbgenerated("CURRENT_DATE")) @db.Date
+  lat                Float?
+  lon                Float?
+  maxAgents          Int?      @default(20) @map("maxagents")
+  maxAgentsPerCenter Int?      @default(5) @map("maxagentspercenter")
+
+  Users      User[]
+  Admins     Admin[]
+  Agences    Agence[]
+  Services   Service[]
+  CenterComs CenterCom[]
+  Centers    Center[]
+
+  @@map("company")
+}
+
+model Admin {
+  idAdmin     Int     @id @default(autoincrement()) @map("idadmin")
+  nom         String  @db.VarChar(60)
+  email       String  @unique @db.VarChar(100)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  mobile      String? @db.VarChar(15)
+  username    String  @unique @db.VarChar(30)
+  password    String  @db.VarChar(200)
+  idRoot      Int?    @map("idroot")
+  idCompany   Int?    @map("idcompany")
+  type        Int?
+
+  resetPasswordToken   String?      @map("reset_password_token") @db.VarChar(255)
+  resetPasswordExpires DateTime?    @map("reset_password_expires") @db.Timestamptz
+
+  adminRoot AdminRoot? @relation(fields: [idRoot], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+  company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
+
+  Gestions    GestionCompany[]
+  AccesAdmins AccesAdmin[]
+
+  @@map("admin")
+}
+
+model Agence {
+  idAgence    Int     @id @default(autoincrement()) @map("idagence")
+  libelle     String  @db.VarChar(100)
+  adresse     String? @db.VarChar(150)
+  mobile      String? @db.VarChar(15)
+  alanyaPhone String? @map("alanyaphone") @db.VarChar(15)
+  idVille     Int?    @map("idville")
+  idCompany   Int?    @map("idcompany")
+
+
+  isDelete Boolean @default(false) @map("isDelete")
+
+
+  ville   Ville?   @relation(fields: [idVille], references: [idville], onDelete: SetNull, onUpdate: Cascade)
+  company Company? @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
+
+  Fonctions Fonction[]
+
+  @@map("agence")
+}
+
+model Service {
+  idService Int    @id @default(autoincrement()) @map("idservice")
+  libelle   String @db.VarChar(100)
+  deleted   Int?   @default(0) @db.SmallInt
+  idCompany Int?   @map("idcompany")
+
+  company   Company?   @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull, onUpdate: Cascade)
+  Fonctions Fonction[]
+
+  @@map("service")
+}
+
+model Fonction {
+  idFonction Int     @id @default(autoincrement()) @map("idfonction")
+  libelle    String  @db.VarChar(45)
+  idService  Int?    @map("idservice")
+  idAgence   Int?    @map("idagence")
+  alanyaID   String? @map("alanyaid") @db.Uuid
+
+  service Service? @relation(fields: [idService], references: [idService], onDelete: SetNull, onUpdate: Cascade)
+  agence  Agence?  @relation(fields: [idAgence], references: [idAgence], onDelete: SetNull, onUpdate: Cascade)
+  user    User?    @relation(fields: [alanyaID], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([alanyaID], map: "fonction_alanyaid_idx")
+  @@map("fonction")
+}
+
+model GestionCompany {
+  idGestion Int       @id @default(autoincrement()) @map("idgestion")
+  alanyaID  String?   @map("alanyaid") @db.Uuid
+  action    String    @db.VarChar(100)
+  date_at   DateTime? @default(now()) @db.Timestamp(6)
+  ip        String?   @db.VarChar(20)
+  idAdmin   Int?      @map("idadmin")
+
+  user  User?  @relation(fields: [alanyaID], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  admin Admin? @relation(fields: [idAdmin], references: [idAdmin], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([alanyaID], map: "gestioncompany_alanyaid_idx")
+  @@map("gestioncompany")
+}
+
+model CenterCom {
+  idCenterCom Int    @id @default(autoincrement()) @map("idcentercom")
+  libelle     String @db.VarChar(45)
+  total       Int?   @default(0)
+  maxAgents   Int?   @default(5) @map("maxagents")
+  idCompany   Int    @map("idcompany")
+  rootID      Int?   @map("rootid")
+
+  company   Company    @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  adminRoot AdminRoot? @relation(fields: [rootID], references: [idRoot], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([idCompany], map: "centercom_idcompany_idx")
+  @@map("centercom")
+}
+
+model Center {
+  idCenter        Int      @id @default(autoincrement()) @map("idcenter")
+  libelle         String   @db.VarChar(45)
+  center_alanyaID String?  @map("center_alanyaid") @db.Uuid
+  users_alanyaID  String?  @map("users_alanyaid") @db.Uuid
+  idCompany       Int?     @map("idcompany")
+  menuNro         Int?     @map("menunro")
+  in_call         Boolean? @default(false)
+
+  centerUser   User?    @relation("centerUser", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  assignedUser User?    @relation("assignedUser", fields: [users_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  company      Company? @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([center_alanyaID], map: "center_center_alanyaid_idx")
+  @@index([users_alanyaID], map: "center_users_alanyaid_idx")
+  @@index([idCompany], map: "center_idcompany_idx")
+  @@map("center")
+}
+
+model AccesAdmin {
+  idaccesAdmin Int       @id @default(autoincrement()) @map("idaccesadmin")
+  idAdmin      Int?      @map("idadmin")
+  idRoot       Int?      @map("idroot")
+  acces_at     DateTime? @default(now()) @db.Timestamp(6)
+  ipAdress     String    @map("ipadress") @db.VarChar(30)
+
+  admin     Admin?     @relation(fields: [idAdmin], references: [idAdmin], onDelete: Cascade, onUpdate: Cascade)
+  adminRoot AdminRoot? @relation(fields: [idRoot], references: [idRoot], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([idAdmin], map: "accesadmin_idadmin_idx")
+  @@index([idRoot], map: "accesadmin_idroot_idx")
+  @@map("accesadmin")
+}

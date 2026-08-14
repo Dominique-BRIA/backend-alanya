@@ -268,7 +268,7 @@ export async function urlsVocalAttente(prisma, centre) {
   try {
     let lignes = [];
 
-    // 1. Essai via Prisma Client delegate
+    // 1. Essai via Prisma Client (colonnes réelles : idVocalAttente, url_vocal, titre, ordre)
     if (prisma?.vocalAttente) {
       lignes = await prisma.vocalAttente.findMany({
         where: {
@@ -277,27 +277,29 @@ export async function urlsVocalAttente(prisma, centre) {
             ...(centre.idCompany != null ? [{ idCompany: centre.idCompany }] : []),
           ],
         },
-        orderBy: [{ ordre: "asc" }, { idAttente: "asc" }],
+        orderBy: [{ ordre: "asc" }, { idVocalAttente: "asc" }],
         select: {
           idCompany: true,
           center_alanyaID: true,
-          urlMusic: true,
+          urlVocal: true,
+          titre: true,
           company: { select: { urlServeur: true } },
         },
       });
     }
 
-    // 2. Si vide ou delegate absent, fallback direct via SQL brut $queryRawUnsafe
+    // 2. Fallback SQL brut si Prisma n'a pas le delegate ou ne renvoie rien
     if ((!lignes || lignes.length === 0) && prisma?.$queryRawUnsafe) {
       const cid = centre.id ?? "";
       const compId = centre.idCompany ?? -1;
       lignes = await prisma.$queryRawUnsafe(`
-        SELECT va.url_music AS "urlMusic", va."idCompany", va."center_alanyaID", c.url_serveur AS "urlServeur"
+        SELECT va.url_vocal AS "urlVocal", va."idCompany", va."center_alanyaID",
+               va.titre, c.url_serveur AS "urlServeur"
         FROM vocal_attente va
         LEFT JOIN company c ON c.idcompany = va."idCompany"
         WHERE va."center_alanyaID"::text = '${cid}'
            OR va."idCompany" = ${compId}
-        ORDER BY va.ordre ASC, va."idAttente" ASC
+        ORDER BY va.ordre ASC, va."idVocalAttente" ASC
       `);
     }
 
@@ -314,13 +316,14 @@ export async function urlsVocalAttente(prisma, centre) {
       const urls = filtre
         .map((l) => {
           const urlBase = l.company?.urlServeur ?? l.urlServeur;
-          return resoudreUrlPlateforme(l.urlMusic, urlBase);
+          return resoudreUrlPlateforme(l.urlVocal, urlBase);
         })
         .filter(Boolean);
 
       if (urls.length > 0) {
         console.log(
-          `[ivr] vocal_attente trouve ${urls.length} musique(s) pour le centre ${centre.id ?? centre.idCompany}`
+          `[ivr] vocal_attente : ${urls.length} musique(s) pour le centre ${centre.id ?? centre.idCompany}`,
+          filtre.map((l) => l.titre ?? l.urlVocal),
         );
         return urls;
       }

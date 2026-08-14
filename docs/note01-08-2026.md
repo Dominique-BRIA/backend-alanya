@@ -1,0 +1,3 @@
+- Dans la table company ajouter une url_serveur qui va pointer vers le serveur des données de l'entreprise.
+- url_media pour le chemin vers le dossier des medias de l'entreprise.
+- url_doc pour le chemin vers le dossier des documents de l'entreprise.

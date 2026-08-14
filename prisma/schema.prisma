@@ -1550,11 +1550,12 @@ model CenterMusic {
 /// un centre dont tous les agents sont occupés. Contient une série de musiques
 /// classées par ordre d'écoute.
 model VocalAttente {
-  idAttente       Int    @id @default(autoincrement()) @map("idAttente")
-  idCompany       Int    @map("idCompany")
-  center_alanyaID String @map("center_alanyaID") @db.Uuid
-  urlMusic        String @map("url_music") @db.VarChar(255)
-  ordre           Int    @default(1)
+  idVocalAttente  Int     @id @default(autoincrement()) @map("idVocalAttente")
+  idCompany       Int     @map("idCompany")
+  center_alanyaID String  @map("center_alanyaID") @db.Uuid
+  titre           String? @db.VarChar(150)
+  urlVocal        String  @map("url_vocal") @db.VarChar(255)
+  ordre           Int     @default(1)
 
   company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
   centerUser User    @relation("vocalAttenteCentre", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
