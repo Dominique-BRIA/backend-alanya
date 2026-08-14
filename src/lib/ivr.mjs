@@ -108,7 +108,7 @@ export function resoudreUrlPlateforme(valeur, urlServeurEntreprise) {
    * sans attendre que la colonne soit remplie.
    */
   const base =
-    [urlServeurEntreprise, process.env.VOCAL_BASE_URL]
+    [urlServeurEntreprise, process.env.VOCAL_BASE_URL, process.env.PUBLIC_BASE_URL, "https://alanyavox.com"]
       .map((v) => (typeof v === "string" ? v.trim() : ""))
       .find((v) => v.length > 0) ?? "";
 
@@ -265,16 +265,20 @@ export async function choisirMusiqueAttente(prisma, centre) {
 export async function urlsVocalAttente(prisma, centre) {
   if (prisma?.vocalAttente && centre?.id) {
     try {
-      const lignes = await prisma.vocalAttente.findMany({
+      let lignes = await prisma.vocalAttente.findMany({
         where: { center_alanyaID: centre.id },
         orderBy: [{ ordre: "asc" }, { idAttente: "asc" }],
         select: {
-          urlMusic: true,
           idCompany: true,
+          urlMusic: true,
           company: { select: { urlServeur: true } },
         },
       });
       if (lignes.length > 0) {
+        if (centre.idCompany != null) {
+          const siennes = lignes.filter((l) => l.idCompany === centre.idCompany);
+          if (siennes.length > 0) lignes = siennes;
+        }
         const urls = lignes
           .map((l) => resoudreUrlPlateforme(l.urlMusic, l.company?.urlServeur))
           .filter(Boolean);
