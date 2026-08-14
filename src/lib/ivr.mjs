@@ -263,30 +263,70 @@ export async function choisirMusiqueAttente(prisma, centre) {
  * Si la table est vide, retombe sur les musiques d'attente locales ou [choisirMusiqueAttente].
  */
 export async function urlsVocalAttente(prisma, centre) {
-  if (prisma?.vocalAttente && centre?.id) {
-    try {
-      let lignes = await prisma.vocalAttente.findMany({
-        where: { center_alanyaID: centre.id },
+  if (!centre?.id && !centre?.idCompany) return [];
+
+  try {
+    let lignes = [];
+
+    // 1. Essai via Prisma Client delegate
+    if (prisma?.vocalAttente) {
+      lignes = await prisma.vocalAttente.findMany({
+        where: {
+          OR: [
+            ...(centre.id ? [{ center_alanyaID: centre.id }] : []),
+            ...(centre.idCompany != null ? [{ idCompany: centre.idCompany }] : []),
+          ],
+        },
         orderBy: [{ ordre: "asc" }, { idAttente: "asc" }],
         select: {
           idCompany: true,
+          center_alanyaID: true,
           urlMusic: true,
           company: { select: { urlServeur: true } },
         },
       });
-      if (lignes.length > 0) {
-        if (centre.idCompany != null) {
-          const siennes = lignes.filter((l) => l.idCompany === centre.idCompany);
-          if (siennes.length > 0) lignes = siennes;
-        }
-        const urls = lignes
-          .map((l) => resoudreUrlPlateforme(l.urlMusic, l.company?.urlServeur))
-          .filter(Boolean);
-        if (urls.length > 0) return urls;
-      }
-    } catch (e) {
-      console.error("[ivr] lecture de `vocal_attente`:", e?.message ?? e);
     }
+
+    // 2. Si vide ou delegate absent, fallback direct via SQL brut $queryRawUnsafe
+    if ((!lignes || lignes.length === 0) && prisma?.$queryRawUnsafe) {
+      const cid = centre.id ?? "";
+      const compId = centre.idCompany ?? -1;
+      lignes = await prisma.$queryRawUnsafe(`
+        SELECT va.url_music AS "urlMusic", va."idCompany", va."center_alanyaID", c.url_serveur AS "urlServeur"
+        FROM vocal_attente va
+        LEFT JOIN company c ON c.idcompany = va."idCompany"
+        WHERE va."center_alanyaID"::text = '${cid}'
+           OR va."idCompany" = ${compId}
+        ORDER BY va.ordre ASC, va."idAttente" ASC
+      `);
+    }
+
+    if (lignes && lignes.length > 0) {
+      // Filtrer par centre.id d'abord, sinon idCompany
+      let filtre = lignes.filter(
+        (l) => centre.id && l.center_alanyaID === centre.id
+      );
+      if (filtre.length === 0 && centre.idCompany != null) {
+        filtre = lignes.filter((l) => l.idCompany === centre.idCompany);
+      }
+      if (filtre.length === 0) filtre = lignes;
+
+      const urls = filtre
+        .map((l) => {
+          const urlBase = l.company?.urlServeur ?? l.urlServeur;
+          return resoudreUrlPlateforme(l.urlMusic, urlBase);
+        })
+        .filter(Boolean);
+
+      if (urls.length > 0) {
+        console.log(
+          `[ivr] vocal_attente trouve ${urls.length} musique(s) pour le centre ${centre.id ?? centre.idCompany}`
+        );
+        return urls;
+      }
+    }
+  } catch (e) {
+    console.error("[ivr] lecture de `vocal_attente`:", e?.message ?? e);
   }
 
   const dossier = dossierSons();
