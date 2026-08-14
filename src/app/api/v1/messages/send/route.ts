@@ -41,13 +41,17 @@ export async function POST(req: NextRequest) {
     if (type === 'text') {
       content = (body.text?.body || body.content || body.text)?.toString().trim();
     } else if (type === 'image') {
-      content = body.image?.caption || 'Image Alanya';
-      mediaUrl = body.image?.link || body.image?.url;
+      mediaUrl = body.image?.link || body.image?.url || body.image?.id || body.link || body.url || null;
+      content = body.image?.caption || body.content || '';
       messageType = 'IMAGE';
     } else if (type === 'audio') {
-      content = 'Note vocale Alanya';
-      mediaUrl = body.audio?.link || body.audio?.url;
+      mediaUrl = body.audio?.link || body.audio?.url || body.audio?.id || body.link || body.url || null;
+      content = body.audio?.caption || body.content || '';
       messageType = 'AUDIO';
+    } else if (type === 'document' || type === 'file') {
+      mediaUrl = body.document?.link || body.document?.url || body.document?.id || body.link || body.url || null;
+      content = body.document?.caption || body.content || body.filename || '';
+      messageType = 'FILE';
     } else if (type === 'location') {
       const loc = body.location || {};
       content = `📍 Localisation : ${loc.name || 'Position'} (${loc.latitude}, ${loc.longitude})`;
@@ -61,8 +65,18 @@ export async function POST(req: NextRequest) {
       content = (body.content || body.text?.body || '').toString().trim();
     }
 
-    if (!recipientNumber || !content) {
-      const res = fail('Le destinataire (to / recipientNumber) et le contenu du message sont requis.', 400);
+    // Résolution d'un éventuel media_id si transmis au format WhatsApp
+    if (mediaUrl && (mediaUrl.startsWith('med_') || mediaUrl.length === 36)) {
+      const devMedia = await prisma.developerMedia.findFirst({
+        where: { OR: [{ id: mediaUrl }, { url: mediaUrl }] },
+      });
+      if (devMedia) {
+        mediaUrl = devMedia.url;
+      }
+    }
+
+    if (!recipientNumber || (!content && !mediaUrl)) {
+      const res = fail('Le destinataire (to / recipientNumber) et un contenu/média sont requis.', 400);
       void logTelemetry(devId, keyPrefix, '/api/v1/messages/send', 'POST', 400, Date.now() - startTime);
       return res;
     }
@@ -112,11 +126,28 @@ export async function POST(req: NextRequest) {
       data: {
         convId: conversation.id,
         senderId: senderUserId,
-        content: content,
+        content: content || null,
         type: messageType,
         status: 'SENT',
       },
     });
+
+    // 6.b Création de la pièce jointe média (MediaFile)
+    if (mediaUrl) {
+      const filename = mediaUrl.split('/').pop()?.split('?')[0] || (messageType === 'IMAGE' ? 'image.png' : messageType === 'AUDIO' ? 'audio.mp3' : 'document.pdf');
+      const mimeType = messageType === 'IMAGE' ? 'image/png' : messageType === 'AUDIO' ? 'audio/mpeg' : 'application/pdf';
+
+      await prisma.mediaFile.create({
+        data: {
+          ownerId: senderUserId,
+          messageId: savedMessage.id,
+          filename: filename,
+          mimeType: mimeType,
+          sizeBytes: 1024,
+          url: mediaUrl,
+        },
+      });
+    }
 
     // 7. Mise à jour de la conversation
     await prisma.conversation.update({
