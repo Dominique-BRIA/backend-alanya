@@ -11,6 +11,7 @@ import {
   useCloudStorage,
 } from "@/modules/media/storage";
 
+
 // Récupère l'userId via le Bearer OU via ?token= (utile pour le côté web,
 // qui ne peut pas envoyer d'en-tête Authorization).
 function resolveUserId(req: NextRequest): string {
@@ -44,8 +45,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       media.message?.conv.participants.some((p) => p.userId === userId) ?? false;
 
     // Un média est aussi accessible s'il est utilisé comme avatar d'un profil.
-    // Les avatars sont par nature publics à toute personne authentifiée
-    // (sinon impossible d'afficher l'avatar de tes contacts).
     const isAvatar = !isOwner && !isParticipant
       ? Boolean(
           await prisma.user.findFirst({
@@ -59,15 +58,18 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       return fail("Accès refusé", 403, "FORBIDDEN");
     }
 
-    // ?download=1 force le téléchargement (Content-Disposition: attachment),
-    // utile même en cross-origin depuis l'app web.
+    // Si l'URL du média est une URL HTTP/HTTPS externe (ex: hébergée sur un serveur distant ou transmise via l'API)
+    if (/^https?:\/\//i.test(media.url)) {
+      return NextResponse.redirect(media.url, {
+        status: 302,
+        headers: { "Cache-Control": "public, max-age=86400" },
+      });
+    }
+
     const forceDownload = req.nextUrl.searchParams.get("download") === "1";
     const safeName = encodeURIComponent(media.filename || `fichier-${media.id}`);
 
     // ---- Backend cloud (Backblaze B2) : redirection vers une URL présignée.
-    // On délègue le transfert du binaire au CDN B2 (économie de bande passante
-    // + performances), tout en gardant le contrôle d'accès côté backend : la
-    // vérification owner/participant ci-dessus a déjà été faite avant de signer.
     if (useCloudStorage()) {
       const signedUrl = await getSignedDownloadUrl(media.url, {
         responseContentDisposition: forceDownload
@@ -106,9 +108,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 }
 
 // DELETE /api/media/:id — supprime le média (base + binaire stocké).
-// Seul le propriétaire peut supprimer son média.
-// NB : on n'annote PAS `ctx` → TypeScript l'infère depuis la signature de
-// `withAuth`, ce qui évite tout risque de désynchronisation de types.
 export const DELETE = withAuth(async (_req, userId, ctx) => {
   const { id } = await ctx.params;
 
@@ -116,8 +115,6 @@ export const DELETE = withAuth(async (_req, userId, ctx) => {
   if (!media) return fail("Média introuvable", 404, "NOT_FOUND");
   if (media.ownerId !== userId) return fail("Accès refusé", 403, "FORBIDDEN");
 
-  // Supprime d'abord le binaire (local ou B2), puis l'enregistrement en base.
-  // deleteStored est best-effort : un objet déjà absent ne fait pas échouer.
   await deleteStored(media.url);
   await prisma.mediaFile.delete({ where: { id } });
 
