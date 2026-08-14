@@ -152,6 +152,7 @@ model User {
   assignedCenters Center[]         @relation("assignedUser")
   vocaux          Vocal[]          @relation("vocalCentre")
   musiques        CenterMusic[]    @relation("musiqueCentre")
+  vocauxAttente   VocalAttente[]   @relation("vocalAttenteCentre")
 
   @@index([publicNumber])
   @@index([idCompany])
@@ -1342,8 +1343,9 @@ model Company {
   Services   Service[]
   CenterComs CenterCom[]
   Centers    Center[]
-  Vocaux     Vocal[]
-  Musiques   CenterMusic[]
+  Vocaux        Vocal[]
+  Musiques      CenterMusic[]
+  VocauxAttente VocalAttente[]
 
   /// Existait en base sans etre declare ici : supprime par un `db push` le
   /// 06/08/2026. Le re-declarer empeche Prisma de vouloir le retirer.
@@ -1540,6 +1542,26 @@ model CenterMusic {
   @@unique([idCompany, center_alanyaID], map: "center_music_company_center_key")
   @@index([idCompany], map: "center_music_idCompany_idx")
   @@map("center_music")
+}
+
+/// Musiques d'attente d'un centre d'appels quand tous les agents sont occupés.
+///
+/// Créée par la collègue pour gérer les attentes des clients lorsqu'ils contactent
+/// un centre dont tous les agents sont occupés. Contient une série de musiques
+/// classées par ordre d'écoute.
+model VocalAttente {
+  idAttente       Int    @id @default(autoincrement()) @map("idAttente")
+  idCompany       Int    @map("idCompany")
+  center_alanyaID String @map("center_alanyaID") @db.Uuid
+  urlMusic        String @map("url_music") @db.VarChar(255)
+  ordre           Int    @default(1)
+
+  company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User    @relation("vocalAttenteCentre", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([idCompany], map: "vocal_attente_idCompany_idx")
+  @@index([center_alanyaID], map: "vocal_attente_center_alanyaID_idx")
+  @@map("vocal_attente")
 }
 
 model AccesAdmin {

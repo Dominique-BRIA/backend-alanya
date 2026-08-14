@@ -22,6 +22,7 @@ import {
   DELAI_SONNERIE_AGENT_MS,
   choisirAgentLibre,
   choisirMusiqueAttente,
+  urlsVocalAttente,
   estCompteCentre,
   lireMenuCentre,
   optionsPubliques,
@@ -1387,6 +1388,7 @@ async function ouvrirSessionIvr(ws, call, centre) {
     // Tirée MAINTENANT, pas au moment de la touche : le client la met en cache
     // pendant que l'invite se joue.
     urlAttente: await choisirMusiqueAttente(prisma, centre),
+    urlsQueue: await urlsVocalAttente(prisma, centre),
     agentId: null,
     agentLabel: null,
     etape: "menu",
@@ -1409,7 +1411,11 @@ async function ouvrirSessionIvr(ws, call, centre) {
     centerNumber: centre.publicNumber,
     centerAvatarUrl: centre.avatarUrl ?? null,
     promptUrl: await urlInviteCentre(prisma, centre),
+    promptLoop: true,
     holdUrl: session.urlAttente,
+    holdLoop: true,
+    queueUrls: session.urlsQueue,
+    queueLoop: true,
     options: optionsPubliques(options),
   });
   console.log(`[ivr] menu ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} service(s)`);
@@ -1641,13 +1647,23 @@ async function handleIvrDtmf(ws, msg) {
 
   const agentId = await choisirAgentLibre(prisma, option.agentIds);
   if (!agentId) {
+    const queueUrls =
+      session.urlsQueue ??
+      (await urlsVocalAttente(prisma, {
+        id: session.centreId,
+        publicNumber: session.centrePublicNumber,
+      }));
     return envoieAAppelant(session, {
       type: "ivr_error",
       callId,
       code: "busy",
       retry: true,
-      message: `${option.label} est en ligne. Choisissez un autre service.`,
+      message: `${option.label} est actuellement occupé. Veuillez patienter, votre appel reste en attente.`,
       options: menu,
+      queueUrls,
+      queueLoop: true,
+      holdUrl: session.urlAttente,
+      holdLoop: true,
     });
   }
 

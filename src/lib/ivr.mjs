@@ -256,6 +256,48 @@ export async function choisirMusiqueAttente(prisma, centre) {
 }
 
 /**
+ * Musiques d'attente de la file d'attente d'un centre (`vocal_attente`),
+ * jouées en boucle lorsque tous les agents sont occupés.
+ *
+ * Contient une série de musiques classées par ordre d'écoute (`ordre` ASC).
+ * Si la table est vide, retombe sur les musiques d'attente locales ou [choisirMusiqueAttente].
+ */
+export async function urlsVocalAttente(prisma, centre) {
+  if (prisma?.vocalAttente && centre?.id) {
+    try {
+      const lignes = await prisma.vocalAttente.findMany({
+        where: { center_alanyaID: centre.id },
+        orderBy: [{ ordre: "asc" }, { idAttente: "asc" }],
+        select: {
+          urlMusic: true,
+          idCompany: true,
+          company: { select: { urlServeur: true } },
+        },
+      });
+      if (lignes.length > 0) {
+        const urls = lignes
+          .map((l) => resoudreUrlPlateforme(l.urlMusic, l.company?.urlServeur))
+          .filter(Boolean);
+        if (urls.length > 0) return urls;
+      }
+    } catch (e) {
+      console.error("[ivr] lecture de `vocal_attente`:", e?.message ?? e);
+    }
+  }
+
+  const dossier = dossierSons();
+  try {
+    const fichiers = readdirSync(dossier).filter((f) => /^attente-.*\.mp3$/i.test(f));
+    if (fichiers.length > 0) {
+      return fichiers.map((f) => urlPublique(f));
+    }
+  } catch {}
+
+  const unique = await choisirMusiqueAttente(prisma, centre);
+  return unique ? [unique] : [];
+}
+
+/**
  * Le menu d'un centre, lu dans la table `center` du référentiel équipe.
  *
  * Cette table EST la table de routage décrite par le guide, sous d'autres noms :
