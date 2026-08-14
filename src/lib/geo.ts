@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 // de les exécuter directement pour les vérifier. On les réexporte ici pour que
 // les appelants n'aient qu'un seul module à connaître.
 export {
+  SEUIL_DEPLACEMENT_METRES,
+  INTERVALLE_HEARTBEAT_MIN,
   INTERVALLE_RELEVE_MIN,
   RELEVE_PERIME_MS,
   suiviPositionApplicable,

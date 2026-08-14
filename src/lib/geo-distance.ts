@@ -10,7 +10,13 @@
 // affaire de lecture, faite à l'analyse sur des données complètes, et non une
 // décision prise à l'écriture — donc irréversible.
 
-/** Cadence de relevé attendue du mobile, en minutes. */
+/** Seuil de déplacement minimum déclenchant un relevé de position, en mètres. */
+export const SEUIL_DEPLACEMENT_METRES = 75;
+
+/** Cadence minimale de rappel de présence (Heartbeat d'immobilité), en minutes. */
+export const INTERVALLE_HEARTBEAT_MIN = 5;
+
+/** Cadence de relevé attendue du mobile (compatibilité), en minutes. */
 export const INTERVALLE_RELEVE_MIN = 5;
 
 /**
