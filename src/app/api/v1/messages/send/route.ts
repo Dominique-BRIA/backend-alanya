@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       return fail('Les champs recipientNumber et content sont requis.', 400);
     }
 
-    // 3. Identification du destinataire Alanya
+    // 3. Identification du destinataire Alanya (par publicNumber ou numéro mobile)
     const recipient = await prisma.user.findFirst({
       where: {
         OR: [{ publicNumber: recipientNumber }, { mobile: recipientNumber }],
@@ -81,10 +81,41 @@ export async function POST(req: NextRequest) {
       data: {
         convId: conversation.id,
         senderId: senderUserId,
-        content: `[API Dev] ${content}`,
+        content: content,
         type: 'TEXT',
+        status: 'SENT',
       },
     });
+
+    // 7. Mise à jour du dernier message de la conversation pour l'affichage dans la liste des chats
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        lastMessage: content.slice(0, 500) || null,
+        lastMessageAt: new Date(),
+        lastMessageSenderID: senderUserId,
+        lastMessageType: 0,
+        lastMessageStatus: 0,
+      },
+    });
+
+    // 8. Incrémentation du nombre de messages non lus pour le destinataire
+    await prisma.participant.updateMany({
+      where: { convId: conversation.id, userId: { not: senderUserId } },
+      data: { unreadCount: { increment: 1 } },
+    });
+
+    // 9. Envoi de notification push (si configuré)
+    try {
+      const { sendPushToUser } = await import('@/../push.mjs');
+      await sendPushToUser(prisma, recipient.id, {
+        title: 'Nouveau message Alanya',
+        body: content,
+        data: { convId: conversation.id, messageId: savedMessage.id, type: 'chat_message' },
+      });
+    } catch {
+      // Ignorer silencieusement si Push n'est pas configuré
+    }
 
     return ok({
       success: true,
