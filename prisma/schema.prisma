@@ -124,6 +124,9 @@ model User {
   blockedByUsers        Blocked[]            @relation("BlockedUser")
   conversationLocks     ConversationLock[]
 
+  // --- Espace Développeur ---
+  developerAccount DeveloperAccount?
+
   // --- Relations vers les nouvelles tables du référentiel ---
   accessLogs      UserAccess[]
   /// Relevés de position — alimentés par le MOBILE uniquement. Voir [Geo].
@@ -1703,4 +1706,76 @@ model JustificatifPaiement {
 
   @@index([idFacture], map: "justificatif_facture_idx")
   @@map("justificatif_paiement")
+}
+
+// ---------------------------------------------------------------------------
+// ESPACE DÉVELOPPEUR & API BILLING (MESSAGES X & MINUTES Y)
+// ---------------------------------------------------------------------------
+
+enum ApiKeyType {
+  SANDBOX
+  LIVE
+}
+
+enum TransactionType {
+  PURCHASE      // Achat/Recharge de crédits
+  MESSAGE_SENT  // Consommation message API
+  CALL_MINUTE   // Consommation minute d'appel API
+  HOLD_RESERVE  // Réservation d'appel WebRTC (5 min)
+  REFUND        // Remboursement / Ajustement
+}
+
+enum TransactionStatus {
+  PENDING
+  SETTLED
+  CANCELLED
+}
+
+/// Compte Développeur Tiers
+model DeveloperAccount {
+  id             String   @id @default(uuid()) @map("developer_id") @db.Uuid
+  userId         String   @unique @map("user_id") @db.Uuid
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName    String?  @map("company_name") @db.VarChar(100)
+  balanceCredits BigInt   @default(1000) @map("balance_credits") // 1 000 crédits de bienvenue offerts
+  holdCredits    BigInt   @default(0) @map("hold_credits") // Crédits sous réservation HOLD
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  apiKeys ApiKey[]
+  ledger  DevLedger[]
+
+  @@map("developer_accounts")
+}
+
+/// Clés d'API Développeur
+model ApiKey {
+  id          String           @id @default(uuid()) @map("key_id") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  keyHash     String           @unique @map("key_hash") @db.VarChar(255)
+  prefix      String           @db.VarChar(15) // ak_test_... ou ak_live_...
+  name        String           @db.VarChar(50) // ex: "Application Mobile Prod"
+  type        ApiKeyType       @default(SANDBOX)
+  isActive    Boolean          @default(true) @map("is_active")
+  lastUsedAt  DateTime?        @map("last_used_at") @db.Timestamptz
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("developer_api_keys")
+}
+
+/// Registre Financier Double-Entrée pour Développeurs (Ledger)
+model DevLedger {
+  id          String            @id @default(uuid()) @map("ledger_id") @db.Uuid
+  developerId String            @map("developer_id") @db.Uuid
+  developer   DeveloperAccount  @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  amount      BigInt            // Positif = recharge, Négatif = consommation
+  type        TransactionType
+  status      TransactionStatus @default(SETTLED)
+  referenceId String?           @map("reference_id") @db.VarChar(100) // ID de message, ID d'appel ou ID Stripe
+  description String?           @db.VarChar(255)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([developerId, createdAt])
+  @@map("developer_ledgers")
 }
