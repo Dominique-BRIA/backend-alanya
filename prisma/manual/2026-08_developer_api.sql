@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS "developer_api_keys" (
     CONSTRAINT "developer_api_keys_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "developer_workspaces"("workspace_id") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
+-- Assure l'ajout de la colonne workspace_id sur les bases où la table existait déjà
+ALTER TABLE "developer_api_keys" ADD COLUMN IF NOT EXISTS "workspace_id" UUID;
+
 -- Table developer_api_logs (Télémétrie & Latence)
 CREATE TABLE IF NOT EXISTS "developer_api_logs" (
     "log_id" UUID NOT NULL DEFAULT gen_random_uuid(),
