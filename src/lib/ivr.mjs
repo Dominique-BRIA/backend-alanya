@@ -34,6 +34,9 @@ export const DELAI_MENU_MS = 60_000;
  */
 export const DELAI_SONNERIE_AGENT_MS = 95_000;
 
+/** Durée maximale d'attente dans la file avant retour au menu (5 min). */
+export const DELAI_ATTENTE_MAX_MS = 300_000;
+
 /** Ce compte est-il un numéro de centre d'appels ? */
 export function estCompteCentre(user) {
   return Number(user?.typeCompte) === TYPE_COMPTE_CENTRE;

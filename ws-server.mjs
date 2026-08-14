@@ -20,6 +20,7 @@ import { nomAffichage } from "./src/lib/display-name.mjs";
 import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
+  DELAI_ATTENTE_MAX_MS,
   choisirAgentLibre,
   choisirMusiqueAttente,
   urlsVocalAttente,
@@ -1291,7 +1292,9 @@ function fermerSessionIvr(callId) {
   const session = sessionsIvr.get(callId);
   if (!session) return;
   if (session.minuteur) clearTimeout(session.minuteur);
+  if (session.pollingInterval) clearInterval(session.pollingInterval);
   session.minuteur = null;
+  session.pollingInterval = null;
   sessionsIvr.delete(callId);
 }
 
@@ -1609,16 +1612,63 @@ function armerMinuteurAgent(session) {
  *
  * Les trois ramènent au menu (`retry: true`), aucun ne raccroche.
  */
+function armerQueuePolling(session, option, touche) {
+  if (session.pollingInterval) clearInterval(session.pollingInterval);
+  session.pollingInterval = setInterval(async () => {
+    const vivante = sessionsIvr.get(session.callId);
+    if (!vivante || vivante.etape !== "attente") {
+      if (session.pollingInterval) clearInterval(session.pollingInterval);
+      session.pollingInterval = null;
+      return;
+    }
+
+    if (Date.now() - (vivante.debutAttente ?? Date.now()) > DELAI_ATTENTE_MAX_MS) {
+      if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
+      vivante.pollingInterval = null;
+      console.log(`[ivr] attente expirée (5 min) — appel ${vivante.callId}`);
+      await ivrRetourAuMenu(vivante, {
+        code: "busy_timeout",
+        message: `${option.label} est toujours occupé. Veuillez choisir un autre service.`,
+      });
+      return;
+    }
+
+    const agentLibreId = await choisirAgentLibre(prisma, option.agentIds);
+    if (!agentLibreId) return;
+
+    if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
+    vivante.pollingInterval = null;
+
+    vivante.agentId = agentLibreId;
+    vivante.agentLabel = option.label;
+    vivante.etape = "sonnerie";
+
+    envoieAAppelant(vivante, {
+      type: "ivr_hold",
+      callId: vivante.callId,
+      digit: touche,
+      label: option.label,
+      nomService: option.nomService ?? null,
+      holdUrl: vivante.urlAttente,
+    });
+
+    if (!(await sonnerAgentIvr(vivante, agentLibreId))) {
+      return ivrRetourAuMenu(vivante, {
+        code: "offline",
+        message: `${option.label} est momentanément injoignable.`,
+      });
+    }
+    armerMinuteurAgent(vivante);
+    console.log(`[ivr] file d'attente : agent ${agentLibreId} attribué automatiquement à l'appel ${vivante.callId}`);
+  }, 4000);
+}
+
 async function handleIvrDtmf(ws, msg) {
   const { callId, digit } = msg;
   const session = sessionIvr(callId);
 
-  // Identité vérifiée par le JETON porté par la socket, jamais par la charge
-  // utile : sans cela, n'importe qui connaissant un identifiant d'appel pourrait
-  // faire sonner les agents d'un centre.
   if (!session || session.appelantId !== ws.userId) return;
-  // Une touche pendant l'attente est ignorée en silence — l'agent sonne déjà.
-  if (session.etape !== "menu") return;
+  if (session.etape !== "menu" && session.etape !== "attente") return;
 
   const touche = Number(digit);
   const option = session.options.find((o) => o.digit === touche);
@@ -1647,24 +1697,38 @@ async function handleIvrDtmf(ws, msg) {
 
   const agentId = await choisirAgentLibre(prisma, option.agentIds);
   if (!agentId) {
+    if (session.minuteur) clearTimeout(session.minuteur);
+    session.minuteur = null;
+    session.etape = "attente";
+    session.optionAttente = option;
+    session.toucheAttente = touche;
+    session.debutAttente = Date.now();
+
     const queueUrls =
       session.urlsQueue ??
       (await urlsVocalAttente(prisma, {
         id: session.centreId,
         publicNumber: session.centrePublicNumber,
+        idCompany: session.centreCompanyId,
       }));
-    return envoieAAppelant(session, {
+
+    envoieAAppelant(session, {
       type: "ivr_error",
       callId,
       code: "busy",
       retry: true,
-      message: `${option.label} est actuellement occupé. Veuillez patienter, votre appel reste en attente.`,
+      inQueue: true,
+      message: `${option.label} est actuellement occupé. Votre appel reste en file d'attente.`,
       options: menu,
       queueUrls,
       queueLoop: true,
       holdUrl: session.urlAttente,
       holdLoop: true,
     });
+
+    armerQueuePolling(session, option, touche);
+    console.log(`[ivr] tous agents occupés pour ${option.label} — appel ${callId} placé en file d'attente`);
+    return;
   }
 
   // ⚠️ L'ÉTAT BASCULE AVANT LE MOINDRE ENVOI. Un double appui — sur un réseau
