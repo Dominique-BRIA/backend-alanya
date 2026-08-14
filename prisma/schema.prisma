@@ -1742,26 +1742,110 @@ model DeveloperAccount {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  apiKeys ApiKey[]
-  ledger  DevLedger[]
+  apiKeys    ApiKey[]
+  ledger     DevLedger[]
+  workspaces DeveloperWorkspace[]
+  logs       DeveloperApiLog[]
+  webhooks   DeveloperWebhook?
+  otps       DeveloperOtp[]
+  medias     DeveloperMedia[]
 
   @@map("developer_accounts")
 }
 
-/// Clés d'API Développeur
-model ApiKey {
-  id          String           @id @default(uuid()) @map("key_id") @db.Uuid
+/// Workspace / Projet Développeur (Multi-Projets)
+model DeveloperWorkspace {
+  id          String           @id @default(uuid()) @map("workspace_id") @db.Uuid
   developerId String           @map("developer_id") @db.Uuid
   developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  keyHash     String           @unique @map("key_hash") @db.VarChar(255)
-  prefix      String           @db.VarChar(15) // ak_test_... ou ak_live_...
-  name        String           @db.VarChar(50) // ex: "Application Mobile Prod"
-  type        ApiKeyType       @default(SANDBOX)
-  isActive    Boolean          @default(true) @map("is_active")
-  lastUsedAt  DateTime?        @map("last_used_at") @db.Timestamptz
+  name        String           @db.VarChar(100) // ex: "App Mobile Production", "Bot Support"
+  description String?          @db.VarChar(255)
   createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  apiKeys ApiKey[]
+  logs    DeveloperApiLog[]
+
+  @@map("developer_workspaces")
+}
+
+/// Clés d'API Développeur
+model ApiKey {
+  id          String              @id @default(uuid()) @map("key_id") @db.Uuid
+  developerId String              @map("developer_id") @db.Uuid
+  developer   DeveloperAccount    @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  workspaceId String?             @map("workspace_id") @db.Uuid
+  workspace   DeveloperWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  keyHash     String              @unique @map("key_hash") @db.VarChar(255)
+  prefix      String              @db.VarChar(15) // ak_test_... ou ak_live_...
+  name        String              @db.VarChar(50) // ex: "Application Mobile Prod"
+  type        ApiKeyType          @default(SANDBOX)
+  isActive    Boolean             @default(true) @map("is_active")
+  lastUsedAt  DateTime?           @map("last_used_at") @db.Timestamptz
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
 
   @@map("developer_api_keys")
+}
+
+/// Journal de Consommation & Télémétrie API Développeur
+model DeveloperApiLog {
+  id          String              @id @default(uuid()) @map("log_id") @db.Uuid
+  developerId String              @map("developer_id") @db.Uuid
+  developer   DeveloperAccount    @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  workspaceId String?             @map("workspace_id") @db.Uuid
+  workspace   DeveloperWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  keyPrefix   String?             @map("key_prefix") @db.VarChar(15)
+  endpoint    String              @db.VarChar(255)
+  method      String              @default("POST") @db.VarChar(10)
+  statusCode  Int                 @map("status_code")
+  latencyMs   Int                 @map("latency_ms")
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([developerId, createdAt(sort: Desc)])
+  @@map("developer_api_logs")
+}
+
+/// Webhooks Développeur pour Callbacks de Statut et Messages Entrants (Standard WhatsApp)
+model DeveloperWebhook {
+  id          String           @id @default(uuid()) @map("webhook_id") @db.Uuid
+  developerId String           @unique @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  url         String           @db.VarChar(500)
+  verifyToken String?          @map("verify_token") @db.VarChar(100)
+  secretKey   String?          @map("secret_key") @db.VarChar(100)
+  isActive    Boolean          @default(true) @map("is_active")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("developer_webhooks")
+}
+
+/// Codes OTP d'Authentification 2FA Développeur
+model DeveloperOtp {
+  id              String           @id @default(uuid()) @map("otp_id") @db.Uuid
+  developerId     String           @map("developer_id") @db.Uuid
+  developer       DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  recipientNumber String           @map("recipient_number") @db.VarChar(30)
+  code            String           @db.VarChar(10)
+  expiresAt       DateTime         @map("expires_at") @db.Timestamptz
+  isVerified      Boolean          @default(false) @map("is_verified")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([recipientNumber, code])
+  @@map("developer_otps")
+}
+
+/// Registre des Médias API (Image, Audio, Documents - Standard WhatsApp Media API)
+model DeveloperMedia {
+  id          String           @id @default(uuid()) @map("media_id") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  url         String           @db.VarChar(500)
+  mimeType    String           @map("mime_type") @db.VarChar(100)
+  size        Int
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("developer_medias")
 }
 
 /// Registre Financier Double-Entrée pour Développeurs (Ledger)
