@@ -417,7 +417,36 @@ export async function lireMenuCentre(prisma, centreId) {
     service.nomService ??= nomDeService(l.nomService);
     if (l.users_alanyaID) service.agentIds.push(l.users_alanyaID);
   }
-  return [...parTouche.values()];
+
+  /**
+   * TOUCHE 0 IMPLICITE — le centre agit comme son propre agent.
+   *
+   * Seulement si AUCUNE ligne ne référence `menuNro = 0` : une ligne déjà
+   * posée par la plateforme (même sans `users_alanyaID`, c'est-à-dire un
+   * service annoncé mais pas encore staffé) reste prioritaire — la boucle
+   * ci-dessus l'a déjà mise dans `parTouche`, ce bloc ne s'exécute pas pour
+   * elle. C'est la même règle que pour les autres touches, appliquée à 0.
+   *
+   * `agentIds: [centreId]` : c'est ELLE qui fait tenir toute la fonctionnalité.
+   * Le compte connecté avec les identifiants du centre devient un agent comme
+   * un autre pour cette touche — sonné, mis en file, noté — sans qu'aucune
+   * ligne `center` n'ait besoin d'exister. Voir `choisirAgentIvrLibre` dans
+   * ws-server.mjs pour la raison pour laquelle `agentDisponible` seul ne peut
+   * PAS déterminer si CE candidat-là est libre.
+   */
+  if (!parTouche.has(0)) {
+    parTouche.set(0, {
+      digit: 0,
+      label: "Opérateur",
+      nomService: null,
+      agentIds: [centreId],
+    });
+  }
+
+  // Triée par touche : l'ajout de la 0 se fait APRÈS la boucle (donc en
+  // dernier dans la Map), et `optionsPubliques` doit rendre un ordre stable
+  // pour tout client qui l'affiche en liste plutôt qu'en pavé.
+  return [...parTouche.values()].sort((a, b) => a.digit - b.digit);
 }
 
 /** Un nom de service utilisable, ou `null` — jamais une chaîne vide. */

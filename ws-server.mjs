@@ -21,7 +21,7 @@ import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
   DELAI_ATTENTE_MAX_MS,
-  choisirAgentLibre,
+  agentDisponible,
   choisirMusiqueAttente,
   urlsVocalAttente,
   estCompteCentre,
@@ -1622,6 +1622,60 @@ function armerMinuteurAgent(session) {
 }
 
 /**
+ * Le CENTRE est-il libre pour prendre CET appel comme son propre agent
+ * (touche 0 implicite, voir `lireMenuCentre`) ?
+ *
+ * `agentDisponible` seul ne peut pas répondre : le centre est
+ * `callParticipant` de CHAQUE appel qui compose son numéro — la ligne posée
+ * par `POST /api/calls` avant même que l'IVR décide où router, et rien ne la
+ * referme tant que l'appel dure (voir `sonnerAgentIvr`, qui la RÉUTILISE via
+ * upsert plutôt que d'en créer une seconde). Une lecture brute de
+ * `callParticipant` déclarerait donc le centre occupé dès qu'UN SEUL appel
+ * entre sur la ligne — y compris un appelant qui navigue encore dans le menu,
+ * ou qui parle à un agent réel via une AUTRE touche.
+ *
+ * La session IVR en mémoire (`sessionsIvr`) fait la différence : elle seule
+ * sait QUEL appel a réellement choisi le centre comme agent
+ * (`session.agentId === centreId`, posé au moment de sonner). Une ligne
+ * `callParticipant` sans session associée n'est pas un artefact de routage —
+ * le centre est alors occupé pour une raison hors standard (il a par exemple
+ * appelé quelqu'un lui-même, en utilisant son compte comme un utilisateur
+ * ordinaire).
+ */
+async function centreIvrDisponible(prisma, centreId) {
+  const lignes = await prisma.callParticipant.findMany({
+    where: {
+      userId: centreId,
+      leftAt: null,
+      call: { status: { in: ["RINGING", "ONGOING"] } },
+    },
+    select: { callId: true },
+  });
+  for (const { callId } of lignes) {
+    const autreSession = sessionIvr(callId);
+    if (!autreSession || autreSession.agentId === centreId) return false;
+  }
+  return true;
+}
+
+/**
+ * `choisirAgentLibre` de ivr.mjs, adapté au pool qui peut contenir le CENTRE
+ * lui-même (touche 0 implicite). Les vrais agents passent par
+ * `agentDisponible`, inchangé ; seul le candidat `centreId` passe par
+ * `centreIvrDisponible`, ci-dessus.
+ */
+async function choisirAgentIvrLibre(prisma, agentIds, centreId) {
+  for (const id of agentIds) {
+    const libre =
+      id === centreId
+        ? await centreIvrDisponible(prisma, centreId)
+        : await agentDisponible(prisma, id);
+    if (libre) return id;
+  }
+  return null;
+}
+
+/**
  * L'appelant tape une touche.
  *
  * Trois refus possibles, et ils ne disent PAS la même chose :
@@ -1655,7 +1709,7 @@ function armerQueuePolling(session, option, touche) {
       return;
     }
 
-    const agentLibreId = await choisirAgentLibre(prisma, option.agentIds);
+    const agentLibreId = await choisirAgentIvrLibre(prisma, option.agentIds, vivante.centreId);
     if (!agentLibreId) return;
 
     if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
@@ -1723,7 +1777,7 @@ async function handleIvrDtmf(ws, msg) {
     });
   }
 
-  const agentId = await choisirAgentLibre(prisma, option.agentIds);
+  const agentId = await choisirAgentIvrLibre(prisma, option.agentIds, session.centreId);
   if (!agentId) {
     if (session.minuteur) clearTimeout(session.minuteur);
     session.minuteur = null;
@@ -1760,7 +1814,11 @@ async function handleIvrDtmf(ws, msg) {
       centerAlanyaID: session.centreId,
       idCustomer: session.appelantId,
       idService: option.idService ?? null,
-      idAgent: null,
+      // Un pool à un seul candidat (systématiquement le cas de la touche 0
+      // implicite, [centreId]) désigne son agent sans ambiguïté même en file
+      // d'attente. Un pool à plusieurs agents reste `null` : on ne sait pas
+      // encore lequel se libérera.
+      idAgent: option.agentIds.length === 1 ? option.agentIds[0] : null,
       priorite: 0,
     });
     console.log(`[ivr] tous agents occupés pour ${option.label} — appel ${callId} placé en file d'attente`);
