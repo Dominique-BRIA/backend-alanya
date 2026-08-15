@@ -36,8 +36,17 @@ export async function ajouterClientFileWS(prisma, { idCompany, centerAlanyaID, i
   }
 }
 
-export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = null, idCustomerFallback = null, idCompanyFallback = 1, idServiceFallback = null) {
+export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = null, idCustomerFallback = null, idCompanyFallback = null, idServiceFallback = null) {
   try {
+    // ⚠️ 15/08/2026 : `idCompanyFallback` valait 1 par défaut, une entreprise
+    // qui n'existe pas en prod (seuls 2 et 3 existent) — chaque écriture
+    // retombant dessus violait sa contrainte FK, silencieusement. Sans
+    // company connue, on n'écrit rien plutôt que de deviner faux.
+    if (idCustomerFallback && !idCompanyFallback) {
+      console.error("[queue-ws] depilerClientSuivant : idCompanyFallback manquant, écriture ignorée pour", centerAlanyaID);
+      return null;
+    }
+
     const premierClient = await prisma.queueFile.findFirst({
       where: { center_alanyaID: centerAlanyaID },
       orderBy: [
@@ -51,7 +60,7 @@ export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = n
       if (idCustomerFallback) {
         const hist = await prisma.queueFileHistorique.create({
           data: {
-            idCompany: idCompanyFallback ?? 1,
+            idCompany: idCompanyFallback,
             center_alanyaID: centerAlanyaID,
             idService: idServiceFallback ?? null,
             idAgent: idAgent ?? null,

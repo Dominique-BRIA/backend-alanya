@@ -1395,6 +1395,13 @@ async function ouvrirSessionIvr(ws, call, centre) {
     convId: call.convId,
     appelantId: ws.userId,
     centreId: centre.id,
+    // ⚠️ 15/08/2026 : ce champ manquait ici — chaque écriture dans `file` /
+    // `file_historique` retombait sur le repli `?? 1`, et `idcompany = 1`
+    // n'existe pas (seuls 2 et 3 existent). Violation de contrainte FK sur
+    // CHAQUE appel, avalée par le try/catch de queue-ws.mjs : le flux IVR
+    // continuait normalement (musique d'attente, message « en file
+    // d'attente ») pendant que les deux tables restaient vides.
+    centreCompanyId: centre.idCompany,
     nomCentre,
     centrePublicNumber: centre.publicNumber,
     options,
@@ -1653,7 +1660,7 @@ function armerQueuePolling(session, option, touche) {
     vivante.agentLabel = option.label;
     vivante.etape = "sonnerie";
 
-    depilerClientSuivantWS(prisma, vivante.centreId, agentLibreId, vivante.appelantId, vivante.centreCompanyId ?? 1, option.idService ?? null);
+    depilerClientSuivantWS(prisma, vivante.centreId, agentLibreId, vivante.appelantId, vivante.centreCompanyId, option.idService ?? null);
 
     envoieAAppelant(vivante, {
       type: "ivr_hold",
@@ -1740,7 +1747,7 @@ async function handleIvrDtmf(ws, msg) {
 
     armerQueuePolling(session, option, touche);
     ajouterClientFileWS(prisma, {
-      idCompany: session.centreCompanyId ?? 1,
+      idCompany: session.centreCompanyId,
       centerAlanyaID: session.centreId,
       idCustomer: session.appelantId,
       idService: option.idService ?? null,
@@ -1761,7 +1768,7 @@ async function handleIvrDtmf(ws, msg) {
   session.agentLabel = option.label;
   session.etape = "sonnerie";
 
-  depilerClientSuivantWS(prisma, session.centreId, agentId, session.appelantId, session.centreCompanyId ?? 1, option.idService ?? null);
+  depilerClientSuivantWS(prisma, session.centreId, agentId, session.appelantId, session.centreCompanyId, option.idService ?? null);
 
   envoieAAppelant(session, {
     type: "ivr_hold",
