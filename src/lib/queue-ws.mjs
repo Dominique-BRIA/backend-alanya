@@ -36,7 +36,7 @@ export async function ajouterClientFileWS(prisma, { idCompany, centerAlanyaID, i
   }
 }
 
-export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = null) {
+export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = null, idCustomerFallback = null, idCompanyFallback = 1, idServiceFallback = null) {
   try {
     const premierClient = await prisma.queueFile.findFirst({
       where: { center_alanyaID: centerAlanyaID },
@@ -46,7 +46,33 @@ export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = n
         { createdAt: "asc" },
       ],
     });
-    if (!premierClient) return null;
+
+    if (!premierClient) {
+      if (idCustomerFallback) {
+        const hist = await prisma.queueFileHistorique.create({
+          data: {
+            idCompany: idCompanyFallback ?? 1,
+            center_alanyaID: centerAlanyaID,
+            idService: idServiceFallback ?? null,
+            idAgent: idAgent ?? null,
+            idCustomer: idCustomerFallback,
+            statut: "MIS_EN_RELATION",
+            joinedAt: new Date(),
+            leftAt: new Date(),
+            attenteDureeSec: 0,
+            appelDureeSec: 0,
+          },
+        });
+        return {
+          idHist: hist.idHist.toString(),
+          idCustomer: idCustomerFallback,
+          idService: idServiceFallback ?? null,
+          idAgent: idAgent,
+          attenteDureeSec: 0,
+        };
+      }
+      return null;
+    }
 
     const maintenant = new Date();
     const attenteSec = Math.max(0, Math.floor((maintenant.getTime() - premierClient.createdAt.getTime()) / 1000));

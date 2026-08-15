@@ -1300,6 +1300,11 @@ function fermerSessionIvr(callId) {
   if (session.pollingInterval) clearInterval(session.pollingInterval);
   session.minuteur = null;
   session.pollingInterval = null;
+
+  if (session.etape === "attente" && session.centreId && session.appelantId) {
+    abandonnerFileWS(prisma, session.centreId, session.appelantId);
+  }
+
   sessionsIvr.delete(callId);
 }
 
@@ -1648,6 +1653,8 @@ function armerQueuePolling(session, option, touche) {
     vivante.agentLabel = option.label;
     vivante.etape = "sonnerie";
 
+    depilerClientSuivantWS(prisma, vivante.centreId, agentLibreId, vivante.appelantId, vivante.centreCompanyId ?? 1, option.idService ?? null);
+
     envoieAAppelant(vivante, {
       type: "ivr_hold",
       callId: vivante.callId,
@@ -1754,7 +1761,7 @@ async function handleIvrDtmf(ws, msg) {
   session.agentLabel = option.label;
   session.etape = "sonnerie";
 
-  depilerClientSuivantWS(prisma, session.centreId, agentId);
+  depilerClientSuivantWS(prisma, session.centreId, agentId, session.appelantId, session.centreCompanyId ?? 1, option.idService ?? null);
 
   envoieAAppelant(session, {
     type: "ivr_hold",
