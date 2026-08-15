@@ -24,6 +24,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       call: {
         include: {
           initiator: true,
+          callerMask: true,
           participants: { include: { user: true } },
         },
       },

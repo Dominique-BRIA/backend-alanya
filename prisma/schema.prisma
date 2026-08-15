@@ -108,6 +108,8 @@ model User {
   statuses         Status[]
   statusViews      StatusView[]
   callsInitiated   Call[]            @relation("CallInitiator")
+  /// Appels où ce compte sert d'identité de rappel (voir `Call.callerMaskId`).
+  callsAsMask      Call[]            @relation("CallCallerMask")
   callParticipants CallParticipant[]
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
@@ -841,6 +843,17 @@ model Call {
   startedAt   DateTime   @default(now()) @db.Timestamptz
   answeredAt  DateTime?  @db.Timestamptz
   endedAt     DateTime?  @db.Timestamptz
+
+  /// Identité à MONTRER À L'APPELÉ, ajouté le 15/08/2026 pour le rappel « sous
+  /// le nom du centre » (`/api/queue/callback`) : un agent rappelle un client
+  /// abandonné, mais le client doit voir le centre, pas l'agent. `initiatorId`
+  /// reste le VRAI agent — il porte toute la sécurité (verrous, sonnerie,
+  /// historique CÔTÉ AGENT) sans le moindre changement ; seule la vue offerte
+  /// au CALLÉ substitue cette identité à la sienne. Nul pour tout appel
+  /// ordinaire, y compris l'IVR entrant (qui masque déjà autrement, via un
+  /// vrai `callParticipant` centre — voir `serialiseAppelPour`).
+  callerMaskId String? @db.Uuid
+  callerMask   User?   @relation("CallCallerMask", fields: [callerMaskId], references: [id], onDelete: SetNull)
 
   participants CallParticipant[]
 

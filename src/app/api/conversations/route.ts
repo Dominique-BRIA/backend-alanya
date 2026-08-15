@@ -56,7 +56,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
         where: { convId: { in: convIds } },
         orderBy: { startedAt: "desc" },
         distinct: ["convId"],
-        include: { participants: { include: { user: true } } },
+        include: { callerMask: true, participants: { include: { user: true } } },
       })
     : [];
   const appelParConv = new Map(derniersAppels.map((c) => [c.convId as string, c]));

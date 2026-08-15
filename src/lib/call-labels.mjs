@@ -207,7 +207,18 @@ export function serialiseAppelPour(call, conv, pourUserId) {
       : others.find((p) => p.userId === call.initiatorId) ?? others[0];
   }
 
-  const peer = retenu?.user;
+  /**
+   * RAPPEL « SOUS LE NOM DU CENTRE » (15/08/2026) — `call.callerMask`, quand il
+   * existe, remplace ce que voit le CALLÉ. Différent du cas `centre` ci-dessus
+   * (appel ENTRANT, IVR) : là le centre est un vrai `callParticipant` ; ici
+   * c'est un appel SORTANT d'un agent, et `initiatorId` reste le vrai agent —
+   * seule cette lecture, côté callé, substitue son identité à la sienne.
+   * `isOutgoing` protège l'agent : lisant SA PROPRE ligne, il voit toujours le
+   * vrai client, jamais son propre masque.
+   */
+  const masque = !isOutgoing && !centre ? call.callerMask ?? null : null;
+
+  const peer = masque ?? retenu?.user;
   const peerName = isGroup
     ? (conv?.name ?? "Groupe")
     : (peer ? nomAffichage(peer) : null) ?? "Inconnu";
@@ -228,7 +239,10 @@ export function serialiseAppelPour(call, conv, pourUserId) {
     hasLeft: vue.hasLeft,
     leftAt: vue.leftAt,
     isOutgoing,
-    callerId: call.initiatorId,
+    // Masqué pour le callé d'un rappel « sous le nom du centre » : son
+    // identifiant réel est un identifiant public dès qu'il atteint le client
+    // (même règle que `optionsPubliques` de ivr.mjs).
+    callerId: masque ? masque.id : call.initiatorId,
     isGroup,
     peerName,
     peerNumber: isGroup ? null : (peer?.publicNumber ?? null),

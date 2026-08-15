@@ -1889,7 +1889,7 @@ async function handleCallRing(ws, msg) {
   for (let attempt = 0; attempt < 5; attempt++) {
     call = await prisma.call.findUnique({
       where: { id: callId },
-      include: { initiator: true },
+      include: { initiator: true, callerMask: true },
     });
     if (call) break;
     await new Promise((r) => setTimeout(r, 200));
@@ -1972,8 +1972,16 @@ async function handleCallRing(ws, msg) {
     }
   }
 
-  const callerName = nomAffichage(call.initiator);
-  const callerAvatarUrl = call.initiator.avatarUrl ?? null;
+  /*
+   * RAPPEL « SOUS LE NOM DU CENTRE » (15/08/2026) — `call.callerMask`, quand
+   * il existe, remplace l'identité montrée au CALLÉ. `call.initiatorId` reste
+   * le vrai agent partout ailleurs (verrous, sonnerie ci-dessus déjà validée
+   * par `call.initiatorId === ws.userId`) : seule cette vue-ci est masquée.
+   */
+  const identiteAffichee = call.callerMask ?? call.initiator;
+  const callerName = nomAffichage(identiteAffichee);
+  const callerAvatarUrl = identiteAffichee.avatarUrl ?? null;
+  const callerIdAffiche = call.callerMaskId ?? ws.userId;
   let isGroup = false;
   let groupName = null;
   let memberCount = 0;
@@ -1995,7 +2003,7 @@ async function handleCallRing(ws, msg) {
       callId,
       convId: call.convId,
       callType: call.type,
-      callerId: ws.userId,
+      callerId: callerIdAffiche,
       callerName,
       callerAvatarUrl,
       isGroup,
@@ -2219,7 +2227,7 @@ async function diffuseAppelTermine(callId, ids) {
   try {
     const call = await prisma.call.findUnique({
       where: { id: callId },
-      include: { participants: { include: { user: true } } },
+      include: { callerMask: true, participants: { include: { user: true } } },
     });
     if (!call || !STATUTS_TERMINAUX.includes(call.status)) return;
 
@@ -2258,7 +2266,7 @@ async function pousseDepartParticipant(callId, userId) {
   try {
     const call = await prisma.call.findUnique({
       where: { id: callId },
-      include: { participants: { include: { user: true } } },
+      include: { callerMask: true, participants: { include: { user: true } } },
     });
     if (!call) return;
     // Appel déjà clos pour tout le monde : `diffuseAppelTermine` s'en est chargé.

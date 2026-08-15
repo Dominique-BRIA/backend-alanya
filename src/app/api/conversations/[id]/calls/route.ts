@@ -41,7 +41,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     where: { convId },
     orderBy: { startedAt: "desc" },
     take: limit,
-    include: { participants: { include: { user: true } } },
+    include: { callerMask: true, participants: { include: { user: true } } },
   });
 
   // Formulé pour CE destinataire, comme partout ailleurs : le même appel est
