@@ -15,7 +15,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       take: limit,
       orderBy: { joinedAt: "desc" },
       include: {
-        company: { select: { nom: true } },
+        company: { select: { libelle: true } },
         service: { select: { libelle: true } },
         agent: { select: { pseudo: true, publicNumber: true } },
         customer: { select: { pseudo: true, publicNumber: true } },
@@ -35,7 +35,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     const formattedLogs = logs.map((l) => ({
       idHist: l.idHist.toString(),
       idCompany: l.idCompany,
-      companyName: l.company?.nom ?? null,
+      companyName: l.company?.libelle ?? null,
       centerId: l.center_alanyaID,
       serviceId: l.idService,
       serviceName: l.service?.libelle ?? null,
