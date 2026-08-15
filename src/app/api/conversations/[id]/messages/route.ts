@@ -214,7 +214,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       replyToId: body.replyToId,
       status: "SENT",
       expiresAt,
-      ...(body.mediaId ? { media: { connect: { id: body.mediaId } } } : {}),
+      ...(body.mediaIds && body.mediaIds.length > 0
+        ? { media: { connect: body.mediaIds.map((id: string) => ({ id })) } }
+        : body.mediaId
+        ? { media: { connect: { id: body.mediaId } } }
+        : {}),
     },
     include: { media: true },
   });
