@@ -1540,6 +1540,12 @@ async function sonnerAgentIvr(session, agentId) {
     groupName: null,
     memberCount: 2,
     ivrFrom: session.nomCentre,
+    // Alanya ID du centre, ajouté le 15/08/2026 : `ivrFrom` ne portait que le
+    // nom, illisible pour une requête. Sert au client à interroger
+    // /api/queue/live et /api/queue/history?centerAlanyaID=… depuis l'écran
+    // d'appel de l'agent (tiroir « Liste d'attente »). Additif, comme
+    // `ivrFrom` — un client qui l'ignore n'est pas affecté.
+    ivrFromId: session.centreId,
   };
   if (!sendTo(agentId, charge)) bufferPendingCall(agentId, charge);
   if (isPushEnabled()) {
