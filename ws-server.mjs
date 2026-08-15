@@ -1717,6 +1717,12 @@ function armerQueuePolling(session, option, touche) {
       if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
       vivante.pollingInterval = null;
       console.log(`[ivr] attente expirée (5 min) — appel ${vivante.callId}`);
+      // ⚠️ 15/08/2026 : sans cet appel, la ligne restait fantôme dans `file` —
+      // `ivrRetourAuMenu` fait passer la session en "menu", et l'abandon sur
+      // raccrochage de `fermerSessionIvr` ne se déclenche QUE depuis "attente".
+      // Sans clôture ici, ce client n'aurait jamais existé pour /api/queue/history
+      // ni pour la vue « clients à rappeler ».
+      await abandonnerFileWS(prisma, vivante.centreId, vivante.appelantId, "TIMEOUT");
       await ivrRetourAuMenu(vivante, {
         code: "busy_timeout",
         message: `${option.label} est toujours occupé. Veuillez choisir un autre service.`,

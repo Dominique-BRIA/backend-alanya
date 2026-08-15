@@ -128,7 +128,13 @@ export async function depilerClientSuivantWS(prisma, centerAlanyaID, idAgent = n
   }
 }
 
-export async function abandonnerFileWS(prisma, centerAlanyaID, idCustomer) {
+/**
+ * Sort un client de la file SANS l'avoir mis en relation, et journalise
+ * pourquoi (`statut`) — `ABANDON` par défaut (il raccroche pendant l'attente),
+ * ou `TIMEOUT` (les 5 minutes d'`armerQueuePolling` ont expiré). Même ligne de
+ * sortie dans les deux cas : c'est le sens qui diffère, pas le mécanisme.
+ */
+export async function abandonnerFileWS(prisma, centerAlanyaID, idCustomer, statut = "ABANDON") {
   try {
     const clientEnAttente = await prisma.queueFile.findUnique({
       where: {
@@ -150,7 +156,7 @@ export async function abandonnerFileWS(prisma, centerAlanyaID, idCustomer) {
         idService: clientEnAttente.idService,
         idAgent: clientEnAttente.idAgent,
         idCustomer: clientEnAttente.idCustomer,
-        statut: "ABANDON",
+        statut,
         joinedAt: clientEnAttente.createdAt,
         leftAt: maintenant,
         attenteDureeSec: attenteSec,
