@@ -352,8 +352,23 @@ async function fermeAppelsPerimes() {
       where: { status: "RINGING", startedAt: { lt: limite } },
       select: { id: true },
     });
-    if (perimes.length === 0) return;
-    const ids = perimes.map((c) => c.id);
+    /*
+     * ⚠️ EXCLUT LES APPELS IVR EN COURS (15/08/2026, bug rapporté par le user :
+     * des appelants en file d'attente s'arrêtaient avant même les 5 minutes
+     * promises). Un appel routé par un standard reste `RINGING` tout le temps
+     * qu'il navigue le menu, sonne un agent, ou PATIENTE EN FILE — jusqu'à 5
+     * min (`DELAI_ATTENTE_MAX_MS`), largement au-delà des 90 s de ce balayage
+     * générique conçu pour les appels ORDINAIRES sans réponse. Sans cette
+     * exclusion, ce balayage clôturait en NO_ANSWER des appels parfaitement
+     * vivants, gérés par leurs PROPRES minuteurs (`armerMinuteurMenu`,
+     * `armerMinuteurAgent`, `armerQueuePolling`) qui les referment déjà
+     * proprement le moment venu. Une session IVR disparue (redémarrage du
+     * process, qui vide `sessionsIvr`) redevient en revanche une cible légitime
+     * : c'est le seul cas où ce filet redevient nécessaire pour un appel IVR.
+     */
+    const perimesHorsIvr = perimes.filter((c) => !sessionsIvr.has(c.id));
+    if (perimesHorsIvr.length === 0) return;
+    const ids = perimesHorsIvr.map((c) => c.id);
     const maintenant = new Date();
     await prisma.call.updateMany({
       where: { id: { in: ids } },
