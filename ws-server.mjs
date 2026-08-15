@@ -29,6 +29,11 @@ import {
   optionsPubliques,
   urlInviteCentre,
 } from "./src/lib/ivr.mjs";
+import {
+  ajouterClientFileWS,
+  depilerClientSuivantWS,
+  abandonnerFileWS,
+} from "./src/lib/queue-ws.mjs";
 
 const prisma = new PrismaClient();
 // Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
@@ -1727,6 +1732,14 @@ async function handleIvrDtmf(ws, msg) {
     });
 
     armerQueuePolling(session, option, touche);
+    ajouterClientFileWS(prisma, {
+      idCompany: session.centreCompanyId ?? 1,
+      centerAlanyaID: session.centreId,
+      idCustomer: session.appelantId,
+      idService: option.idService ?? null,
+      idAgent: null,
+      priorite: 0,
+    });
     console.log(`[ivr] tous agents occupés pour ${option.label} — appel ${callId} placé en file d'attente`);
     return;
   }
@@ -1740,6 +1753,8 @@ async function handleIvrDtmf(ws, msg) {
   session.agentId = agentId;
   session.agentLabel = option.label;
   session.etape = "sonnerie";
+
+  depilerClientSuivantWS(prisma, session.centreId, agentId);
 
   envoieAAppelant(session, {
     type: "ivr_hold",
