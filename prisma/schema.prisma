@@ -1432,6 +1432,8 @@ model Service {
 
   QueueFiles     QueueFile[]
   QueueFileHists QueueFileHistorique[]
+  /// Touches du menu IVR rattachées à ce service — voir `Center.idService`.
+  centers        Center[]
 
   @@map("service")
 }
@@ -1493,14 +1495,21 @@ model Center {
   /// la plateforme du collègue et déclaré ici le 12/08/2026. `libelle` reste le
   /// nom interne de la ligne et sert de repli quand celle-ci est vide.
   nomService      String?  @map("nom_service") @db.VarChar(45)
+  /// Lien vers le catalogue formel `service`, ajouté le 15/08/2026 : `center`
+  /// (routage par touche) et `service` (catalogue par entreprise) n'avaient
+  /// jamais été reliés. Sert à remplir `QueueFile`/`QueueFileHistorique.idService`
+  /// avec le VRAI service choisi, plutôt qu'une correspondance devinée par nom.
+  idService       Int?     @map("idservice")
 
   centerUser   User?    @relation("centerUser", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   assignedUser User?    @relation("assignedUser", fields: [users_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   company      Company? @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  service      Service? @relation(fields: [idService], references: [idService], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([center_alanyaID], map: "center_center_alanyaid_idx")
   @@index([users_alanyaID], map: "center_users_alanyaid_idx")
   @@index([idCompany], map: "center_idcompany_idx")
+  @@index([idService], map: "center_idservice_idx")
   @@map("center")
 }
 

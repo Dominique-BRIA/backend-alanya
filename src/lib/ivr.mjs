@@ -34,8 +34,22 @@ export const DELAI_MENU_MS = 60_000;
  */
 export const DELAI_SONNERIE_AGENT_MS = 95_000;
 
-/** Durée maximale d'attente dans la file avant retour au menu (5 min). */
-export const DELAI_ATTENTE_MAX_MS = 300_000;
+/**
+ * Durée maximale d'attente dans la file avant retour au menu.
+ *
+ * Configurable via `IVR_QUEUE_TIMEOUT_MINUTES` (entier, minutes) dans `.env` —
+ * défaut **5 minutes** si absente, non numérique, ou ≤ 0 (une valeur pareille
+ * viderait la file en boucle, ce n'est jamais l'intention). ⚠️ Lue une seule
+ * fois à l'import de ce module, comme toute variable d'environnement : un
+ * changement de valeur exige un redémarrage de `alanya-ws` (`pm2 restart
+ * alanya-ws`), pas seulement une modification du `.env`.
+ */
+function dureeAttenteMaxMs() {
+  const minutes = Number(process.env.IVR_QUEUE_TIMEOUT_MINUTES);
+  if (Number.isFinite(minutes) && minutes > 0) return minutes * 60_000;
+  return 300_000; // 5 minutes
+}
+export const DELAI_ATTENTE_MAX_MS = dureeAttenteMaxMs();
 
 /** Ce compte est-il un numéro de centre d'appels ? */
 export function estCompteCentre(user) {
@@ -386,6 +400,7 @@ export async function lireMenuCentre(prisma, centreId) {
       libelle: true,
       nomService: true,
       users_alanyaID: true,
+      idService: true,
     },
   });
 
@@ -403,6 +418,10 @@ export async function lireMenuCentre(prisma, centreId) {
         // souvenir dans chaque client : un seul endroit décide ce que « vide »
         // signifie, et le client ne reçoit jamais qu'un texte utile ou `null`.
         nomService: nomDeService(l.nomService),
+        // Lien vers le catalogue `service` (15/08/2026) : NULL tant que la
+        // ligne `center` n'a pas été explicitement rattachée. Jamais deviné
+        // par nom — voir la doc de la migration `2026-08_center_idservice.sql`.
+        idService: null,
         agentIds: [],
       });
     }
@@ -411,10 +430,12 @@ export async function lireMenuCentre(prisma, centreId) {
      * `nom_service` le donne au service. Une touche est un service, ses lignes
      * ne sont que ses agents — mais rien n'oblige la plateforme à renseigner la
      * colonne sur toutes, et prendre la première ligne aveuglément afficherait
-     * un nom vide alors qu'il est écrit deux lignes plus bas.
+     * un nom vide alors qu'il est écrit deux lignes plus bas. Même règle pour
+     * `idService`.
      */
     const service = parTouche.get(touche);
     service.nomService ??= nomDeService(l.nomService);
+    service.idService ??= l.idService ?? null;
     if (l.users_alanyaID) service.agentIds.push(l.users_alanyaID);
   }
 
@@ -439,6 +460,7 @@ export async function lireMenuCentre(prisma, centreId) {
       digit: 0,
       label: "Opérateur",
       nomService: null,
+      idService: null,
       agentIds: [centreId],
     });
   }
