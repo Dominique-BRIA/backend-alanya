@@ -1402,6 +1402,11 @@ async function ouvrirSessionIvr(ws, call, centre) {
     // continuait normalement (musique d'attente, message « en file
     // d'attente ») pendant que les deux tables restaient vides.
     centreCompanyId: centre.idCompany,
+    // Posé par `depilerClientSuivantWS` dès qu'un agent prend l'appel — c'est
+    // ce qui permet au client de noter la communication à la fin. Nul tant que
+    // l'appel n'a jamais atteint d'agent (abandon, timeout) : on ne demande
+    // pas de noter une communication qui n'a pas eu lieu.
+    idHist: null,
     nomCentre,
     centrePublicNumber: centre.publicNumber,
     options,
@@ -1660,7 +1665,11 @@ function armerQueuePolling(session, option, touche) {
     vivante.agentLabel = option.label;
     vivante.etape = "sonnerie";
 
-    depilerClientSuivantWS(prisma, vivante.centreId, agentLibreId, vivante.appelantId, vivante.centreCompanyId, option.idService ?? null);
+    // Capturé : c'est ce idHist que le client notera à la fin de l'appel
+    // (voir le message `queue_rating_available` envoyé à la clôture de la
+    // session, plus bas dans handleCallState).
+    const depile = await depilerClientSuivantWS(prisma, vivante.centreId, agentLibreId, vivante.appelantId, vivante.centreCompanyId, option.idService ?? null);
+    vivante.idHist = depile?.idHist ?? null;
 
     envoieAAppelant(vivante, {
       type: "ivr_hold",
@@ -1768,7 +1777,8 @@ async function handleIvrDtmf(ws, msg) {
   session.agentLabel = option.label;
   session.etape = "sonnerie";
 
-  depilerClientSuivantWS(prisma, session.centreId, agentId, session.appelantId, session.centreCompanyId, option.idService ?? null);
+  const depile = await depilerClientSuivantWS(prisma, session.centreId, agentId, session.appelantId, session.centreCompanyId, option.idService ?? null);
+  session.idHist = depile?.idHist ?? null;
 
   envoieAAppelant(session, {
     type: "ivr_hold",
@@ -2265,6 +2275,18 @@ async function handleCallState(ws, msg) {
    */
   const finPourTous = ["ended", "rejected", "declined", "cancelled"].includes(state);
   if (finPourTous || (state === "left" && sessionIvr(callId)?.appelantId === ws.userId)) {
+    // Lu AVANT `fermerSessionIvr`, qui retire la session du registre. Envoyé
+    // uniquement si l'appel a réellement atteint un agent (idHist posé par
+    // `depilerClientSuivantWS`) : un abandon en file ou un menu jamais résolu
+    // n'ont rien à noter. Ciblé sur l'appelant seul — jamais l'agent.
+    const sessionAvantFermeture = sessionIvr(callId);
+    if (sessionAvantFermeture?.idHist) {
+      sendTo(sessionAvantFermeture.appelantId, {
+        type: "queue_rating_available",
+        callId,
+        idHist: sessionAvantFermeture.idHist,
+      });
+    }
     fermerSessionIvr(callId);
   }
 
