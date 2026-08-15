@@ -157,6 +157,14 @@ model User {
   musiques        CenterMusic[]    @relation("musiqueCentre")
   vocauxAttente   VocalAttente[]   @relation("vocalAttenteCentre")
 
+  // --- Relations vers la file d'attente ---
+  queueCenterFiles   QueueFile[]           @relation("QueueCenterUser")
+  queueAgentFiles    QueueFile[]           @relation("QueueAgentUser")
+  queueCustomerFiles QueueFile[]           @relation("QueueCustomerUser")
+  queueCenterHists   QueueFileHistorique[] @relation("QueueHistCenterUser")
+  queueAgentHists    QueueFileHistorique[] @relation("QueueHistAgentUser")
+  queueCustomerHists QueueFileHistorique[] @relation("QueueHistCustomerUser")
+
   @@index([publicNumber])
   @@index([idCompany])
   /// Existait en base sans etre declare ici : Prisma voulait donc le
@@ -1350,6 +1358,9 @@ model Company {
   Musiques      CenterMusic[]
   VocauxAttente VocalAttente[]
 
+  QueueFiles     QueueFile[]
+  QueueFileHists QueueFileHistorique[]
+
   /// Existait en base sans etre declare ici : supprime par un `db push` le
   /// 06/08/2026. Le re-declarer empeche Prisma de vouloir le retirer.
   @@index([idTypeCompany])
@@ -1418,6 +1429,9 @@ model Service {
   transfertsEmetteur     Transferer[]       @relation("TransfertEmetteur")
   transfertsDestinataire Transferer[]       @relation("TransfertDestinataire")
   bordereauxService      BordereauService[]
+
+  QueueFiles     QueueFile[]
+  QueueFileHists QueueFileHistorique[]
 
   @@map("service")
 }
@@ -1862,4 +1876,96 @@ model DevLedger {
 
   @@index([developerId, createdAt])
   @@map("developer_ledgers")
+}
+
+// ===============================================================
+// FILE D'ATTENTE TEMPS RÉEL (Table active : file)
+// ===============================================================
+
+/// File d'attente active des clients pour un centre, un service ou un agent.
+/// Une ligne = un client actuellement en train d'attendre un agent libre.
+/// Nettoyée dès que l'appel est pris en charge, abandonné ou expiré.
+model QueueFile {
+  idFile          Int      @id @default(autoincrement()) @map("idFile")
+  idCompany       Int      @map("idCompany")
+  center_alanyaID String   @map("center_alanyaID") @db.Uuid
+  idService       Int?     @map("idService")
+  idAgent         String?  @map("idAgent") @db.Uuid
+  idCustomer      String   @map("idCustomer") @db.Uuid
+  
+  /// Position / Rang du client dans la file (1, 2, 3...)
+  rang            Int      @default(1)
+  /// Niveau de priorité (0 = normal, 1 = VIP, 2 = urgent)
+  priorite        Int      @default(0) @db.SmallInt
+  
+  /// Date et heure d'entrée dans la file
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations Prisma
+  company    Company  @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade)
+  centerUser User     @relation("QueueCenterUser", fields: [center_alanyaID], references: [id], onDelete: Cascade)
+  service    Service? @relation(fields: [idService], references: [idService], onDelete: SetNull)
+  agent      User?    @relation("QueueAgentUser", fields: [idAgent], references: [id], onDelete: SetNull)
+  customer   User     @relation("QueueCustomerUser", fields: [idCustomer], references: [id], onDelete: Cascade)
+
+  @@unique([center_alanyaID, idCustomer], map: "queue_file_center_customer_key")
+  @@index([center_alanyaID, rang(sort: Asc)], map: "queue_file_center_rang_idx")
+  @@index([idService, rang(sort: Asc)], map: "queue_file_service_rang_idx")
+  @@index([idAgent], map: "queue_file_idAgent_idx")
+  @@map("file")
+}
+
+// ===============================================================
+// HISTORIQUE DE LA FILE D'ATTENTE (Table d'archivage : file_historique)
+// ===============================================================
+
+/// Statut final du passage en file d'attente.
+enum QueueStatus {
+  MIS_EN_RELATION // Le client a pu contacter l'agent (succès)
+  ABANDON         // Le client a raccroché pendant l'attente
+  TIMEOUT         // Attente maximale atteinte sans réponse
+  REJETE          // File pleine ou rejeté
+}
+
+/// Historique complet de la file d'attente pour chaque appel vers un centre.
+/// Permet de mesurer les statistiques par service, par agent, les abandons,
+/// les durées d'attente et la note globale sur 5 attribuée par le client.
+model QueueFileHistorique {
+  idHist          BigInt      @id @default(autoincrement()) @map("idHist")
+  idCompany       Int         @map("idCompany")
+  center_alanyaID String      @map("center_alanyaID") @db.Uuid
+  idService       Int?        @map("idService")
+  idAgent         String?     @map("idAgent") @db.Uuid
+  idCustomer      String      @map("idCustomer") @db.Uuid
+
+  /// Statut de l'attente : MIS_EN_RELATION, ABANDON, TIMEOUT, REJETE
+  statut          QueueStatus @default(MIS_EN_RELATION)
+
+  /// Heure d'entrée dans la file
+  joinedAt        DateTime    @default(now()) @map("joined_at") @db.Timestamptz
+  /// Heure de sortie de la file (prise en charge ou abandon)
+  leftAt          DateTime?   @map("left_at") @db.Timestamptz
+  /// Temps passé à attendre en secondes
+  attenteDureeSec Int         @default(0) @map("attente_duree_sec")
+  /// Durée de la communication effective avec l'agent en secondes (0 si abandon)
+  appelDureeSec   Int         @default(0) @map("appel_duree_sec")
+
+  /// Note de satisfaction optionnelle donnée par le client à la fin (1 à 5 étoiles)
+  note            Int?        @db.SmallInt
+  /// Avis/Commentaire optionnel laissé par le client
+  avisCommentaire String?     @map("avis_commentaire") @db.Text
+
+  // Relations Prisma
+  company    Company  @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade)
+  centerUser User     @relation("QueueHistCenterUser", fields: [center_alanyaID], references: [id], onDelete: Cascade)
+  service    Service? @relation(fields: [idService], references: [idService], onDelete: SetNull)
+  agent      User?    @relation("QueueHistAgentUser", fields: [idAgent], references: [id], onDelete: SetNull)
+  customer   User     @relation("QueueHistCustomerUser", fields: [idCustomer], references: [id], onDelete: Cascade)
+
+  @@index([idCompany, joinedAt(sort: Desc)], map: "queue_hist_company_joined_idx")
+  @@index([center_alanyaID, joinedAt(sort: Desc)], map: "queue_hist_center_joined_idx")
+  @@index([idService, joinedAt(sort: Desc)], map: "queue_hist_service_joined_idx")
+  @@index([idAgent, joinedAt(sort: Desc)], map: "queue_hist_agent_joined_idx")
+  @@index([statut], map: "queue_hist_statut_idx")
+  @@map("file_historique")
 }
