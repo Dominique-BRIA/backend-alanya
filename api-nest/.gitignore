@@ -1,0 +1,11 @@
+# Sortie de compilation Nest
+dist/
+*.tsbuildinfo
+
+# node_modules/ est déjà couvert par le .gitignore de la racine.
+
+# Le .env est celui de la RACINE du dépôt (voir app.module.ts) : il ne doit
+# jamais exister ici, sous peine d'avoir deux sources pour la chaîne de
+# connexion à la base.
+.env
+.env.*
