@@ -2,6 +2,7 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import type { NextFunction, Request, Response } from "express";
 import { AppModule } from "./app.module";
+import { ContractExceptionFilter } from "./common/contract-exception.filter";
 
 /**
  * CORS — réplique EXACTE de src/middleware.ts (le middleware Next).
@@ -16,11 +17,19 @@ import { AppModule } from "./app.module";
  * Reproduire le middleware à l'octet près coûte cinq lignes et supprime le
  * bruit : tout écart détecté par le harnais sera alors un vrai bug.
  */
+/*
+ * Noms en MINUSCULES, et ce n'est pas un détail de style : Next émet ses
+ * en-têtes en minuscules (undici), alors qu'Express préserve la graphie qu'on
+ * lui donne. Les noms d'en-têtes HTTP sont insensibles à la casse (RFC 7230),
+ * donc aucun client ne voit la différence — mais le harnais de diff de contrat
+ * la signalerait sur CHAQUE route comparée. S'aligner coûte zéro et supprime
+ * ce bruit. Écart constaté en comparant les deux serveurs le 16/08/2026.
+ */
 const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Access-Control-Max-Age": "86400",
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
+  "access-control-allow-headers": "Content-Type, Authorization",
+  "access-control-max-age": "86400",
 };
 
 async function bootstrap() {
@@ -39,6 +48,26 @@ async function bootstrap() {
     for (const [k, v] of Object.entries(CORS_HEADERS)) res.setHeader(k, v);
     next();
   });
+
+  /*
+   * Forme d'erreur du contrat, appliquée à TOUTE l'application.
+   *
+   * Global et non par contrôleur : une seule route qui y échapperait
+   * renverrait le `{statusCode, message, error}` de Nest au lieu du
+   * `{error:{message,code}}` attendu par les clients. Le défaut doit être le
+   * comportement correct, jamais quelque chose à ne pas oublier.
+   */
+  app.useGlobalFilters(new ContractExceptionFilter());
+
+  /*
+   * ⚠️ AUCUN ValidationPipe global, et aucun ClassSerializerInterceptor.
+   *
+   * Un pipe global de class-validator écraserait la validation Zod des routes
+   * (forme du 422). Un intercepteur de sérialisation réécrirait les objets
+   * Prisma renvoyés tels quels aujourd'hui — dates, champs nuls, BigInt
+   * convertis à la main. Les deux sont des ruptures de contrat silencieuses.
+   * La validation se déclare route par route, via ZodValidationPipe.
+   */
 
   // 3002 : à côté de Next (3000) et du serveur WebSocket (3001). C'est ce
   // port que nginx visera, route par route, pendant la bascule progressive.

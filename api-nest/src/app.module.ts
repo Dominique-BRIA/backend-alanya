@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { HealthController } from "./health/health.controller";
 import { PrismaModule } from "./prisma/prisma.module";
+import { SelftestController } from "./selftest/selftest.controller";
 import { SharedKernelModule } from "./shared-kernel/shared-kernel.module";
 
 /**
@@ -23,6 +24,8 @@ import { SharedKernelModule } from "./shared-kernel/shared-kernel.module";
     PrismaModule,
     SharedKernelModule,
   ],
-  controllers: [HealthController],
+  // HealthController et SelftestController sont hors de /api/ : ils n'ajoutent
+  // aucune URL au contrat public. Le second disparaît au ticket T20.
+  controllers: [HealthController, SelftestController],
 })
 export class AppModule {}
