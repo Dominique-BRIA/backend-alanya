@@ -175,3 +175,35 @@ export async function abandonnerFile(centerAlanyaID: string, idCustomer: string)
     attenteDureeSec: attenteSec,
   };
 }
+
+/**
+ * Marque un client comme RECONTACTER : un agent l'a rappelé après son abandon
+ * et il A DÉCROCHÉ (demande user 15/08/2026). Il sort ainsi de la liste
+ * « à rappeler », filtrée sur les statuts non aboutis.
+ *
+ * ⚠️ Appelé au DÉCROCHAGE, jamais à la création de l'appel : un rappel que le
+ * client ne prend pas doit rester dans la liste, sinon un seul essai
+ * infructueux le ferait disparaître pour de bon.
+ *
+ * Ne touche QUE la ligne la plus récente, et seulement si elle n'a pas déjà
+ * abouti : rappeler quelqu'un ne doit pas réécrire tout son historique, ni
+ * transformer un ancien MIS_EN_RELATION.
+ */
+export async function marquerRecontacte(centerAlanyaID: string, idCustomer: string) {
+  const derniere = await prisma.queueFileHistorique.findFirst({
+    where: {
+      center_alanyaID: centerAlanyaID,
+      idCustomer,
+      statut: { in: ["ABANDON", "TIMEOUT", "REJETE"] },
+    },
+    orderBy: { joinedAt: "desc" },
+    select: { idHist: true },
+  });
+  if (!derniere) return null;
+
+  await prisma.queueFileHistorique.update({
+    where: { idHist: derniere.idHist },
+    data: { statut: "RECONTACTER" },
+  });
+  return derniere.idHist.toString();
+}

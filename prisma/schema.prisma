@@ -1947,6 +1947,7 @@ enum QueueStatus {
   ABANDON         // Le client a raccroché pendant l'attente
   TIMEOUT         // Attente maximale atteinte sans réponse
   REJETE          // File pleine ou rejeté
+  RECONTACTER     // Rappelé par un agent APRÈS un abandon, et il a décroché
 }
 
 /// Historique complet de la file d'attente pour chaque appel vers un centre.

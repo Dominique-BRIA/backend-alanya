@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { activeCallParticipants, conversationMeta } from "@/lib/calls";
+import { marquerRecontacte } from "@/lib/queue";
 
 // POST /api/calls/:id/accept — accepte / rejoint un appel (direct ou groupe).
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -38,6 +39,28 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       where: { id },
       data: { status: "ONGOING", answeredAt: now },
     });
+
+    /*
+     * RAPPEL ABOUTI (15/08/2026) — `callerMaskId` n'est posé que par
+     * `POST /api/queue/callback` : sa présence signifie que cet appel est le
+     * rappel d'un client abandonné, et on arrive ici parce qu'il A DÉCROCHÉ.
+     * Il sort donc de la liste « à rappeler ».
+     *
+     * Ici et pas à la création de l'appel : un rappel que le client ne prend
+     * pas doit rester dans la liste. Et dans le `if (RINGING)` : un
+     * participant qui rejoint un appel DÉJÀ en cours (invitation, transfert)
+     * n'est pas le décrochage du client rappelé.
+     *
+     * Volontairement silencieux en cas d'échec — une ligne d'historique de
+     * file qui ne bascule pas ne doit pas faire échouer un décrochage.
+     */
+    if (part.call.callerMaskId) {
+      try {
+        await marquerRecontacte(part.call.callerMaskId, userId);
+      } catch (e) {
+        console.error("[accept] marquerRecontacte:", e);
+      }
+    }
   }
   await prisma.callParticipant.update({
     where: { callId_userId: { callId: id, userId } },

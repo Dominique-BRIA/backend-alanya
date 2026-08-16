@@ -16,6 +16,9 @@ import { centresDeLAgent } from "@/lib/queue-agents";
  * `excludeServed=1` (optionnel) : ne renvoie que ce qui n'a PAS abouti à un
  * agent (ABANDON/TIMEOUT/REJETE) — c'est la vue « clients à rappeler ».
  */
+/** Statuts « pas encore traité » — la liste des clients à rappeler. */
+const STATUTS_A_RAPPELER = ["ABANDON", "TIMEOUT", "REJETE"] as const;
+
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
   try {
     const mesCentres = await centresDeLAgent(userId);
@@ -35,7 +38,11 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     const logs = await prisma.queueFileHistorique.findMany({
       where: {
         center_alanyaID: { in: centerIds },
-        ...(excludeServed ? { statut: { not: "MIS_EN_RELATION" } } : {}),
+        // ⚠️ Liste EXPLICITE et non `not: MIS_EN_RELATION` : avec la négation,
+        // l'ajout de RECONTACTER (15/08/2026) aurait laissé les clients déjà
+        // rappelés dans la liste « à rappeler » — exactement ce qu'il fallait
+        // éviter. Tout nouveau statut abouti sera exclu par défaut.
+        ...(excludeServed ? { statut: { in: [...STATUTS_A_RAPPELER] } } : {}),
       },
       take: limit,
       orderBy: { joinedAt: "desc" },
@@ -51,6 +58,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     const misEnRelationCount = logs.filter((l) => l.statut === "MIS_EN_RELATION").length;
     const abandonCount = logs.filter((l) => l.statut === "ABANDON").length;
     const timeoutCount = logs.filter((l) => l.statut === "TIMEOUT").length;
+    const recontacteCount = logs.filter((l) => l.statut === "RECONTACTER").length;
 
     const ratedLogs = logs.filter((l) => l.note !== null);
     const avgNote = ratedLogs.length > 0
@@ -84,6 +92,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
         misEnRelationCount,
         abandonCount,
         timeoutCount,
+        recontacteCount,
         averageRating: avgNote ? Number(avgNote.toFixed(2)) : null,
       },
       history: formattedLogs,
