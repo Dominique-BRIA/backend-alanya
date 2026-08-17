@@ -7,7 +7,9 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main"
+    "start:prod": "node dist/main",
+    "diff": "node tools/diff-contrat/index.mjs",
+    "diff:tout": "node tools/diff-contrat/index.mjs --tout --verbeux"
   },
   "//prisma": [
     "@prisma/client et prisma sont VOLONTAIREMENT absents d'ici.",

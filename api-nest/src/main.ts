@@ -38,6 +38,33 @@ async function bootstrap() {
     cors: false,
   });
 
+  /*
+   * `content-type: application/json` SANS `; charset=utf-8`.
+   *
+   * Express ajoute le charset dans `res.json()`, pas Next (`NextResponse.json`
+   * envoie `application/json` nu). La différence est inoffensive — JSON est
+   * toujours en UTF-8 par la RFC 8259, et tous les clients l'ignorent — mais
+   * elle porterait sur les 101 routes, et le harnais de diff la signalerait
+   * partout. Écart détecté par le harnais lui-même, le 16/08/2026, avant
+   * qu'aucune route ne soit migrée.
+   *
+   * On intercepte `setHeader` plutôt que `res.json` : Express pose l'en-tête
+   * DEPUIS `res.json()`, donc l'écraser après coup n'aurait aucun effet.
+   */
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    const poserEntete = res.setHeader.bind(res);
+    res.setHeader = (nom: string, valeur: number | string | readonly string[]) => {
+      if (
+        String(nom).toLowerCase() === "content-type" &&
+        String(valeur).startsWith("application/json")
+      ) {
+        return poserEntete(nom, "application/json");
+      }
+      return poserEntete(nom, valeur);
+    };
+    next();
+  });
+
   app.use((req: Request, res: Response, next: NextFunction) => {
     // Préflight : 204 sans corps, comme Next.
     if (req.method === "OPTIONS") {
