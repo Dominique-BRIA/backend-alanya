@@ -100,14 +100,18 @@ model User {
   isDelete Boolean @default(false) @map("isDelete")
 
   refreshTokens    RefreshToken[]
-  contacts         Contact[]         @relation("UserContacts")
-  contactOf        Contact[]         @relation("ContactOf")
+  contacts         Contact[]           @relation("UserContacts")
+  contactOf        Contact[]           @relation("ContactOf")
+  contactLists     ContactList[]       @relation("UserContactLists")
+  /// Listes d'AUTRES comptes ou ce compte figure comme membre. Relation inverse
+  /// seule : elle n'ajoute aucune colonne a `users`.
+  contactListsIn   ContactListMember[] @relation("ContactListMemberOf")
   participations   Participant[]
-  sentMessages     Message[]         @relation("MessageSender")
+  sentMessages     Message[]           @relation("MessageSender")
   ownedMedia       MediaFile[]
   statuses         Status[]
   statusViews      StatusView[]
-  callsInitiated   Call[]            @relation("CallInitiator")
+  callsInitiated   Call[]              @relation("CallInitiator")
   callParticipants CallParticipant[]
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
@@ -547,6 +551,67 @@ model Contact {
   @@unique([userId, contactId])
   @@index([userId])
   @@map("preferredContact")
+}
+
+// ---------------------------------------------------------------------------
+// LISTES DE CONTACTS
+// ---------------------------------------------------------------------------
+
+/// Regroupement nomme de contacts, prive au compte qui l'a cree.
+///
+/// Repond a deux besoins qu'un groupe de discussion ne couvre pas : diffuser
+/// vers plusieurs personnes sans creer de conversation commune entre elles, et
+/// reconnaitre a l'oreille une categorie d'appelants — la famille, l'equipe
+/// d'astreinte. C'est pourquoi la sonnerie est portee par la liste et non par
+/// chaque fiche contact.
+model ContactList {
+  id     String @id @default(uuid()) @map("idContactList") @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation("UserContactLists", fields: [userId], references: [id], onDelete: Cascade)
+
+  name String @map("libelle") @db.VarChar(80)
+
+  /// Sonnerie : SOIT un nom de fichier livre avec le client
+  /// («incoming_ring.mp3»), SOIT une URL de media relative («/api/media/<id>»)
+  /// quand l'utilisateur televerse la sienne. Chaine libre a dessein : une
+  /// enumeration ne couvrirait que le premier cas et imposerait une migration a
+  /// chaque son ajoute au client. L'espace de noms est deja tenu une seule fois,
+  /// cote client (src/services/ringtones.ts) ; le redoubler ici donnerait deux
+  /// verites a maintenir.
+  ringtone String? @db.VarChar(300)
+
+  /// Pastille de couleur telle que le client l'ecrit («#FF7A00»). Non validee,
+  /// pour la meme raison que la sonnerie : la palette appartient au client.
+  color String? @db.VarChar(20)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  members ContactListMember[]
+
+  /// Le nom est l'identite visible d'une liste : deux homonymes chez le meme
+  /// compte seraient indiscernables a l'ecran.
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("contactList")
+}
+
+/// Appartenance d'un contact a une liste.
+model ContactListMember {
+  id     String      @id @default(uuid()) @map("idContactListMember") @db.Uuid
+  listId String      @map("idContactList") @db.Uuid
+  list   ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  /// Le membre designe un COMPTE, pas une ligne de repertoire : retirer puis
+  /// re-ajouter la personne a ses contacts ne doit pas vider les listes ou elle
+  /// figure.
+  memberId String @map("idFriend") @db.Uuid
+  member   User   @relation("ContactListMemberOf", fields: [memberId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([listId, memberId])
+  @@index([listId])
+  @@map("contactListMember")
 }
 
 // ---------------------------------------------------------------------------
