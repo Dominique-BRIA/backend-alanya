@@ -255,3 +255,83 @@ export const createMeetingSchema = z.object({
   participantIds: z.array(z.string().uuid()).optional(),
   participantNumbers: z.array(publicNumberSchema).optional(),
 });
+
+/**
+ * Tronque sur les CARACTERES, et non sur les unites UTF-16.
+ *
+ * `slice()` compte en unites UTF-16 : un emoji en occupe deux, et une coupe
+ * entre les deux laisse une moitie de caractere (« surrogate » orpheline) qui
+ * n'est plus de l'UTF-8 valide. Postgres refuse alors la valeur et la requete
+ * echoue — mesure du 17/08/2026 : un nom de 79 « x » suivis de U+1F600 faisait
+ * repondre « unexpected end of hex escape », donc un 400 portant un message
+ * interne, et la liste etait perdue. Exactement ce que la troncature devait
+ * eviter.
+ *
+ * L'iterateur de chaine parcourt les POINTS DE CODE, qui sont aussi l'unite que
+ * compte `VARCHAR(n)` cote Postgres : la borne d'ici est donc precisement celle
+ * de la colonne, ni plus large ni plus etroite.
+ *
+ * ⚠️ Une suite de plusieurs points de code (drapeau, emoji compose par ZWJ) peut
+ * encore etre coupee en son milieu et changer d'apparence. C'est admis : le
+ * resultat reste de l'UTF-8 valide, la base l'accepte, et seul ce dernier point
+ * comptait ici.
+ */
+export function tronqueCaracteres(valeur: string, max: number): string {
+  const caracteres = [...valeur];
+  return caracteres.length <= max ? valeur : caracteres.slice(0, max).join("");
+}
+
+/// --- Listes de contacts ---
+///
+/// Les trois champs texte sont COUPES a la longueur de leur colonne au lieu
+/// d'etre refuses : un nom trop long est une maladresse de saisie, pas une
+/// requete invalide, et un 422 ferait perdre la liste entiere que l'utilisateur
+/// vient de composer. Seul un nom vide est refuse — il n'y aurait plus rien a
+/// afficher.
+const nomListeSchema = z
+  .string()
+  .trim()
+  .min(1, "Le nom de la liste est requis")
+  .transform((s) => tronqueCaracteres(s, 80));
+
+/// Le contenu n'est pas verifie : nom de fichier livre avec le client ou URL de
+/// media relative, l'espace de noms est tenu cote client. Voir [ContactList].
+const sonnerieListeSchema = z.string().trim().transform((s) => tronqueCaracteres(s, 300));
+
+const couleurListeSchema = z.string().trim().transform((s) => tronqueCaracteres(s, 20));
+
+/// `memberIds` accepte des chaines quelconques et non `uuid()` : le serveur ne
+/// retient de toute facon que les identifiants qui sont deja des contacts de
+/// l'appelant, et ecarte le reste en silence. Refuser sur la forme ferait echouer
+/// tout l'enregistrement pour un seul identifiant perime cote client.
+const membresListeSchema = z.array(z.string()).max(512, "Trop de membres pour une liste");
+
+/// Numeros Alanya COMPOSES au clavier. Le membre correspondant n'a pas besoin
+/// d'etre au repertoire de l'appelant : c'est tout l'objet de ce champ.
+///
+/// `publicNumberSchema` et pas autre chose : la resolution numero -> compte est
+/// celle de POST /api/contacts (voir `comptesParNumerosPublics`), elle doit donc
+/// accepter exactement les memes saisies. Un numero ajoutable au repertoire mais
+/// refuse ici — ou l'inverse — serait incomprehensible pour l'utilisateur.
+const numerosListeSchema = z
+  .array(publicNumberSchema)
+  .max(512, "Trop de numeros pour une liste");
+
+export const createContactListSchema = z.object({
+  name: nomListeSchema,
+  ringtone: sonnerieListeSchema.nullable().optional(),
+  color: couleurListeSchema.nullable().optional(),
+  memberIds: membresListeSchema.optional(),
+  memberNumbers: numerosListeSchema.optional(),
+});
+
+/// Mise a jour partielle : un champ absent reste inchange. `memberIds` ou
+/// `memberNumbers` fourni REMPLACE l'ensemble des membres par l'union des deux —
+/// l'appel est idempotent, il n'ajoute pas.
+export const updateContactListSchema = z.object({
+  name: nomListeSchema.optional(),
+  ringtone: sonnerieListeSchema.nullable().optional(),
+  color: couleurListeSchema.nullable().optional(),
+  memberIds: membresListeSchema.optional(),
+  memberNumbers: numerosListeSchema.optional(),
+});

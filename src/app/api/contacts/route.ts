@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { addContactSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { comptesParNumerosPublics } from "@/lib/publicNumber";
 
 interface ContactWithUser {
   id: string;
@@ -71,17 +72,24 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   }
   const { publicNumber, alias } = parsed.data;
 
-  const target = await prisma.user.findUnique({ where: { publicNumber } });
-  if (!target) return fail("Aucun utilisateur avec ce numéro Alanya", 404, "NOT_FOUND");
-  if (target.id === userId) return fail("Tu ne peux pas t'ajouter toi-même", 400, "SELF");
+  // La résolution « numéro → compte » vit dans `comptesParNumerosPublics` et
+  // n'est plus écrite ici : les listes de contacts résolvent les numéros composés
+  // au clavier de la même façon, et deux résolutions séparées finiraient par ne
+  // plus accepter les mêmes saisies — un numéro ajoutable au répertoire mais
+  // refusé dans une liste. Comportement inchangé : la colonne est unique, ce
+  // `IN (...)` d'un seul élément trouve exactement ce que trouvait `findUnique`.
+  const comptes = await comptesParNumerosPublics([publicNumber]);
+  const targetId = comptes.get(publicNumber);
+  if (!targetId) return fail("Aucun utilisateur avec ce numéro Alanya", 404, "NOT_FOUND");
+  if (targetId === userId) return fail("Tu ne peux pas t'ajouter toi-même", 400, "SELF");
 
   const existing = await prisma.contact.findUnique({
-    where: { userId_contactId: { userId, contactId: target.id } },
+    where: { userId_contactId: { userId, contactId: targetId } },
   });
   if (existing) return fail("Ce contact est déjà dans ton répertoire", 409, "ALREADY_CONTACT");
 
   const created = await prisma.contact.create({
-    data: { userId, contactId: target.id, alias },
+    data: { userId, contactId: targetId, alias },
     include: { contact: true },
   });
 
