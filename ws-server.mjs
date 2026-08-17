@@ -18,6 +18,11 @@ import {
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
 import {
+  TYPES_STRUCTURES,
+  chargeValide,
+  apercuStructure,
+} from "./src/lib/message-payload.mjs";
+import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
   DELAI_ATTENTE_MAX_MS,
@@ -717,7 +722,22 @@ async function handleSend(ws, msg) {
   if (Array.isArray(mediaIds)) allMediaIds.push(...mediaIds);
   const uniqueMediaIds = [...new Set(allMediaIds)];
 
-  if (type !== "TEXT" && uniqueMediaIds.length === 0) return;
+  /**
+   * CONTACT et LOCATION n'ont PAS de média obligatoire : leur charge est du
+   * JSON dans `content` (voir `src/lib/message-payload.mjs`). Sans cette
+   * exception, la garde ci-dessous les jetait en silence — le pire des
+   * comportements, l'expéditeur n'ayant jamais d'accusé et son message restant
+   * « en cours d'envoi » pour toujours.
+   *
+   * Une charge invalide est refusée EXPLICITEMENT, elle : mieux vaut une erreur
+   * chez l'expéditeur qu'une ligne que le destinataire ne pourra pas afficher.
+   */
+  const structure = TYPES_STRUCTURES.has(type);
+  if (structure && !chargeValide(type, content ?? null)) {
+    ws.send(JSON.stringify({ type: "error", message: "Charge de message invalide", tempId }));
+    return;
+  }
+  if (type !== "TEXT" && !structure && uniqueMediaIds.length === 0) return;
   if (type === "TEXT" && uniqueMediaIds.length === 0 && (!content || !content.trim())) return;
 
   if (!(await isParticipant(convId, ws.userId))) {
@@ -848,7 +868,10 @@ async function handleSend(ws, msg) {
   await prisma.conversation.update({
     where: { id: convId },
     data: {
-      lastMessage: content?.slice(0, 500) ?? null,
+      // Libellé, jamais la charge : un CONTACT ou une LOCATION porte du JSON
+      // dans `content`, et cette colonne est affichée telle quelle par les trois
+      // clients dans la liste des conversations.
+      lastMessage: apercuStructure(type, content ?? null) ?? content?.slice(0, 500) ?? null,
       lastMessageAt: new Date(),
       lastMessageSenderID: ws.userId,
       lastMessageType: type === "TEXT" ? 0 : type === "IMAGE" ? 1 : type === "AUDIO" ? 3 : type === "VIDEO" ? 4 : 2,
@@ -919,7 +942,11 @@ async function handleSend(ws, msg) {
       convTitle =
         (other ? nomAffichage(other.user) : null) ?? convTitle;
     }
-    const preview = type === "TEXT" ? (content ?? "").slice(0, 120) : null;
+    // Aperçu du push : le texte pour un TEXT, le libellé pour un message
+    // structuré (« 👤 Jean Dupont »), rien pour un média — `pushNewMessage`
+    // pose alors son propre libellé selon le type.
+    const preview =
+      type === "TEXT" ? (content ?? "").slice(0, 120) : apercuStructure(type, content ?? null);
 
     for (const uid of recipients) {
       if (uid === ws.userId || isUserOnline(uid)) continue;
@@ -2612,7 +2639,8 @@ async function handleForwardMessage(ws, msg) {
       where: { id: targetConvId },
       data: {
         updatedAt: new Date(),
-        lastMessage: (original.content ?? "").slice(0, 500) || null,
+        lastMessage: apercuStructure(original.type, original.content)
+          ?? ((original.content ?? "").slice(0, 500) || null),
         lastMessageAt: new Date(),
         lastMessageSenderID: ws.userId,
         lastMessageType:

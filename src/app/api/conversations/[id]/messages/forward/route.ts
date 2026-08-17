@@ -4,6 +4,7 @@ import { ok, fail, handleError } from "@/lib/http";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
+import { apercuStructure } from "@/lib/message-payload.mjs";
 
 const forwardSchema = z.object({
   messageId: z.string().uuid(),
@@ -73,7 +74,11 @@ export const POST = withAuth(
           where: { id: targetConvId },
           data: {
             updatedAt: new Date(),
-            lastMessage: (original.content ?? "").slice(0, 500) || null,
+            // Un contact ou une position transféré garde son libellé lisible :
+            // la charge JSON ne doit jamais atterrir dans la liste des
+            // conversations (voir `message-payload.mjs`).
+            lastMessage: apercuStructure(original.type, original.content)
+              ?? ((original.content ?? "").slice(0, 500) || null),
             lastMessageAt: new Date(),
             lastMessageSenderID: userId,
             lastMessageType:

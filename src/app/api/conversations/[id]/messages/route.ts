@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { sendMessageSchema } from "@/lib/validation";
 import { assertParticipant } from "@/modules/messaging/access";
+import { apercuStructure } from "@/lib/message-payload.mjs";
 
 const PAGE_SIZE = 50;
 
@@ -227,7 +228,12 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   await prisma.conversation.update({
     where: { id: convId },
     data: {
-      lastMessage: (body.content ?? "").slice(0, 500) || null,
+      // Un CONTACT ou une LOCATION porte du JSON dans `content` : on dénormalise
+      // son LIBELLÉ, jamais la charge. `lastMessage` est lu tel quel par les
+      // trois clients dans la liste des conversations — y écrire la charge
+      // afficherait `{"v":1,…}` sous le nom du correspondant.
+      lastMessage: apercuStructure(body.type, body.content ?? null)
+        ?? ((body.content ?? "").slice(0, 500) || null),
       lastMessageAt: new Date(),
       lastMessageSenderID: userId,
       lastMessageType: body.type === "TEXT" ? 0 : body.type === "IMAGE" ? 1 : body.type === "AUDIO" ? 3 : body.type === "VIDEO" ? 4 : 2,

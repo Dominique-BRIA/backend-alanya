@@ -150,14 +150,27 @@ export async function pushNewMessage(prisma, {
   if (!isPushEnabled()) return;
 
   const title = convTitle || senderName || "Nouveau message";
+  // ⚠️ VIDEO manquait : une vidéo reçue application fermée annonçait
+  // « Nouveau message » sans rien dire de ce qui arrivait, `preview` étant nul
+  // pour tout ce qui n'est pas du TEXT.
+  //
+  // CONTACT et LOCATION passent par `preview`, que le serveur temps réel
+  // remplit avec leur libellé (« 👤 Jean Dupont ») : la notification annonce
+  // donc QUI ou QUOI est partagé, et jamais la charge JSON.
   const body =
     messageType === "IMAGE"
       ? `${senderName} : 🖼️ Image`
-      : messageType === "AUDIO"
-        ? `${senderName} : 🎤 Message vocal`
-        : messageType === "FILE"
-          ? `${senderName} : 📎 Fichier`
-          : preview || "Nouveau message";
+      : messageType === "VIDEO"
+        ? `${senderName} : 🎬 Vidéo`
+        : messageType === "AUDIO"
+          ? `${senderName} : 🎤 Message vocal`
+          : messageType === "FILE"
+            ? `${senderName} : 📎 Fichier`
+            : messageType === "CONTACT"
+              ? `${senderName} : ${preview || "👤 Contact"}`
+              : messageType === "LOCATION"
+                ? `${senderName} : ${preview || "📍 Position"}`
+                : preview || "Nouveau message";
 
   await sendPushToUser(prisma, recipientId, {
     title,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { chargeValide } from "@/lib/message-payload.mjs";
 
 /// `max(100)` est aligné sur la colonne `users.email`, ramenée à VARCHAR(100)
 /// pour suivre le référentiel équipe. Sans cette borne, un email plus long
@@ -176,10 +177,18 @@ export const createConversationSchema = z.object({
 
 export const sendMessageSchema = z.object({
   content: z.string().trim().min(1).max(8000).optional(),
-  type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO"]).default("TEXT"),
+  type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO", "CONTACT", "LOCATION"]).default("TEXT"),
   mediaId: z.string().uuid().optional(),
   mediaIds: z.array(z.string().uuid()).max(10).optional(),
   replyToId: z.string().uuid().optional(),
+}).refine((d) => chargeValide(d.type, d.content ?? null), {
+  // CONTACT et LOCATION portent leur charge en JSON dans `content` : sans ce
+  // contrôle, un client mal réglé écrirait une ligne que plus rien ne peut
+  // rendre — et l'erreur n'apparaîtrait que chez le destinataire, longtemps
+  // après. Le format est tenu par `src/lib/message-payload.mjs`, seul endroit
+  // que les trois clients traversent.
+  message: "Charge invalide : un message CONTACT ou LOCATION doit porter sa charge JSON dans content",
+  path: ["content"],
 });
 
 export const createStatusSchema = z.object({

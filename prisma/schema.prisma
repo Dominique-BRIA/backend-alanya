@@ -635,6 +635,12 @@ enum MessageType {
   AUDIO // message vocal
   VIDEO
   SYSTEM
+  /// Fiche de contact partagée. La charge est du JSON dans `content` —
+  /// voir `src/lib/message-payload.mjs`, qui tient le format pour les trois
+  /// clients. La photo éventuelle du contact est un média du message.
+  CONTACT
+  /// Position GPS partagée. Charge JSON dans `content` (même module).
+  LOCATION
 }
 
 enum MessageStatus {
