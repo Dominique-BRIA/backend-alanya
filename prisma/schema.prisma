@@ -158,6 +158,7 @@ model User {
   vocaux          Vocal[]          @relation("vocalCentre")
   musiques        CenterMusic[]    @relation("musiqueCentre")
   vocauxAttente   VocalAttente[]   @relation("vocalAttenteCentre")
+  audiosMenu      CenterAudio[]    @relation("audioCentreVocal")
 
   // --- Relations vers la file d'attente ---
   queueCenterFiles   QueueFile[]           @relation("QueueCenterUser")
@@ -1376,6 +1377,7 @@ model Company {
   Vocaux        Vocal[]
   Musiques      CenterMusic[]
   VocauxAttente VocalAttente[]
+  AudiosMenu    CenterAudio[]
 
   QueueFiles     QueueFile[]
   QueueFileHists QueueFileHistorique[]
@@ -1608,6 +1610,47 @@ model VocalAttente {
   @@index([idCompany], map: "vocal_attente_idCompany_idx")
   @@index([center_alanyaID], map: "vocal_attente_center_alanyaID_idx")
   @@map("vocal_attente")
+}
+
+/// Le menu d'un CENTRE VOCAL : un audio par touche.
+///
+/// ⚠️ TABLE DE LA PLATEFORME DU COLLÈGUE, présente en production bien avant
+/// d'être déclarée ici (18/08/2026) — comme l'ont été `geo`, `vocal`,
+/// `center_music` et `company.url_serveur`. Ne rien y ajouter sans l'équipe.
+///
+/// C'est l'équivalent de [Center] pour un centre vocal, et la différence tient
+/// en un mot : `center` fait pointer une touche vers un AGENT à faire sonner,
+/// `center_audio` la fait pointer vers un SON à jouer. Un centre vocal n'a donc
+/// aucune ligne `center`, et réciproquement.
+///
+/// ⚠️ `url_audio` est un CHEMIN, pas une URL — même piège que `Vocal.urlVocal` :
+/// les lignes de production valent `/uploads/audios_menu/…`, relatifs au serveur
+/// de la plateforme. Toujours passer par `resoudreUrlPlateforme` de `ivr.mjs`,
+/// jamais lire la colonne telle quelle.
+///
+/// L'unicité `(center_alanyaID, menunro)` est posée en base comme INDEX unique
+/// et non comme contrainte : une touche porte donc au plus un son, il n'y a
+/// aucun départage à écrire (contrairement à [Vocal], dont l'unicité inclut
+/// l'entreprise et qui peut avoir plusieurs lignes pour un même numéro).
+model CenterAudio {
+  idCenterAudio   Int      @id @default(autoincrement()) @map("idcenteraudio")
+  idCompany       Int      @map("idCompany")
+  center_alanyaID String   @map("center_alanyaID") @db.Uuid
+  /// La touche, bornée 0–9 en base par un CHECK — c'est un pavé téléphonique.
+  menuNro         Int      @map("menunro") @db.SmallInt
+  /// Le nom montré sur la touche. ⚠️ NULLABLE, et vide sur 3 des 4 lignes de
+  /// production : le repli est le nom du centre vocal, décidé par le user le
+  /// 18/08/2026 (même règle que `center.libelle` pour un centre d'appels).
+  titre           String?  @db.VarChar(150)
+  urlAudio        String   @map("url_audio") @db.VarChar(255)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User    @relation("audioCentreVocal", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([center_alanyaID, menuNro], map: "center_audio_center_menunro_key")
+  @@index([idCompany], map: "center_audio_idCompany_idx")
+  @@map("center_audio")
 }
 
 model AccesAdmin {
