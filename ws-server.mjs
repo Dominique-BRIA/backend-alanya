@@ -21,6 +21,7 @@ import {
   TYPES_STRUCTURES,
   chargeValide,
   apercuStructure,
+  apercuMessage,
 } from "./src/lib/message-payload.mjs";
 import {
   DELAI_MENU_MS,
@@ -874,7 +875,11 @@ async function handleSend(ws, msg) {
       // Libellé, jamais la charge : un CONTACT ou une LOCATION porte du JSON
       // dans `content`, et cette colonne est affichée telle quelle par les trois
       // clients dans la liste des conversations.
-      lastMessage: apercuStructure(type, content ?? null) ?? content?.slice(0, 500) ?? null,
+      // ⚠️ `apercuMessage` et non `apercuStructure` : ce dernier ne connaît que
+      // CONTACT et LOCATION, si bien qu'un média SANS LÉGENDE retombait sur un
+      // `content` vide et laissait la colonne à NULL — la liste affichait alors
+      // le dernier APPEL à la place de la photo (user, 18/08/2026).
+      lastMessage: apercuMessage(type, content ?? null)?.slice(0, 500) ?? null,
       lastMessageAt: new Date(),
       lastMessageSenderID: ws.userId,
       lastMessageType: type === "TEXT" ? 0 : type === "IMAGE" ? 1 : type === "AUDIO" ? 3 : type === "VIDEO" ? 4 : 2,
@@ -2931,8 +2936,9 @@ async function handleForwardMessage(ws, msg) {
       where: { id: targetConvId },
       data: {
         updatedAt: new Date(),
-        lastMessage: apercuStructure(original.type, original.content)
-          ?? ((original.content ?? "").slice(0, 500) || null),
+        // Même règle qu'à l'envoi : un média transféré sans légende laissait
+        // lui aussi la colonne à NULL.
+        lastMessage: apercuMessage(original.type, original.content)?.slice(0, 500) ?? null,
         lastMessageAt: new Date(),
         lastMessageSenderID: ws.userId,
         lastMessageType:

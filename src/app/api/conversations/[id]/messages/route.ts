@@ -4,7 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { sendMessageSchema } from "@/lib/validation";
 import { assertParticipant } from "@/modules/messaging/access";
-import { apercuStructure } from "@/lib/message-payload.mjs";
+import { apercuMessage } from "@/lib/message-payload.mjs";
 
 const PAGE_SIZE = 50;
 
@@ -232,8 +232,10 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       // son LIBELLÉ, jamais la charge. `lastMessage` est lu tel quel par les
       // trois clients dans la liste des conversations — y écrire la charge
       // afficherait `{"v":1,…}` sous le nom du correspondant.
-      lastMessage: apercuStructure(body.type, body.content ?? null)
-        ?? ((body.content ?? "").slice(0, 500) || null),
+      // ⚠️ `apercuMessage` : `apercuStructure` seul laissait la colonne à NULL
+      // pour un média sans légende, et la liste des conversations basculait
+      // alors sur l'aperçu du dernier appel (user, 18/08/2026).
+      lastMessage: apercuMessage(body.type, body.content ?? null)?.slice(0, 500) ?? null,
       lastMessageAt: new Date(),
       lastMessageSenderID: userId,
       lastMessageType: body.type === "TEXT" ? 0 : body.type === "IMAGE" ? 1 : body.type === "AUDIO" ? 3 : body.type === "VIDEO" ? 4 : 2,

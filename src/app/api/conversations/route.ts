@@ -6,6 +6,9 @@ import { createConversationSchema } from "@/lib/validation";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { serialiseAppelPour } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
+// Le libellé d'une ligne d'un message — la règle est décidée là, pour les trois
+// clients qui lisent `conversation.lastMessage` tel quel.
+import { apercuMessage } from "@/lib/message-payload.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 
 // Convertit le type entier (BD) en string (API)
@@ -107,7 +110,26 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
 
     // F11 : dernier message — utilise le champ dénormalisé OU le fallback
     const fallbackLast = conv.messages[0];
-    const lastContent = conv.lastMessage ?? fallbackLast?.content ?? null;
+    /*
+     * 🔴 LE REPLI PASSE PAR `apercuMessage`, ET C'EST CE QUI RÉPARE L'EXISTANT.
+     *
+     * Le défaut signalé le 18/08/2026 — « j'envoie une photo, la liste affiche
+     * l'état du dernier appel » — vient d'ici : pour un média SANS LÉGENDE,
+     * `conv.lastMessage` valait NULL (le libellé n'était calculé que pour
+     * CONTACT et LOCATION) et `fallbackLast.content` était vide lui aussi. La
+     * route rendait donc `lastMessage: null`, et le client bascule alors sur
+     * l'aperçu du dernier APPEL, sans condition.
+     *
+     * Corriger seulement l'écriture aurait laissé les conversations DÉJÀ dans
+     * cet état — 6 sur 94 en production — cassées jusqu'au message suivant.
+     * Calculer le libellé ici aussi les répare toutes, sans migration de
+     * données ni écriture : c'est une lecture, elle vaut pour l'historique.
+     */
+    const lastContent =
+      conv.lastMessage ??
+      (fallbackLast
+        ? apercuMessage(fallbackLast.type, fallbackLast.content)
+        : null);
     const lastType = conv.lastMessageType != null
         ? _typeToString(conv.lastMessageType)
         : (fallbackLast?.type ?? null);

@@ -4,7 +4,7 @@ import { ok, fail, handleError } from "@/lib/http";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
-import { apercuStructure } from "@/lib/message-payload.mjs";
+import { apercuMessage } from "@/lib/message-payload.mjs";
 
 const forwardSchema = z.object({
   messageId: z.string().uuid(),
@@ -77,8 +77,10 @@ export const POST = withAuth(
             // Un contact ou une position transféré garde son libellé lisible :
             // la charge JSON ne doit jamais atterrir dans la liste des
             // conversations (voir `message-payload.mjs`).
-            lastMessage: apercuStructure(original.type, original.content)
-              ?? ((original.content ?? "").slice(0, 500) || null),
+            // ⚠️ `apercuMessage` : un média transféré SANS légende laissait la
+            // colonne à NULL, et la liste basculait sur l'aperçu du dernier
+            // appel (user, 18/08/2026).
+            lastMessage: apercuMessage(original.type, original.content)?.slice(0, 500) ?? null,
             lastMessageAt: new Date(),
             lastMessageSenderID: userId,
             lastMessageType:

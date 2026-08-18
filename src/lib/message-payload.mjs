@@ -159,6 +159,55 @@ export function apercuStructure(type, content) {
   return null;
 }
 
+/**
+ * Le libellé d'UNE LIGNE d'un message, quel que soit son type.
+ *
+ * 🔴 CORRIGE UN DÉFAUT DE PRODUCTION (18/08/2026) : la colonne
+ * `conversation.lastMessage` valait **NULL** pour tout média SANS LÉGENDE.
+ * [apercuStructure] ne connaît que CONTACT et LOCATION, et les sites d'écriture
+ * repliaient sur `content`, vide dans ce cas. Mesuré en prod avant correction :
+ * 6 conversations sur 94 — 3 photos, 1 vidéo, 1 vocal, 1 fichier — toutes avec
+ * la colonne à NULL, contre 0 sur les 84 conversations en TEXT.
+ *
+ * Conséquence visible, signalée par le user : `GET /api/conversations` rend
+ * alors `lastMessage: null`, et le client fait gagner l'aperçu du dernier APPEL
+ * — « j'envoie une photo, la liste affiche l'état du dernier appel ».
+ *
+ * ⚠️ MIROIR EXACT de `apercuMessage` dans `alanya/lib/models/message_payload.dart`,
+ * et c'est ici que la règle est décidée : la colonne est lue TELLE QUELLE par
+ * les trois clients, y compris l'application de l'équipe qu'on ne recompile pas.
+ * Un libellé calculé côté client n'aurait corrigé qu'un client sur trois.
+ *
+ * `nomFichier` vient du média, que la charge utile ne porte pas.
+ */
+export function apercuMessage(type, content, nomFichier = null) {
+  const structure = apercuStructure(type, content);
+  if (structure !== null) return structure;
+
+  // `""` et `null` disent la même chose — « pas de texte ». Les distinguer
+  // était précisément le défaut : un média sans légende tombait entre les deux.
+  const texte = typeof content === "string" ? content.trim() : "";
+
+  switch (type) {
+    case "IMAGE":
+      return texte === "" ? "📷 Photo" : `📷 ${texte}`;
+    case "VIDEO":
+      return texte === "" ? "🎥 Vidéo" : `🎥 ${texte}`;
+    case "AUDIO":
+      return "🎤 Message vocal";
+    case "FILE": {
+      const nom = typeof nomFichier === "string" ? nomFichier.trim() : "";
+      if (nom !== "") return `📎 ${nom}`;
+      return texte === "" ? "📎 Fichier" : `📎 ${texte}`;
+    }
+    default:
+      // TEXT et tout type à venir. `null` et non `""` : la colonne est
+      // nullable, et une chaîne vide n'aurait pas le même sens pour les
+      // clients qui testent son absence.
+      return texte === "" ? null : texte;
+  }
+}
+
 /* --------------------------------------------------------------------------
  * Contrôles exécutables : `node src/lib/message-payload.mjs`
  *
@@ -216,6 +265,28 @@ if (process.argv[1] && process.argv[1].endsWith("message-payload.mjs")) {
   verifie("charge de contact sur un LOCATION → refusée", chargeValide("LOCATION", contactSimple), false);
   verifie("type non structuré → toujours valide", chargeValide("IMAGE", null), true);
   verifie("libellé d'un type non structuré → null", apercuStructure("IMAGE", null), null);
+
+  // --- apercuMessage : le défaut « la liste affiche le dernier appel » -------
+  //
+  // Le cas qui comptait est le média SANS légende : il rendait `null`, la route
+  // des conversations renvoyait `lastMessage: null`, et le client basculait sur
+  // l'aperçu d'appel. Les trois formes du vide sont donc contrôlées séparément.
+  verifie("photo sans légende → plus jamais null", apercuMessage("IMAGE", null), "📷 Photo");
+  verifie("photo, légende vide → plus jamais null", apercuMessage("IMAGE", ""), "📷 Photo");
+  verifie("photo, légende d'espaces → plus jamais null", apercuMessage("IMAGE", "   "), "📷 Photo");
+  verifie("photo légendée → la légende", apercuMessage("IMAGE", "au bureau"), "📷 au bureau");
+  verifie("vidéo sans légende", apercuMessage("VIDEO", null), "🎥 Vidéo");
+  verifie("vocal → libellé fixe", apercuMessage("AUDIO", null), "🎤 Message vocal");
+  verifie("document → le NOM du fichier", apercuMessage("FILE", "regarde", "contrat.pdf"), "📎 contrat.pdf");
+  verifie("fichier sans nom ni légende", apercuMessage("FILE", null), "📎 Fichier");
+  verifie("fichier sans nom, avec légende", apercuMessage("FILE", "le devis"), "📎 le devis");
+  // Le TEXTE garde `null` quand il est vide : la colonne est nullable, et une
+  // chaîne vide ne veut pas dire la même chose pour les clients.
+  verifie("texte → tel quel", apercuMessage("TEXT", "bonjour"), "bonjour");
+  verifie("texte vide → null, et non chaîne vide", apercuMessage("TEXT", ""), null);
+  // Les deux types structurés continuent de passer par apercuStructure.
+  verifie("contact → délégué à apercuStructure", apercuMessage("CONTACT", contactSimple), "👤 Jean Dupont");
+  verifie("position → déléguée à apercuStructure", apercuMessage("LOCATION", position), "📍 Position partagée");
 
   console.log(echecs === 0 ? "\nTous les contrôles passent." : `\n${echecs} contrôle(s) en échec.`);
   process.exitCode = echecs === 0 ? 0 : 1;
