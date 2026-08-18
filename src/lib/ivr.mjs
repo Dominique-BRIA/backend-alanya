@@ -10,6 +10,11 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
+// Même règle d'affichage que partout ailleurs (pseudo, puis nom, puis numéro) :
+// le repli de libellé d'une touche de centre vocal est le NOM DU CENTRE, il doit
+// donc être écrit exactement comme le client l'affiche par ailleurs.
+import { nomAffichage } from "./display-name.mjs";
+
 /**
  * Valeur de `users.type_compte` qui marque un NUMÉRO DE CENTRE D'APPELS.
  *
@@ -21,8 +26,41 @@ import path from "node:path";
  */
 export const TYPE_COMPTE_CENTRE = 3;
 
+/**
+ * Valeur de `users.type_compte` qui marque un CENTRE VOCAL.
+ *
+ * Un centre vocal est un centre d'appels dont les touches ne mènent à personne :
+ * chacune joue un SON au lieu de faire sonner un agent. Tout le reste est
+ * commun — l'invite d'accueil, le pavé, le minuteur, l'écran.
+ *
+ * 🔴 CETTE VALEUR ÉTAIT DÉJÀ ÉCRITE PAR `POST /api/auth/register-dev`, qui
+ * marquait ainsi les comptes développeurs. Le user a tranché le 18/08/2026 : 4
+ * désigne un centre vocal, la route développeur cesse d'y toucher (lot C). Le
+ * statut développeur était de toute façon porté par `developer_accounts` et
+ * `developer_api_keys` — aucun contrôle d'accès ne lisait `typeCompte`. Vérifié
+ * en production avant de trancher : les 3 comptes développeurs existants sont
+ * en `type_compte` 0, 0 et 2, aucun n'était à 4. Rien à migrer.
+ */
+export const TYPE_COMPTE_CENTRE_VOCAL = 4;
+
 /** Sans touche pendant ce délai, la session se referme. */
 export const DELAI_MENU_MS = 60_000;
+
+/**
+ * Plafond de sécurité sur la lecture d'un son de centre vocal.
+ *
+ * ⚠️ IL EN FAUT UN, et c'est une conséquence directe du choix « le son tourne en
+ * boucle » (user, 18/08/2026) : une boucle ne se termine jamais, donc aucun
+ * événement naturel ne referme la session. Sans ce plafond, un téléphone au fond
+ * d'une poche garderait un appel `RINGING` indéfiniment — et l'appelant
+ * resterait « occupé » pour tous ceux qui essaieraient de le joindre, puisque
+ * `estOccupe` se calcule sur les lignes `callParticipant` de cet appel.
+ *
+ * Volontairement TRÈS long : ce n'est pas un minuteur d'inactivité (l'appelant
+ * écoute, il n'est pas inactif), c'est un filet. Le minuteur de 60 s du menu,
+ * lui, reste suspendu pendant toute la lecture.
+ */
+export const DELAI_LECTURE_MAX_MS = 30 * 60_000;
 
 /**
  * L'agent ne décroche pas dans ce délai → retour au menu.
@@ -54,6 +92,23 @@ export const DELAI_ATTENTE_MAX_MS = dureeAttenteMaxMs();
 /** Ce compte est-il un numéro de centre d'appels ? */
 export function estCompteCentre(user) {
   return Number(user?.typeCompte) === TYPE_COMPTE_CENTRE;
+}
+
+/** Ce compte est-il un numéro de centre VOCAL ? */
+export function estCentreVocal(user) {
+  return Number(user?.typeCompte) === TYPE_COMPTE_CENTRE_VOCAL;
+}
+
+/**
+ * Ce compte ouvre-t-il un standard, de l'une ou l'autre sorte ?
+ *
+ * Existe pour que l'aiguillage de `handleCallRing` pose UNE question et non
+ * deux : les deux sortes partagent la garde de ré-entrée, le refus des appels
+ * de groupe et le fait que personne ne sonne. Seul ce qu'on ouvre ensuite
+ * diffère.
+ */
+export function ouvreUnStandard(user) {
+  return estCompteCentre(user) || estCentreVocal(user);
 }
 
 /**
@@ -123,9 +178,25 @@ export function resoudreUrlPlateforme(valeur, urlServeurEntreprise) {
    *
    * `VOCAL_BASE_URL` ensuite, pour faire marcher la seule entreprise existante
    * sans attendre que la colonne soit remplie.
+   *
+   * 🔴 CES DEUX-LÀ ET RIEN D'AUTRE (corrigé le 18/08/2026). La liste se
+   * terminait par `PUBLIC_BASE_URL` puis le littéral `"https://alanyavox.com"`,
+   * si bien que `base` n'était JAMAIS vide : le refus documenté juste en
+   * dessous était du code mort, et le cas « aucune base connue » produisait
+   * exactement l'URL en 404 que ce commentaire décrit comme le pire choix
+   * possible. Vérifié en exécutant la fonction sans les deux variables : elle
+   * rendait `https://alanyavox.com/uploads/…` au lieu de `null`.
+   *
+   * Ces deux replis-là étaient faux par nature, et pas seulement mal placés :
+   * ils désignent NOTRE domaine, alors qu'on cherche l'adresse du serveur de la
+   * PLATEFORME. Un chemin `/uploads/…` n'a jamais eu de sens chez nous.
+   *
+   * ⚠️ Sans effet sur la production actuelle, où `VOCAL_BASE_URL` est
+   * renseignée : seul le chemin dégradé change, et il passe d'un silence
+   * inexplicable à un repli sur les fichiers du dépôt.
    */
   const base =
-    [urlServeurEntreprise, process.env.VOCAL_BASE_URL, process.env.PUBLIC_BASE_URL, "https://alanyavox.com"]
+    [urlServeurEntreprise, process.env.VOCAL_BASE_URL]
       .map((v) => (typeof v === "string" ? v.trim() : ""))
       .find((v) => v.length > 0) ?? "";
 
@@ -478,6 +549,88 @@ function nomDeService(valeur) {
 }
 
 /**
+ * Le menu d'un CENTRE VOCAL, lu dans `center_audio`.
+ *
+ * Pendant de [lireMenuCentre], et volontairement écrit en miroir : même forme
+ * d'option en sortie, pour que tout ce qui vient après — `optionsPubliques`, le
+ * message `ivr_menu`, l'écran du client — ne sache pas de quelle sorte de
+ * standard il s'agit. La seule différence est ce vers quoi la touche pointe :
+ * `agentIds` pour un centre d'appels, `audioUrl` pour un centre vocal.
+ *
+ * ⚠️ AUCUNE TOUCHE 0 IMPLICITE ici, contrairement à [lireMenuCentre]. Là-bas,
+ * la touche 0 fait du centre son propre agent — un secours qui n'a de sens que
+ * s'il y a quelqu'un derrière. Un centre vocal n'a personne : fabriquer une
+ * touche 0 qui ne joue rien annoncerait une option muette. Le `0` de la
+ * production (« Information sur les produits ») est une VRAIE ligne
+ * `center_audio`, lue comme les autres.
+ *
+ * ⚠️ `url_audio` est un CHEMIN relatif au serveur de la plateforme, jamais une
+ * URL : on passe donc par `resoudreUrlPlateforme`, exactement comme l'invite
+ * d'accueil. Une ligne qu'on ne sait pas résoudre (ni `company.url_serveur` ni
+ * `VOCAL_BASE_URL`) donne `audioUrl: null` — la touche existe, s'affiche, et
+ * revient marquée indisponible. C'est la même honnêteté que « service annoncé
+ * mais pas encore desservi » du centre d'appels : mentir en répondant « choix
+ * invalide » à une touche que l'accueil vient d'annoncer serait pire.
+ *
+ * L'unicité `(center_alanyaID, menunro)` étant posée en base, une touche porte
+ * au plus une ligne : aucun départage à écrire, contrairement à `vocal`.
+ *
+ * Une panne de base ne doit jamais empêcher le standard d'ouvrir : l'échec est
+ * journalisé et traité comme un menu vide, que l'appelant du dessus refuse
+ * proprement.
+ */
+export async function lireMenuVocal(prisma, centre) {
+  if (!prisma?.centerAudio || !centre?.id) return [];
+
+  let lignes = [];
+  try {
+    lignes = await prisma.centerAudio.findMany({
+      where: { center_alanyaID: centre.id },
+      orderBy: { menuNro: "asc" },
+      select: {
+        menuNro: true,
+        titre: true,
+        urlAudio: true,
+        // L'entreprise est jointe pour son `url_serveur` : c'est elle qui dit
+        // où vivent SES fichiers. Même lecture que `urlRessourceDeCentre`.
+        company: { select: { urlServeur: true } },
+      },
+    });
+  } catch (e) {
+    console.error("[ivr] lecture de `center_audio`:", e?.message ?? e);
+    return [];
+  }
+
+  /*
+   * LE REPLI DE LIBELLÉ EST LE NOM DU CENTRE VOCAL (user, 18/08/2026).
+   *
+   * `titre` est nullable, et vide sur 3 des 4 lignes de production. Le client
+   * affiche `nomService ?? label` sur le pavé : en mettant le titre dans
+   * `nomService` et le nom du centre dans `label`, la règle demandée tombe
+   * toute seule, SANS UNE LIGNE DE CODE CLIENT — c'est exactement la mécanique
+   * du centre d'appels, où `center.libelle` sert de repli à `center.nom_service`.
+   */
+  const repli = nomDeService(nomAffichage(centre)) ?? centre.publicNumber ?? "Menu";
+
+  const options = [];
+  for (const l of lignes) {
+    const touche = Number(l.menuNro);
+    if (!Number.isFinite(touche)) continue;
+    options.push({
+      digit: touche,
+      label: repli,
+      nomService: nomDeService(l.titre),
+      audioUrl: resoudreUrlPlateforme(l.urlAudio, l.company?.urlServeur),
+      // Vide et jamais rempli : un centre vocal ne fait sonner personne. Le
+      // champ existe pour que l'option ait la MÊME FORME que celle d'un centre
+      // d'appels, ce dont dépend `optionsPubliques`.
+      agentIds: [],
+    });
+  }
+  return options.sort((a, b) => a.digit - b.digit);
+}
+
+/**
  * Ce qu'on envoie au CLIENT : la touche, son libellé, et si elle mène quelque
  * part. Rien d'autre.
  *
@@ -487,9 +640,16 @@ function nomDeService(valeur) {
  *
  * `disponible` est dérivé, jamais stocké : un service redevient joignable dès
  * qu'on lui rattache un agent en base, sans rien à mettre à jour ailleurs.
+ *
+ * ⚠️ `audioUrl` non plus n'est pas envoyé, et ce n'est pas un oubli : le son
+ * d'un centre vocal part avec `ivr_play`, à l'appui, et pas avec le menu. Le
+ * serveur reste ainsi le seul à décider ce qui se joue et quand — c'est lui qui
+ * tient l'état de la session, donc le minuteur du menu et le plafond de lecture.
+ * Envoyer la table des sons d'avance laisserait le client jouer sans que le
+ * serveur le sache, et les deux ne seraient plus d'accord sur l'étape en cours.
  */
 export function optionsPubliques(options) {
-  return options.map(({ digit, label, nomService, agentIds }) => ({
+  return options.map(({ digit, label, nomService, agentIds, audioUrl }) => ({
     digit,
     label,
     /*
@@ -502,7 +662,21 @@ export function optionsPubliques(options) {
      * impossible à écrire : « vide » ne se distinguerait plus de « replié ».
      */
     nomService: nomService ?? null,
-    disponible: agentIds.length > 0,
+    /*
+     * « CETTE TOUCHE MÈNE-T-ELLE QUELQUE PART ? » — une seule question, deux
+     * sortes de réponse.
+     *
+     * Un centre d'appels mène à un AGENT, un centre vocal à un SON. Écrire deux
+     * fonctions aurait dupliqué tout le reste de la sérialisation pour cette
+     * seule ligne, et les deux auraient fini par diverger sur ce que le client
+     * reçoit — c'est-à-dire sur le seul point qui compte ici.
+     *
+     * `audioUrl` est nul quand le chemin de la plateforme n'a pas pu être
+     * résolu ; `agentIds` est vide quand aucun agent ne dessert le service. Les
+     * deux veulent dire la même chose à l'appelant : la touche est annoncée,
+     * elle s'affiche, mais elle est grisée et l'appui a son propre message.
+     */
+    disponible: audioUrl != null || agentIds.length > 0,
   }));
 }
 

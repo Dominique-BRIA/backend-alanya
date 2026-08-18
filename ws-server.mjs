@@ -29,8 +29,11 @@ import {
   agentDisponible,
   choisirMusiqueAttente,
   urlsVocalAttente,
-  estCompteCentre,
+  DELAI_LECTURE_MAX_MS,
+  estCentreVocal,
+  ouvreUnStandard,
   lireMenuCentre,
+  lireMenuVocal,
   optionsPubliques,
   urlInviteCentre,
 } from "./src/lib/ivr.mjs";
@@ -1340,8 +1343,13 @@ function fermerSessionIvr(callId) {
   if (!session) return;
   if (session.minuteur) clearTimeout(session.minuteur);
   if (session.pollingInterval) clearInterval(session.pollingInterval);
+  // Le plafond de lecture d'un centre vocal. Oublié ici, il survivrait à la
+  // session : 30 min plus tard il enverrait un message de fin à un appelant qui
+  // a raccroché depuis longtemps, ou pire, en pleine autre communication.
+  if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
   session.minuteur = null;
   session.pollingInterval = null;
+  session.minuteurLecture = null;
 
   if (session.etape === "attente" && session.centreId && session.appelantId) {
     abandonnerFileWS(prisma, session.centreId, session.appelantId);
@@ -1486,6 +1494,124 @@ async function ouvrirSessionIvr(ws, call, centre) {
     options: optionsPubliques(options),
   });
   console.log(`[ivr] menu ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} service(s)`);
+}
+
+/**
+ * Ouvre un CENTRE VOCAL : personne ne sonne, et personne ne sonnera jamais.
+ *
+ * Miroir de [ouvrirSessionIvr], réduit à ce qu'un centre vocal utilise
+ * réellement. Ce qui en est ABSENT est aussi délibéré que ce qui y figure :
+ *
+ *  - pas de musique d'attente ni de `vocal_attente` — on n'attend rien ni
+ *    personne, l'appui joue le son immédiatement ;
+ *  - pas de `centreCompanyId` pour la file : aucune écriture dans `file` ni
+ *    `file_historique`, ces tables décrivent des clients à mettre en relation
+ *    avec un agent. Un centre vocal n'en a pas, y écrire fabriquerait des
+ *    « clients à rappeler » que personne ne rappellera ;
+ *  - pas d'`idHist`, donc pas de demande de notation à la fin : on ne note pas
+ *    un message enregistré ;
+ *  - pas de réécriture d'anonymat : il n'y a aucun agent dont l'identité
+ *    pourrait fuir.
+ *
+ * `mode: "vocal"` voyage jusqu'au client, qui en a besoin pour son écran (un
+ * bouton « Retour à l'accueil » plutôt qu'une mise en relation). Un client plus
+ * ancien qui ignore le champ affichera le pavé et enverra ses touches — le
+ * serveur, lui, répondra `ivr_play` : dégradé, jamais cassé.
+ */
+async function ouvrirSessionVocale(ws, call, centre) {
+  const nomCentre = nomAffichage(centre) ?? centre.publicNumber;
+  const options = await lireMenuVocal(prisma, centre);
+
+  if (options.length === 0) {
+    sendTo(ws.userId, {
+      type: "ivr_error",
+      callId: call.id,
+      code: "no_service",
+      retry: false,
+      message: `${nomCentre} n'a aucun menu disponible pour le moment.`,
+    });
+    await cloreAppelIvr(call.id);
+    return;
+  }
+
+  // Même raison qu'au centre d'appels : une session résiduelle sur le même
+  // identifiant ne doit pas emporter le nouvel appel avec elle.
+  fermerSessionIvr(call.id);
+
+  const session = {
+    callId: call.id,
+    convId: call.convId,
+    appelantId: ws.userId,
+    centreId: centre.id,
+    centreCompanyId: centre.idCompany,
+    nomCentre,
+    centrePublicNumber: centre.publicNumber,
+    options,
+    mode: "vocal",
+    etape: "menu",
+    minuteur: null,
+    // Armé seulement pendant une lecture, et le seul minuteur qui puisse
+    // refermer la session tant qu'un son tourne en boucle.
+    minuteurLecture: null,
+    // La touche en cours de lecture, ou nulle hors de cet état. Sert à ignorer
+    // un ré-appui sur la touche DÉJÀ en train de jouer : le son boucle, le
+    // relancer le ferait repartir du début sans que l'appelant l'ait demandé.
+    toucheEnLecture: null,
+    // Jamais posés pour un centre vocal — déclarés pour que les chemins de
+    // sortie partagés (`fermerSessionIvr`, `handleCallState`) trouvent la même
+    // forme d'objet que pour un centre d'appels.
+    agentId: null,
+    agentLabel: null,
+    idHist: null,
+  };
+  sessionsIvr.set(call.id, session);
+  armerMinuteurMenu(session);
+
+  ws.callIdActif = call.id;
+
+  await envoyerMenuVocal(session, centre);
+  console.log(
+    `[ivr] menu VOCAL ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} touche(s)`,
+  );
+}
+
+/**
+ * Envoie (ou renvoie) le menu d'accueil d'un centre vocal.
+ *
+ * Extrait parce qu'il sert DEUX FOIS, et que les deux doivent être identiques :
+ * à l'ouverture, et au retour à l'accueil demandé par l'appelant. Le client
+ * rejoue l'invite en boucle sur réception d'`ivr_menu` — c'est ce qui fait que
+ * « Retour à l'accueil » n'a besoin d'aucun message dédié ni d'aucun code de
+ * lecture supplémentaire côté client : il réemprunte un chemin déjà éprouvé sur
+ * device.
+ *
+ * ⚠️ `promptUrl` est relu à chaque envoi et non mémorisé : la plateforme peut
+ * changer l'invite pendant l'appel, et surtout une lecture qui aurait échoué à
+ * l'ouverture a une seconde chance ici.
+ */
+async function envoyerMenuVocal(session, centre) {
+  envoieAAppelant(session, {
+    type: "ivr_menu",
+    mode: "vocal",
+    callId: session.callId,
+    convId: session.convId,
+    centerId: session.centreId,
+    centerName: session.nomCentre,
+    centerNumber: session.centrePublicNumber,
+    centerAvatarUrl: centre?.avatarUrl ?? null,
+    promptUrl: await urlInviteCentre(prisma, {
+      id: session.centreId,
+      publicNumber: session.centrePublicNumber,
+      idCompany: session.centreCompanyId,
+    }),
+    promptLoop: true,
+    // Ni musique d'attente ni file : un centre vocal ne fait patienter personne.
+    // Envoyés explicitement à `null`/vide plutôt qu'omis, pour qu'un client qui
+    // réutilise une session précédente ne conserve pas les URL de la sienne.
+    holdUrl: null,
+    queueUrls: [],
+    options: optionsPubliques(session.options),
+  });
 }
 
 /**
@@ -1799,14 +1925,168 @@ function armerQueuePolling(session, option, touche) {
   }, 4000);
 }
 
+/**
+ * L'appelant tape une touche d'un CENTRE VOCAL : on joue le son, point.
+ *
+ * Aucun agent à chercher, donc aucune file, aucune sonnerie, aucun minuteur de
+ * décrochage. Les deux refus possibles reprennent mot pour mot la sémantique du
+ * centre d'appels — `invalid` pour une touche qui n'existe pas, `unavailable`
+ * pour une touche annoncée dont le son est introuvable — parce que l'appelant
+ * ne fait pas la différence entre les deux sortes de standard et n'a pas à la
+ * faire.
+ *
+ * ⚠️ LE SON TOURNE EN BOUCLE (décision du user, 18/08/2026). Trois conséquences
+ * qui tiennent toutes dans cette fonction :
+ *  - le minuteur de 60 s du menu est COUPÉ : l'appelant écoute, il n'est pas
+ *    inactif, et une boucle n'arrive jamais à sa fin pour le réarmer ;
+ *  - il est remplacé par le plafond de sécurité, seul moyen de refermer une
+ *    session dont plus personne ne s'occupe ;
+ *  - un ré-appui sur la touche DÉJÀ en lecture est ignoré. Sans cette garde, il
+ *    ferait repartir le son du début, ce que personne n'a demandé — et c'est
+ *    exactement le geste qu'on fait quand on croit que « ça n'a pas marché ».
+ */
+async function handleIvrDtmfVocal(session, touche) {
+  const option = session.options.find((o) => o.digit === touche);
+  const menu = optionsPubliques(session.options);
+
+  if (!option) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId: session.callId,
+      code: "invalid",
+      retry: true,
+      message: "Ce choix ne correspond à aucune option.",
+      options: menu,
+    });
+  }
+  if (option.audioUrl == null) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId: session.callId,
+      code: "unavailable",
+      retry: true,
+      message: `${option.nomService ?? option.label} n'est pas disponible pour le moment.`,
+      options: menu,
+    });
+  }
+
+  // Déjà en train de jouer CETTE touche : on ne relance rien.
+  if (session.etape === "lecture" && session.toucheEnLecture === touche) return;
+
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  session.etape = "lecture";
+  session.toucheEnLecture = touche;
+  armerPlafondLecture(session);
+
+  envoieAAppelant(session, {
+    type: "ivr_play",
+    callId: session.callId,
+    digit: touche,
+    // Les deux libellés sont envoyés pour la même raison qu'à `ivr_hold` : le
+    // client afficherait sinon le nom d'une touche en le retrouvant dans une
+    // liste d'options qu'un retour à l'accueil peut avoir remplacée entre-temps.
+    label: option.label,
+    nomService: option.nomService ?? null,
+    audioUrl: option.audioUrl,
+    // Explicite, et non déduit côté client : c'est le serveur qui décide de la
+    // règle de lecture, et elle pourra changer sans nouvel APK.
+    loop: true,
+  });
+  console.log(
+    `[ivr] touche ${touche} « ${option.nomService ?? option.label} » — appel ${session.callId}, lecture vocale`,
+  );
+}
+
+/**
+ * Le plafond de sécurité d'une lecture en boucle — voir `DELAI_LECTURE_MAX_MS`.
+ *
+ * Referme comme le minuteur du menu : un `ivr_error` sans `call_ended`, pour que
+ * le message ait le temps d'être lu avant que le client décide de raccrocher.
+ */
+function armerPlafondLecture(session) {
+  if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
+  session.minuteurLecture = setTimeout(async () => {
+    const vivante = sessionsIvr.get(session.callId);
+    if (!vivante || vivante.etape !== "lecture") return;
+    console.log(`[ivr] lecture vocale plafonnée (30 min) — appel ${vivante.callId}`);
+    envoieAAppelant(vivante, {
+      type: "ivr_error",
+      callId: vivante.callId,
+      code: "timeout",
+      retry: false,
+      message: "Fin de la communication. Rappelez quand vous voudrez.",
+    });
+    fermerSessionIvr(vivante.callId);
+    await cloreAppelIvr(vivante.callId);
+  }, DELAI_LECTURE_MAX_MS);
+}
+
+/**
+ * « Retour à l'accueil » d'un centre vocal.
+ *
+ * Répond en RENVOYANT `ivr_menu`, et non par un message dédié : le client sait
+ * déjà traiter ce message — il rebâtit son écran et rejoue l'invite en boucle —
+ * ce qui fait tenir tout le retour à l'accueil sur un chemin déjà éprouvé sur
+ * device. Le menu est relu au passage, donc une touche dont le son est devenu
+ * résoluble depuis l'ouverture cesse d'être grisée.
+ *
+ * Sans effet sur un centre d'APPELS : là-bas le retour au menu est décidé par le
+ * serveur (agent qui ne répond pas, refus, file expirée), jamais demandé par
+ * l'appelant, et laisser ce message y toucher permettrait de sortir d'une mise
+ * en relation en cours par un simple bouton.
+ */
+async function handleIvrBack(ws, msg) {
+  const session = sessionIvr(msg?.callId);
+  if (!session || session.appelantId !== ws.userId) return;
+  if (session.mode !== "vocal") return;
+  if (session.etape !== "lecture") return;
+
+  if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
+  session.minuteurLecture = null;
+  session.toucheEnLecture = null;
+
+  // Relit le menu : une touche peut être devenue disponible depuis l'ouverture.
+  const centre = await prisma.user
+    .findUnique({
+      where: { id: session.centreId },
+      select: { id: true, nom: true, pseudo: true, publicNumber: true, avatarUrl: true, idCompany: true },
+    })
+    .catch(() => null);
+  if (centre) {
+    const options = await lireMenuVocal(prisma, centre);
+    // ⚠️ Un menu devenu VIDE ne remplace pas celui qu'on a : l'appelant se
+    // retrouverait devant un pavé sans aucune touche, sans rien pour expliquer
+    // pourquoi. Une lecture qui échoue laisse l'écran tel qu'il était.
+    if (options.length > 0) session.options = options;
+  }
+
+  // Repose l'étape ET le minuteur de 60 s, suspendu pendant toute la lecture.
+  armerMinuteurMenu(session);
+  await envoyerMenuVocal(session, centre);
+  console.log(`[ivr] retour à l'accueil — appel ${session.callId}`);
+}
+
 async function handleIvrDtmf(ws, msg) {
   const { callId, digit } = msg;
   const session = sessionIvr(callId);
 
   if (!session || session.appelantId !== ws.userId) return;
+
+  /*
+   * ⚠️ « lecture » EST UN ÉTAT QUI ACCEPTE LES TOUCHES, contrairement à
+   * « sonnerie » : le user a demandé de pouvoir passer d'un son à l'autre sans
+   * repasser par l'accueil. C'est pour cela que la garde d'étape est écrite par
+   * sorte de standard et non une fois pour toutes.
+   */
+  const touche = Number(digit);
+  if (session.mode === "vocal") {
+    if (session.etape !== "menu" && session.etape !== "lecture") return;
+    return handleIvrDtmfVocal(session, touche);
+  }
+
   if (session.etape !== "menu" && session.etape !== "attente") return;
 
-  const touche = Number(digit);
   const option = session.options.find((o) => o.digit === touche);
   const menu = optionsPubliques(session.options);
 
@@ -1989,7 +2269,16 @@ async function handleCallRing(ws, msg) {
         idCompany: true,
       },
     });
-    if (estCompteCentre(cible)) {
+    /*
+     * DEUX SORTES DE STANDARD, UN SEUL AIGUILLAGE.
+     *
+     * `type_compte = 3` mène à un agent, `= 4` à un son (centre vocal). Tout ce
+     * qui précède la bascule leur est commun — le tête-à-tête, la garde de
+     * ré-entrée, le fait que personne ne sonne — d'où la question unique. Les
+     * séparer aurait dupliqué la garde ci-dessous, c'est-à-dire le seul endroit
+     * où un oubli ne se voit pas tout de suite.
+     */
+    if (ouvreUnStandard(cible)) {
       /**
        * ⚠️ GARDE DE RÉ-ENTRÉE. `call_ring` n'arrive pas forcément une seule
        * fois : le client web le RENVOIE à 4 s et à 10 s, au cas où le premier se
@@ -1997,10 +2286,13 @@ async function handleCallRing(ws, msg) {
        * appel ordinaire — le destinataire ignore un appel déjà connu — mais
        * dévastateur ici : le menu repartirait de zéro, l'invite se rejouerait
        * par-dessus, et surtout un agent déjà sollicité se retrouverait à sonner
-       * pour une session que plus personne ne référence.
+       * pour une session que plus personne ne référence. Vaut tout autant pour
+       * un centre vocal, où le second passage couperait le son en cours de
+       * lecture pour rouvrir un menu que l'appelant n'a pas redemandé.
        */
       if (sessionsIvr.has(callId)) return;
-      await ouvrirSessionIvr(ws, call, cible);
+      if (estCentreVocal(cible)) await ouvrirSessionVocale(ws, call, cible);
+      else await ouvrirSessionIvr(ws, call, cible);
       return; // personne ne sonne
     }
   }
@@ -3120,6 +3412,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_state") await handleCallState(ws, msg);
       else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
       else if (msg.type === "ivr_dtmf") await handleIvrDtmf(ws, msg);
+      else if (msg.type === "ivr_back") await handleIvrBack(ws, msg);
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
       else if (msg.type === "edit_message") await handleEditMessage(ws, msg);
       else if (msg.type === "pin_message") await handlePinMessage(ws, msg);
