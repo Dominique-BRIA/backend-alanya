@@ -43,7 +43,28 @@ export async function POST(req: NextRequest) {
         ? avatarUrl.trim()
         : `https://api.dicebear.com/7.x/icons/svg?seed=dev_${encodeURIComponent(user.email)}`;
 
-    // Mise à jour de l'utilisateur avec typeCompte = 4 (Développeur)
+    /*
+     * 🔴 `typeCompte` N'EST PLUS TOUCHÉ ICI (18/08/2026).
+     *
+     * Cette route posait `typeCompte = 4` pour marquer un compte développeur.
+     * Or 4 désigne un CENTRE VOCAL dans le référentiel de l'équipe
+     * (`TYPE_COMPTE_CENTRE_VOCAL` de `src/lib/ivr.mjs`, compte `303030` en
+     * production). Les deux sens ne peuvent pas coexister : depuis le lot A,
+     * `handleCallRing` ouvre un standard vocal devant tout compte à 4, si bien
+     * qu'une inscription développeur aurait rendu son auteur INJOIGNABLE —
+     * quiconque l'appelle tomberait sur un menu au lieu de le faire sonner.
+     *
+     * Rien n'est perdu : le statut développeur est porté par les tables
+     * `developer_accounts` et `developer_api_keys`, et c'est déjà sur elles que
+     * repose TOUT le contrôle d'accès des routes `/api/developer/*` et
+     * `/api/v1/*` — aucune ne lit `typeCompte`. La ligne était donc décorative.
+     * Vérifié en production avant de la retirer : les 3 comptes développeurs
+     * existants sont en `type_compte` 0, 0 et 2, aucun n'était à 4. Aucune
+     * donnée à migrer.
+     *
+     * Le compte garde ainsi son type d'origine — un développeur reste un
+     * utilisateur ordinaire, joignable comme tel, qui a en plus une clé d'API.
+     */
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
@@ -53,7 +74,6 @@ export async function POST(req: NextRequest) {
         mobile: mobile ? mobile.trim() : null,
         idPays: idPays ? Number(idPays) : null,
         avatarUrl: finalAvatar,
-        typeCompte: 4, // 4 = Développeur
       },
     });
 
