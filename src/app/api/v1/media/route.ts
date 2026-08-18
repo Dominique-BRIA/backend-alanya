@@ -2,6 +2,7 @@ import { type NextRequest } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { ok, fail } from '@/lib/http';
 import { validateApiKey } from '@/lib/developer/key-service';
+import { CODE } from '@/lib/developer/api-contract';
 
 // POST /api/v1/media — Upload de média conforme WhatsApp Cloud API (obtention d'un media_id)
 export async function POST(req: NextRequest) {
@@ -11,12 +12,12 @@ export async function POST(req: NextRequest) {
     const rawKey = authHeader.replace(/^Bearer\s+/i, '') || customHeader;
 
     if (!rawKey) {
-      return fail('Clé API manquante.', 401);
+      return fail('Clé API manquante.', 401, CODE.CLE_MANQUANTE);
     }
 
     const keyData = await validateApiKey(rawKey);
     if (!keyData || !keyData.developer) {
-      return fail('Clé API invalide ou révoquée.', 401);
+      return fail('Clé API invalide ou révoquée.', 401, CODE.CLE_INVALIDE);
     }
 
     const developer = keyData.developer;
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
     const mimeType = body.mimeType || body.messaging_product || 'image/png';
 
     if (!fileUrl) {
-      return fail('Le champ url (URL du fichier) est requis.', 400);
+      return fail('Le champ url (URL du fichier) est requis.', 400, CODE.REQUETE_INVALIDE);
     }
 
     const media = await prisma.developerMedia.create({
@@ -52,6 +53,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('[API Media Upload] Erreur:', error);
-    return fail('Erreur d\'enregistrement du média', 500);
+    return fail('Erreur d\'enregistrement du média', 500, CODE.ERREUR_INTERNE);
   }
 }

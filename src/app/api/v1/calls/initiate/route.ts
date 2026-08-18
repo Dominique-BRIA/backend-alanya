@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { ok, fail } from '@/lib/http';
 import { validateApiKey } from '@/lib/developer/key-service';
 import { reserveCallHold, DEFAULT_CALL_HOLD_CREDITS } from '@/lib/developer/ledger-service';
+import { CODE, STATUT_SOLDE_INSUFFISANT } from '@/lib/developer/api-contract';
 
 // POST /api/v1/calls/initiate — API Développeur v1 : Initiation d'appel WebRTC (HOLD 50 crédits)
 export async function POST(req: NextRequest) {
@@ -13,12 +14,12 @@ export async function POST(req: NextRequest) {
     const rawKey = authHeader.replace(/^Bearer\s+/i, '') || customHeader;
 
     if (!rawKey) {
-      return fail('Clé API manquante. En-tête X-Api-Key ou Authorization: Bearer ak_... requis.', 401);
+      return fail('Clé API manquante. En-tête X-Api-Key ou Authorization: Bearer ak_... requis.', 401, CODE.CLE_MANQUANTE);
     }
 
     const keyData = await validateApiKey(rawKey);
     if (!keyData || !keyData.developer) {
-      return fail('Clé API invalide, révoquée ou introuvable.', 401);
+      return fail('Clé API invalide, révoquée ou introuvable.', 401, CODE.CLE_INVALIDE);
     }
 
     const developer = keyData.developer;
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
     const isVideo = Boolean(body.isVideo);
 
     if (!recipientNumber) {
-      return fail('Le champ recipientNumber est requis.', 400);
+      return fail('Le champ recipientNumber est requis.', 400, CODE.REQUETE_INVALIDE);
     }
 
     // 3. Identification du destinataire
@@ -41,7 +42,7 @@ export async function POST(req: NextRequest) {
     });
 
     if (!recipient) {
-      return fail(`Destinataire Alanya introuvable avec le numéro ${recipientNumber}.`, 404);
+      return fail(`Destinataire Alanya introuvable avec le numéro ${recipientNumber}.`, 404, CODE.DESTINATAIRE_INTROUVABLE);
     }
 
     const callId = `call_api_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -50,9 +51,11 @@ export async function POST(req: NextRequest) {
     const holdResult = await reserveCallHold(developer.id, callId, DEFAULT_CALL_HOLD_CREDITS);
 
     if (!holdResult.success) {
+      // 402 et non 429 — voir `api-contract.ts` : recharger, pas réessayer.
       return fail(
         holdResult.error || 'Solde insuffisant pour réserver un appel (50 crédits requis pour 5 min).',
-        429
+        STATUT_SOLDE_INSUFFISANT,
+        CODE.SOLDE_INSUFFISANT,
       );
     }
 
@@ -67,6 +70,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('[API v1 Calls] Erreur d\'initiation d\'appel:', error);
-    return fail('Erreur interne lors de l\'initiation d\'appel API.', 500);
+    return fail('Erreur interne lors de l\'initiation d\'appel API.', 500, CODE.ERREUR_INTERNE);
   }
 }

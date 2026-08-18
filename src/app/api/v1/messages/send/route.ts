@@ -3,6 +3,12 @@ import { prisma } from '@/lib/prisma';
 import { ok, fail } from '@/lib/http';
 import { validateApiKey } from '@/lib/developer/key-service';
 import { debitMessageQuota, COST_PER_MESSAGE } from '@/lib/developer/ledger-service';
+import {
+  CODE,
+  STATUT_SOLDE_INSUFFISANT,
+  identifiantPublic,
+} from '@/lib/developer/api-contract';
+import { randomUUID } from 'crypto';
 
 // POST /api/v1/messages/send — Conforme WhatsApp Cloud API & Alanya Dev API (1 Crédit)
 export async function POST(req: NextRequest) {
@@ -17,12 +23,16 @@ export async function POST(req: NextRequest) {
     const rawKey = authHeader.replace(/^Bearer\s+/i, '') || customHeader;
 
     if (!rawKey) {
-      return fail('Clé API manquante. En-tête X-Api-Key ou Authorization: Bearer ak_... requis.', 401);
+      return fail(
+        'Clé API manquante. En-tête X-Api-Key ou Authorization: Bearer ak_... requis.',
+        401,
+        CODE.CLE_MANQUANTE,
+      );
     }
 
     const keyData = await validateApiKey(rawKey);
     if (!keyData || !keyData.developer) {
-      return fail('Clé API invalide, révoquée ou introuvable.', 401);
+      return fail('Clé API invalide, révoquée ou introuvable.', 401, CODE.CLE_INVALIDE);
     }
 
     const developer = keyData.developer;
@@ -76,7 +86,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (!recipientNumber || (!content && !mediaUrl)) {
-      const res = fail('Le destinataire (to / recipientNumber) et un contenu/média sont requis.', 400);
+      const res = fail(
+        'Le destinataire (to / recipientNumber) et un contenu/média sont requis.',
+        400,
+        CODE.REQUETE_INVALIDE,
+      );
       void logTelemetry(devId, keyPrefix, '/api/v1/messages/send', 'POST', 400, Date.now() - startTime);
       return res;
     }
@@ -88,18 +102,53 @@ export async function POST(req: NextRequest) {
     });
 
     if (!recipient) {
-      const res = fail(`Destinataire Alanya introuvable avec le numéro ${recipientNumber}.`, 404);
+      const res = fail(
+        `Destinataire Alanya introuvable avec le numéro ${recipientNumber}.`,
+        404,
+        CODE.DESTINATAIRE_INTROUVABLE,
+      );
       void logTelemetry(devId, keyPrefix, '/api/v1/messages/send', 'POST', 404, Date.now() - startTime);
       return res;
     }
 
-    const messageId = `wamid.${Date.now()}.${Math.random().toString(36).slice(2, 9)}`;
+    /*
+     * 🔴 L'IDENTIFIANT EST TIRÉ MAINTENANT, ET C'EST CELUI DE LA LIGNE `message`.
+     *
+     * Il était fabriqué à partir de l'horloge et de `Math.random()`, donc il ne
+     * désignait rien — surtout pas le message créé juste après. Il partait
+     * pourtant dans la réponse au développeur, dans le registre de facturation
+     * et dans le webhook : trois pistes d'audit qui ne menaient nulle part.
+     *
+     * Le tirer AVANT le débit est ce qui permet aux trois de porter la même
+     * valeur, alors que le débit précède forcément la création du message.
+     */
+    const messageId = randomUUID();
 
     // 4. Débit du crédit ALC
     const debitResult = await debitMessageQuota(developer.id, messageId, COST_PER_MESSAGE);
     if (!debitResult.success) {
-      const res = fail(debitResult.error || 'Solde de crédits insuffisant. Veuillez recharger votre compte.', 429);
-      void logTelemetry(devId, keyPrefix, '/api/v1/messages/send', 'POST', 429, Date.now() - startTime);
+      /*
+       * ⚠️ 402 ET NON 429 (contrat gelé le 18/08/2026, voir `api-contract.ts`).
+       *
+       * Les deux disent « refusé », mais la conduite à tenir est opposée : sur
+       * 402 il faut recharger, sur 429 attendre. Tant que le solde répondait
+       * 429, un client bien écrit réessayait en boucle une requête que seul un
+       * paiement pouvait débloquer — et la future limitation de débit, qui doit
+       * répondre 429, serait devenue indiscernable.
+       */
+      const res = fail(
+        debitResult.error || 'Solde de crédits insuffisant. Veuillez recharger votre compte.',
+        STATUT_SOLDE_INSUFFISANT,
+        CODE.SOLDE_INSUFFISANT,
+      );
+      void logTelemetry(
+        devId,
+        keyPrefix,
+        '/api/v1/messages/send',
+        'POST',
+        STATUT_SOLDE_INSUFFISANT,
+        Date.now() - startTime,
+      );
       return res;
     }
 
@@ -124,6 +173,10 @@ export async function POST(req: NextRequest) {
     // 6. Sauvegarde du message en base
     const savedMessage = await prisma.message.create({
       data: {
+        // Identifiant IMPOSÉ, et non laissé au défaut : c'est lui qui relie la
+        // réponse rendue au développeur, la ligne du registre de facturation et
+        // le webhook à ce message précis.
+        id: messageId,
         convId: conversation.id,
         senderId: senderUserId,
         content: content || null,
@@ -178,7 +231,12 @@ export async function POST(req: NextRequest) {
     }
 
     // 10. Notification Webhook Développeur (Callback de statut WhatsApp `delivered`)
-    void dispatchDeveloperWebhook(developer.id, messageId, 'delivered', recipient.publicNumber);
+    void dispatchDeveloperWebhook(
+      developer.id,
+      identifiantPublic(messageId),
+      'delivered',
+      recipient.publicNumber,
+    );
 
     // 11. Télémétrie & Réponse au format WhatsApp Cloud API
     void logTelemetry(devId, keyPrefix, '/api/v1/messages/send', 'POST', 200, Date.now() - startTime);
@@ -186,7 +244,7 @@ export async function POST(req: NextRequest) {
     return ok({
       messaging_product: 'alanya',
       contacts: [{ input: recipientNumber, wa_id: recipient.publicNumber }],
-      messages: [{ id: messageId, message_status: 'accepted' }],
+      messages: [{ id: identifiantPublic(messageId), message_status: 'accepted' }],
       creditsConsumed: COST_PER_MESSAGE.toString(),
       balanceRemaining: debitResult.balanceRemaining?.toString(),
     });
@@ -195,7 +253,11 @@ export async function POST(req: NextRequest) {
     if (devId) {
       void logTelemetry(devId, keyPrefix, '/api/v1/messages/send', 'POST', 500, Date.now() - startTime);
     }
-    return fail('Erreur interne du serveur lors de l\'envoi du message API.', 500);
+    return fail(
+      'Erreur interne du serveur lors de l\'envoi du message API.',
+      500,
+      CODE.ERREUR_INTERNE,
+    );
   }
 }
 

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { ok, fail } from '@/lib/http';
 import { validateApiKey } from '@/lib/developer/key-service';
 import { debitMessageQuota, COST_PER_MESSAGE } from '@/lib/developer/ledger-service';
+import { CODE, STATUT_SOLDE_INSUFFISANT } from '@/lib/developer/api-contract';
 
 // POST /api/v1/auth/otp/send — Génération et envoi de code OTP (1 Crédit ALC)
 export async function POST(req: NextRequest) {
@@ -12,12 +13,12 @@ export async function POST(req: NextRequest) {
     const rawKey = authHeader.replace(/^Bearer\s+/i, '') || customHeader;
 
     if (!rawKey) {
-      return fail('Clé API manquante.', 401);
+      return fail('Clé API manquante.', 401, CODE.CLE_MANQUANTE);
     }
 
     const keyData = await validateApiKey(rawKey);
     if (!keyData || !keyData.developer) {
-      return fail('Clé API invalide ou révoquée.', 401);
+      return fail('Clé API invalide ou révoquée.', 401, CODE.CLE_INVALIDE);
     }
 
     const developer = keyData.developer;
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
     const recipientNumber = body.recipientNumber?.toString().trim();
 
     if (!recipientNumber) {
-      return fail('Le champ recipientNumber est requis.', 400);
+      return fail('Le champ recipientNumber est requis.', 400, CODE.REQUETE_INVALIDE);
     }
 
     // Génération d'un code à 6 chiffres
@@ -52,7 +53,12 @@ export async function POST(req: NextRequest) {
     if (recipient) {
       const debitRes = await debitMessageQuota(developer.id, `otp_${Date.now()}`, COST_PER_MESSAGE);
       if (!debitRes.success) {
-        return fail('Solde de crédits insuffisant.', 429);
+        // 402 et non 429 — voir `api-contract.ts` : recharger, pas réessayer.
+        return fail(
+          'Solde de crédits insuffisant.',
+          STATUT_SOLDE_INSUFFISANT,
+          CODE.SOLDE_INSUFFISANT,
+        );
       }
 
       let conv = await prisma.conversation.findFirst({
@@ -78,6 +84,6 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('[API OTP Send] Erreur:', error);
-    return fail('Erreur lors de la génération de l\'OTP', 500);
+    return fail('Erreur lors de la génération de l\'OTP', 500, CODE.ERREUR_INTERNE);
   }
 }
