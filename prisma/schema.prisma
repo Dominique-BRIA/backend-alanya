@@ -1863,7 +1863,10 @@ model Verification {
 
   /// `AUTH_2FA`, `CREATION_AGENT`, `VALIDATION_CONTACT` — chacune a SA politique.
   finalite    String   @db.VarChar(30)
-  /// `ALANYA` (nous livrons) ou `DELEGUE` (l'appelant livre, e-mail ou autre).
+  /// `ALANYA` ou `EMAIL`. **Nous livrons dans les deux cas** : le code brut ne
+  /// figure dans aucune réponse d'API. Un canal « délégué », où l'appelant
+  /// aurait livré lui-même, a été écarté — il suffisait que son relais
+  /// journalise les réponses pour publier tous les codes.
   canal       String   @db.VarChar(20)
   destination String   @db.VarChar(120)
 

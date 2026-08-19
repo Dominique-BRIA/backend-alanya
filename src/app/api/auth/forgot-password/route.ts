@@ -29,7 +29,20 @@ export async function POST(req: NextRequest) {
       });
 
       // ATTEND que l'email soit parti (sinon Vercel tue la fonction serverless trop tôt)
-      await sendOtpEmail(email, code);
+      const envoi = await sendOtpEmail(email, code);
+      /*
+       * 🔴 ICI, ON NE REMONTE PAS L'ÉCHEC — à la différence de l'inscription.
+       *
+       * Cette route répond volontairement « si ce compte existe… » pour ne pas
+       * révéler quels courriels sont inscrits. Or un envoi n'est TENTÉ que si le
+       * compte existe : répondre 502 sur un échec d'envoi dirait donc « ce
+       * compte existe », et rendrait l'énumération possible par une simple
+       * panne de SMTP. L'échec est journalisé par le mailer, et l'utilisateur
+       * reprend le parcours — c'est le prix assumé de la non-divulgation.
+       */
+      if (!envoi.remis) {
+        console.error("[forgot-password] code non remis, réponse neutre maintenue");
+      }
     }
 
     return ok({ message: "Si ce compte existe, un email lui a été envoyé." });

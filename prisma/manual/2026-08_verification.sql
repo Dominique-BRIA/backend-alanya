@@ -78,16 +78,19 @@ BEGIN
       CHECK ("tentatives" >= 0 AND "max_tentatives" BETWEEN 1 AND 10 AND "tentatives" <= "max_tentatives");
   END IF;
 
+  -- `EMAIL` et non `DELEGUE` : nous livrons dans les deux cas, le code brut ne
+  -- figure dans AUCUNE réponse d'API. Un canal délégué aurait fait dépendre la
+  -- sécurité de la journalisation d'un système tiers.
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'verification_canal_connu') THEN
     ALTER TABLE "verification"
       ADD CONSTRAINT "verification_canal_connu"
-      CHECK ("canal" IN ('ALANYA', 'DELEGUE'));
+      CHECK ("canal" IN ('ALANYA', 'EMAIL'));
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'verification_livraison_connue') THEN
     ALTER TABLE "verification"
       ADD CONSTRAINT "verification_livraison_connue"
-      CHECK ("livraison" IN ('EN_ATTENTE', 'REMIS', 'ECHEC', 'DELEGUE'));
+      CHECK ("livraison" IN ('EN_ATTENTE', 'REMIS', 'ECHEC', 'REMPLACE'));
   END IF;
 END $$;
 
@@ -103,3 +106,23 @@ CREATE INDEX IF NOT EXISTS "verification_ip_date_idx"
 -- Recherche du code en cours pour une destination donnée, et journal par compte.
 CREATE INDEX IF NOT EXISTS "verification_developer_date_idx"
   ON "verification" ("developer_id", "created_at" DESC);
+
+/*
+ * 🔴 UN SEUL CODE VIVANT À LA FOIS, par destination et par finalité — et c'est
+ * une CONTRAINTE, pas une intention.
+ *
+ * L'ancienne table ne remplaçait rien : `/send` ajoutait une ligne, et la
+ * vérification acceptait n'importe quel code encore valide pour ce numéro.
+ * Demander 100 codes en rendait donc 100 valables simultanément, faisant passer
+ * la chance d'un tirage au hasard de 1 sur 1 000 000 à 1 sur 10 000 —
+ * **redemander un code affaiblissait la protection au lieu de la renforcer.**
+ *
+ * L'index partiel ne porte que sur les codes ENCORE VIVANTS (non consommés) :
+ * l'historique reste intact et consultable, seule la coexistence est interdite.
+ * Le service invalide l'ancien avant d'insérer le nouveau ; cet index est ce
+ * qui rend l'oubli impossible, y compris depuis une écriture directe du second
+ * système qui partage cette base.
+ */
+CREATE UNIQUE INDEX IF NOT EXISTS "verification_un_seul_vivant_idx"
+  ON "verification" ("destination", "finalite")
+  WHERE "consomme_a" IS NULL AND "livraison" <> 'REMPLACE';

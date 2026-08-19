@@ -26,20 +26,32 @@ export const FINALITE = {
   VALIDATION_CONTACT: "VALIDATION_CONTACT",
 };
 
-/** Qui livre le code. */
+/**
+ * Par où le code est livré. **Nous livrons dans les deux cas.**
+ *
+ * 🔴 UN CANAL `DELEGUE` A ÉTÉ ENVISAGÉ PUIS ÉCARTÉ (user, 18/08/2026). Il
+ * aurait rendu le code en clair dans la réponse, à charge pour l'appelant de le
+ * livrer. C'était sûr entre deux serveurs — et seulement là : il suffisait que
+ * son relais journalise les réponses, ce que beaucoup font par défaut, pour que
+ * tous les codes de double authentification finissent en clair dans ses
+ * journaux. La sécurité aurait alors dépendu de la rigueur d'une autre équipe
+ * plutôt que d'une garantie de la nôtre.
+ *
+ * En livrant nous-mêmes, le code ne sort jamais du système : il n'apparaît dans
+ * aucune réponse d'API, à aucun moment.
+ */
 export const CANAL = {
-  /** Nous le livrons, comme message Alanya. */
+  /** Message Alanya — suppose que le destinataire a l'application. */
   ALANYA: "ALANYA",
   /**
-   * L'appelant le livre lui-même (e-mail, SMS, autre).
+   * Courriel, envoyé par nous (`src/lib/mailer.ts`).
    *
-   * ⚠️ Le code brut est alors rendu UNE FOIS dans la réponse. C'est sûr entre
-   * deux serveurs, et seulement là : cette réponse ne doit jamais atteindre un
-   * navigateur. La contrepartie est décisive — le comptage des essais,
-   * l'expiration et l'usage unique restent centralisés ici, au lieu que chaque
-   * intégrateur réinvente son propre système de vérification, plus faible.
+   * C'est le canal de la double authentification et du secours : il ne suppose
+   * pas qu'on ait déjà Alanya, contrairement au précédent — lequel est
+   * circulaire pour une connexion, puisqu'il faudrait pouvoir recevoir des
+   * messages Alanya pour obtenir le code qui permet de se connecter.
    */
-  DELEGUE: "DELEGUE",
+  EMAIL: "EMAIL",
 };
 
 /** État de livraison. Jamais deviné : toujours constaté. */
@@ -50,8 +62,17 @@ export const LIVRAISON = {
   REMIS: "REMIS",
   /** La remise a échoué — destinataire inconnu, canal indisponible. */
   ECHEC: "ECHEC",
-  /** Rendu à l'appelant, qui s'en charge. */
-  DELEGUE: "DELEGUE",
+  /**
+   * Remplacé par une émission plus récente pour la même destination.
+   *
+   * 🔴 CET ÉTAT EST UNE PROTECTION, pas de la comptabilité. Avant, `/send`
+   * créait un code sans toucher aux précédents, et la vérification acceptait
+   * N'IMPORTE QUEL code encore vivant pour ce numéro : demander 100 codes en
+   * rendait 100 valables simultanément, faisant passer la chance d'un tirage au
+   * hasard de 1 sur 1 000 000 à 1 sur 10 000. **Redemander un code affaiblissait
+   * donc la protection au lieu de la renforcer.** Un seul code vit à la fois.
+   */
+  REMPLACE: "REMPLACE",
 };
 
 /**
@@ -106,7 +127,19 @@ export function finaliteValide(finalite) {
 
 /** Ce canal est-il connu ? */
 export function canalValide(canal) {
-  return canal === CANAL.ALANYA || canal === CANAL.DELEGUE;
+  return canal === CANAL.ALANYA || canal === CANAL.EMAIL;
+}
+
+/**
+ * Le canal par défaut d'une finalité, quand l'appelant n'en impose pas.
+ *
+ * ⚠️ La double authentification part par COURRIEL et non par Alanya, et ce
+ * n'est pas un détail de confort : le canal Alanya est circulaire pour une
+ * connexion — il faudrait déjà pouvoir recevoir des messages Alanya, donc être
+ * connecté, pour obtenir le code qui permet de se connecter.
+ */
+export function canalParDefaut(finalite) {
+  return finalite === FINALITE.AUTH_2FA ? CANAL.EMAIL : CANAL.ALANYA;
 }
 
 /**
@@ -161,8 +194,15 @@ if (process.argv[1] && process.argv[1].endsWith("politique.mjs")) {
   verifie("finalité inconnue REFUSÉE, jamais rabattue", politiquePour("AUTH_2FAA"), null);
   verifie("finalité vide refusée", finaliteValide(""), false);
   verifie("canal ALANYA connu", canalValide("ALANYA"), true);
-  verifie("canal DELEGUE connu", canalValide("DELEGUE"), true);
+  verifie("canal EMAIL connu", canalValide("EMAIL"), true);
+  verifie("canal DELEGUE écarté — le code ne sort jamais du système", canalValide("DELEGUE"), false);
   verifie("canal inventé refusé", canalValide("SMS"), false);
+  verifie(
+    "la 2FA part par COURRIEL — Alanya serait circulaire pour une connexion",
+    canalParDefaut("AUTH_2FA"),
+    "EMAIL",
+  );
+  verifie("la création d'agent part par Alanya", canalParDefaut("CREATION_AGENT"), "ALANYA");
 
   // — La 2FA est la finalité la plus stricte —
   const p2fa = politiquePour("AUTH_2FA");
