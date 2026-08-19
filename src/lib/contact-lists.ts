@@ -131,6 +131,46 @@ export async function repertoireDe(
   return new Map(contacts.map((c) => [c.contactId, c.alias] as const));
 }
 
+/// Un compte, tel qu'il faut le lire pour en tirer une ligne affichable.
+export interface CompteAffichable {
+  id: string;
+  publicNumber: string;
+  nom: string | null;
+  pseudo: string | null;
+}
+
+/// Un compte rendu sous le nom que l'APPELANT lui connait.
+///
+/// Sortie de `jsonListe` a dessein : ce n'est plus seulement une ligne de liste.
+/// GET /api/accounts/lookup rend le nom d'un numero qu'on vient de composer, et
+/// ce nom doit etre le MEME que celui de la liste, au caractere pres — sinon le
+/// numero compose s'affiche « Astreinte 2 » a un endroit et autrement a l'autre,
+/// pour la meme personne. Une seule ecriture de la regle, donc, plutot que deux
+/// qui finiraient par diverger.
+export function membreAffichable(
+  compte: CompteAffichable,
+  repertoire: Map<string, string | null>,
+): MembreJson {
+  const alias = repertoire.get(compte.id)?.trim();
+
+  // `nomAffichage` porte la regle « le nom d'abord, le pseudo en repli » ;
+  // la redire ici donnerait deux verites a garder d'accord. Le numero n'est
+  // PAS passe a dessein : ce repli-la a sa place dans le champ
+  // `publicNumber`, et le contrat veut `name: null` quand le compte n'a ni
+  // nom ni pseudo — le client decide alors lui-meme quoi montrer.
+  const nomDuCompte: string | null =
+    nomAffichage({ nom: compte.nom, pseudo: compte.pseudo }) ?? null;
+
+  return {
+    id: compte.id,
+    publicNumber: compte.publicNumber,
+    // L'alias du repertoire passe devant le nom du compte : c'est sous ce
+    // nom-la que l'appelant connait la personne.
+    name: alias || nomDuCompte,
+    isContact: repertoire.has(compte.id),
+  };
+}
+
 export function jsonListe(
   liste: LigneListe,
   repertoire: Map<string, string | null>,
@@ -141,26 +181,9 @@ export function jsonListe(
     ringtone: liste.ringtone,
     color: liste.color,
     createdAt: liste.createdAt.toISOString(),
-    members: liste.members.map((m) => {
-      const alias = repertoire.get(m.memberId)?.trim();
-
-      // `nomAffichage` porte la regle « le nom d'abord, le pseudo en repli » ;
-      // la redire ici donnerait deux verites a garder d'accord. Le numero n'est
-      // PAS passe a dessein : ce repli-la a sa place dans le champ
-      // `publicNumber`, et le contrat veut `name: null` quand le compte n'a ni
-      // nom ni pseudo — le client decide alors lui-meme quoi montrer.
-      const nomDuCompte: string | null =
-        nomAffichage({ nom: m.member.nom, pseudo: m.member.pseudo }) ?? null;
-
-      return {
-        id: m.memberId,
-        publicNumber: m.member.publicNumber,
-        // L'alias du repertoire passe devant le nom du compte : c'est sous ce
-        // nom-la que l'appelant connait la personne.
-        name: alias || nomDuCompte,
-        isContact: repertoire.has(m.memberId),
-      };
-    }),
+    members: liste.members.map((m) =>
+      membreAffichable({ id: m.memberId, ...m.member }, repertoire),
+    ),
   };
 }
 
