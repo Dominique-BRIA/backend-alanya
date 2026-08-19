@@ -51,6 +51,18 @@ export const CODE = {
    */
   TROP_DE_REQUETES: "RATE_LIMITED",
 
+  // — Vérification (codes OTP / double authentification) —
+  /**
+   * Code refusé. **UN SEUL CODE POUR QUATRE CAS** — faux, expiré, déjà utilisé,
+   * trop d'essais — et c'est délibéré : dire « expiré » plutôt que « faux »
+   * apprendrait à un attaquant qu'il visait le bon code, et distinguer
+   * « inconnu » permettrait d'énumérer les destinations. Le motif précis reste
+   * dans nos journaux.
+   */
+  VERIFICATION_REFUSEE: "VERIFICATION_REJECTED",
+  /** Le code n'a pas pu être remis (courriel refusé, destinataire inconnu). */
+  VERIFICATION_NON_REMISE: "VERIFICATION_NOT_DELIVERED",
+
   // — Serveur —
   /** Défaillance interne. Le client peut réessayer plus tard. */
   ERREUR_INTERNE: "INTERNAL_ERROR",
