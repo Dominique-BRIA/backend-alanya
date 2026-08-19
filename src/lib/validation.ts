@@ -326,3 +326,43 @@ export const updateContactListSchema = z.object({
   memberIds: membresListeSchema.optional(),
   memberNumbers: numerosListeSchema.optional(),
 });
+
+/// --- Catalogue de sonneries importees ---
+
+/// URL relative du media deja televerse. Le serveur en verifie la FORME et la
+/// longueur, jamais le contenu : il ne va pas relire le fichier pour savoir si
+/// c'est bien de l'audio.
+///
+/// La forme est celle que `avatarUrlSchema` accepte deja pour un media
+/// (`/api/media/<id>`), amputee de la branche `https://` : une entree de
+/// catalogue designe forcement un media de CE serveur, puisqu'elle nait d'un
+/// POST /api/media. Contrairement au libelle, une url mal formee est REFUSEE et
+/// non rabotee — une entree qui ne pointe nulle part n'a rien a faire dans un
+/// catalogue, et la couper l'y ferait entrer morte.
+///
+/// `max(300)` avant la forme, pour que 10 Mo de chaine soient ecartes sans
+/// lancer l'expression reguliere dessus.
+const urlSonnerieSchema = z
+  .string()
+  .trim()
+  .max(300, "URL de sonnerie trop longue (300 caracteres maximum)")
+  .regex(/^\/api\/media\/[a-zA-Z0-9-]+$/, "URL de sonnerie invalide");
+
+/// Nom montre dans le choix de sonnerie. COUPE a 80 caracteres au lieu d'etre
+/// refuse, meme raison que pour le nom d'une liste : un nom de fichier trop long
+/// est une maladresse, pas une requete invalide, et un 422 ferait perdre un
+/// televersement qui a deja abouti. Vide, en revanche, il n'y aurait plus rien a
+/// afficher dans le selecteur.
+///
+/// `tronqueCaracteres` et non `slice` : voir sa documentation, la coupe au
+/// milieu d'une paire de substitution a deja fait echouer Prisma ici.
+const libelleSonnerieSchema = z
+  .string()
+  .trim()
+  .min(1, "Le nom de la sonnerie est requis")
+  .transform((s) => tronqueCaracteres(s, 80));
+
+export const createRingtoneSchema = z.object({
+  url: urlSonnerieSchema,
+  label: libelleSonnerieSchema,
+});

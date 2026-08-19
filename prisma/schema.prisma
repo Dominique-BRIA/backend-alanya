@@ -106,6 +106,10 @@ model User {
   /// Listes d'AUTRES comptes ou ce compte figure comme membre. Relation inverse
   /// seule : elle n'ajoute aucune colonne a `users`.
   contactListsIn   ContactListMember[] @relation("ContactListMemberOf")
+  /// Catalogue des sonneries que ce compte a importees. Le FICHIER suivait deja
+  /// le compte (il est dans `media_files`) ; la liste de ce qui a ete importe,
+  /// non — elle vivait en localStorage. Voir [UserRingtone].
+  ringtones        UserRingtone[]
   participations   Participant[]
   sentMessages     Message[]           @relation("MessageSender")
   ownedMedia       MediaFile[]
@@ -612,6 +616,63 @@ model ContactListMember {
   @@unique([listId, memberId])
   @@index([listId])
   @@map("contactListMember")
+}
+
+// ---------------------------------------------------------------------------
+// CATALOGUE DE SONNERIES
+// ---------------------------------------------------------------------------
+
+/// Une sonnerie importee par un utilisateur — l'ENTREE DE CATALOGUE, pas le son.
+///
+/// POURQUOI cette table. Le fichier, lui, suivait deja le compte : il part par
+/// POST /api/media et devient une ligne de `media_files`. Ce qui ne suivait pas,
+/// c'est la liste de ce qu'on a importe, tenue en localStorage sous
+/// `alanya-ringtones-custom-v1`. D'ou le defaut constate : une sonnerie importee
+/// sur l'ordinateur et attribuee a la liste « Clients » SONNE bien sur le
+/// telephone — la reference est en base, portee par [ContactList.ringtone] —
+/// mais elle n'apparait pas dans le choix quand on veut l'attribuer a une
+/// seconde liste depuis le telephone. Il faudrait la reimporter, ce qui creerait
+/// un doublon sur le serveur pour le meme son.
+///
+/// CE QUI RESTE HORS DE CETTE TABLE, deliberatement : le CHOIX de sonnerie pour
+/// les evenements globaux (appel entrant, sortant, message), garde cote client
+/// dans `alanya-ringtone-incoming` / `-outgoing` / `-message`. C'est une
+/// preference d'APPAREIL, au meme titre que le theme ou le volume : on peut
+/// vouloir un son discret au bureau et fort sur son telephone. Seul le catalogue
+/// devient commun.
+model UserRingtone {
+  id     String @id @default(uuid()) @map("idUserRingtone") @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// URL relative du media deja televerse, de la forme «/api/media/<id>».
+  ///
+  /// Une CHAINE et non une cle etrangere vers `media_files`. Deux raisons. C'est
+  /// d'abord la valeur exacte que [ContactList.ringtone] porte deja : la meme
+  /// forme de part et d'autre, donc rien a recomposer pour comparer une entree
+  /// de catalogue a la sonnerie d'une liste. Ensuite, une FK imposerait ici la
+  /// meme decision de cascade que la-bas, ou `ringtone` est libre : le catalogue
+  /// peut donc citer un media efface, exactement comme une liste le peut. Voir
+  /// l'en-tete de la migration 20260819 pour ce que cela implique.
+  ///
+  /// VARCHAR(300) comme [ContactList.ringtone], et pas une autre largeur : la
+  /// meme valeur transite d'une colonne a l'autre, une borne plus etroite ici
+  /// refuserait ce que la liste accepte.
+  url String @db.VarChar(300)
+
+  /// Nom montre dans le choix de sonnerie — en general celui du fichier importe.
+  /// Coupe a 80 caracteres cote serveur, jamais refuse : un nom trop long est une
+  /// maladresse, pas une requete invalide.
+  label String @db.VarChar(80)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  /// Le catalogue est un ENSEMBLE de medias, pas un journal d'imports :
+  /// reimporter le meme fichier renomme la ligne existante au lieu d'en ajouter
+  /// une seconde, sinon le choix de sonnerie afficherait deux fois le meme son.
+  @@unique([userId, url])
+  @@index([userId])
+  @@map("userRingtone")
 }
 
 // ---------------------------------------------------------------------------
