@@ -104,9 +104,25 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const conversations = parts.map((p) => {
     const conv = p.conv;
     const others = conv.participants.filter((pp) => pp.userId !== userId);
+    /*
+     * ⚠️ LA CONVERSATION AVEC SOI-MÊME N'A PAS D'« AUTRE ».
+     *
+     * `others` y est vide, et le repli tombait alors sur « Inconnu » — le nom le
+     * plus trompeur possible pour ses propres notes. Elle se reconnaît sans
+     * ambiguïté à sa forme : non-groupe et un seul participant, forme qu'aucune
+     * conversation de production n'avait avant celle-ci (vérifié).
+     *
+     * Le drapeau `isSelf` part avec la charge plutôt que d'être redéduit par
+     * chaque client : les trois auraient sinon à connaître la règle, et le
+     * mobile affiche déjà « Inconnu » pour toute conversation dont il ne trouve
+     * pas le correspondant.
+     */
+    const isSelf = !conv.isGroup && conv.participants.length === 1;
     const title = conv.isGroup
       ? conv.name
-      : (others[0] ? nomAffichage(others[0].user) : null) ?? "Inconnu";
+      : isSelf
+        ? "Moi"
+        : (others[0] ? nomAffichage(others[0].user) : null) ?? "Inconnu";
 
     // F11 : dernier message — utilise le champ dénormalisé OU le fallback
     const fallbackLast = conv.messages[0];
@@ -139,6 +155,10 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     return {
       id: conv.id,
       isGroup: conv.isGroup,
+      /// Mes notes personnelles. Envoyé explicitement : un client qui l'ignore
+      /// affiche « Moi » comme titre et se comporte normalement — dégradé,
+      /// jamais cassé.
+      isSelf,
       title,
       avatarUrl: avatarPublicUrl(conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null),
       members: conv.participants.map((pp) => {
@@ -202,10 +222,22 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   if (body.publicNumber) {
     const target = await prisma.user.findUnique({ where: { publicNumber: body.publicNumber } });
     if (!target) return fail("Aucun utilisateur avec ce numéro", 404, "NOT_FOUND");
-    if (target.id === userId) return fail("Conversation avec soi-même impossible", 400, "SELF");
 
+    /*
+     * 🔴 L'INTERDICTION DE SE PARLER À SOI-MÊME EST LEVÉE (18/08/2026).
+     *
+     * Elle renvoyait `400 SELF`, et c'était le bon réflexe tant que le cas
+     * n'était pas modélisé : `findOrCreateDirectConversation(moi, moi)` aurait
+     * rendu la conversation d'un tiers, puis violé l'unicité en créant deux
+     * participants identiques. Le garde protégeait donc d'un vrai dégât.
+     *
+     * Ce que le user demande — le « Moi » de WhatsApp, pour se garder des notes
+     * — est désormais une forme à part entière : une conversation non-groupe à
+     * UN participant, traitée par `findOrCreateSelfConversation`. Le garde n'a
+     * plus lieu d'être, et son maintien empêcherait la fonctionnalité.
+     */
     const conv = await findOrCreateDirectConversation(userId, target.id);
-    return ok({ id: conv.id, isGroup: false }, 201);
+    return ok({ id: conv.id, isGroup: false, isSelf: target.id === userId }, 201);
   }
 
   const members = await prisma.user.findMany({
