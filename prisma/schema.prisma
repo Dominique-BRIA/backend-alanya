@@ -1834,8 +1834,63 @@ model DeveloperAccount {
   webhooks   DeveloperWebhook?
   otps       DeveloperOtp[]
   medias     DeveloperMedia[]
+  /// Codes de vérification — remplace [otps], voir [Verification].
+  verifications Verification[]
 
   @@map("developer_accounts")
+}
+
+/// Un code de vérification : double authentification, création d'agent, etc.
+///
+/// 🔴 REMPLACE [DeveloperOtp], qui ne pouvait pas garder un second facteur —
+/// code stocké en clair, aucun compteur de tentatives, aucune finalité, aucun
+/// état de livraison. Les quatre manques sont comblés ici, et les bornes sont
+/// portées par des CHECK en base plutôt que par le code : deux systèmes
+/// écrivent dans cette base, et une garantie qui ne vit que dans notre code ne
+/// protège plus que la moitié des écritures.
+///
+/// ⚠️ Le code brut n'est JAMAIS stocké. Seule son empreinte SHA-256, salée par
+/// ligne — sans sel, un code à six chiffres se retrouve instantanément, son
+/// espace ne comptant qu'un million d'entrées.
+///
+/// La politique (durée, nombre d'essais, plafonds d'émission) n'est pas ici :
+/// elle vit dans `src/lib/verification/politique.mjs`, sans dépendance, donc
+/// exécutable et vérifiable.
+model Verification {
+  id          String           @id @default(uuid()) @map("id_verification") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  /// `AUTH_2FA`, `CREATION_AGENT`, `VALIDATION_CONTACT` — chacune a SA politique.
+  finalite    String   @db.VarChar(30)
+  /// `ALANYA` (nous livrons) ou `DELEGUE` (l'appelant livre, e-mail ou autre).
+  canal       String   @db.VarChar(20)
+  destination String   @db.VarChar(120)
+
+  codeEmpreinte String @map("code_empreinte") @db.Char(64)
+  codeSel       String @map("code_sel") @db.Char(32)
+
+  tentatives    Int @default(0) @db.SmallInt
+  maxTentatives Int @map("max_tentatives") @db.SmallInt
+
+  expireA   DateTime  @map("expire_a") @db.Timestamptz
+  /// Renseignée à la première présentation réussie — c'est l'usage unique.
+  consommeA DateTime? @map("consomme_a") @db.Timestamptz
+
+  /// Ce qui s'est RÉELLEMENT passé à la remise, jamais supposé : la route
+  /// annonçait « envoyé avec succès » alors que rien ne partait.
+  livraison       String  @default("EN_ATTENTE") @db.VarChar(20)
+  livraisonDetail String? @map("livraison_detail") @db.VarChar(255)
+
+  /// Source de la demande, pour le plafond par IP. Nullable : un appel
+  /// serveur à serveur derrière un relais peut ne pas en fournir.
+  ipDemande String?  @map("ip_demande") @db.Inet
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([destination, createdAt(sort: Desc)], map: "verification_destination_date_idx")
+  @@index([ipDemande, createdAt(sort: Desc)], map: "verification_ip_date_idx")
+  @@index([developerId, createdAt(sort: Desc)], map: "verification_developer_date_idx")
+  @@map("verification")
 }
 
 /// Workspace / Projet Développeur (Multi-Projets)
