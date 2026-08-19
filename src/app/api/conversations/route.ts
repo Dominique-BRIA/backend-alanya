@@ -160,7 +160,26 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       /// jamais cassé.
       isSelf,
       title,
-      avatarUrl: avatarPublicUrl(conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null),
+      /*
+       * 🐛 « MOI » N'AVAIT PAS DE PHOTO (signalé le 19/08/2026).
+       *
+       * L'avatar se lisait chez `others[0]`, qui n'existe justement pas pour la
+       * conversation avec soi-même : la liste affichait donc l'initiale de
+       * « Moi » sur fond de couleur, alors que l'appareil connaît parfaitement
+       * mon visage. Dans mes notes, l'autre bout, c'est moi — c'est donc ma
+       * photo qu'il faut rendre, et `conv.participants[0]` EST moi puisque je
+       * suis le seul participant.
+       *
+       * Corrigé ICI et non dans les clients : les trois lisent la même charge,
+       * et le web aurait sinon gardé le défaut.
+       */
+      avatarUrl: avatarPublicUrl(
+        conv.isGroup
+          ? conv.avatarUrl
+          : isSelf
+            ? conv.participants[0]?.user.avatarUrl ?? null
+            : others[0]?.user.avatarUrl ?? null,
+      ),
       members: conv.participants.map((pp) => {
         // Confidentialité : masque la présence d'un pair qui a choisi « personne ».
         const hidePresence =
