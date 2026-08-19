@@ -2423,6 +2423,20 @@ async function handleForwardMessage(ws, msg) {
 
 const meetingRooms = new Map();
 
+/// Qui partage son ecran, par salle : identifiant de reunion -> ensemble des
+/// identifiants d'utilisateurs en cours de partage.
+///
+/// Tenu en memoire et non en base, comme la salle elle-meme : un partage
+/// n'existe que tant que la socket qui l'emet est ouverte, et le process qui
+/// tient les salles est le seul a le savoir. Le persister obligerait a le
+/// nettoyer apres un redemarrage, pour une information deja perimee.
+///
+/// C'est le SEUL etat de salle que le serveur retient — le fil de discussion et
+/// les mains levees n'en gardent aucun. La raison : il faut pouvoir dire aux
+/// autres que le partage s'arrete quand celui qui partageait s'en va sans le
+/// dire, et personne d'autre ne peut le savoir a sa place.
+const partagesEcran = new Map();
+
 function meetingParticipants(meetingId) {
   const room = meetingRooms.get(meetingId);
   return room ? [...room.keys()] : [];
@@ -2486,6 +2500,21 @@ async function handleMeetingJoin(ws, msg) {
     participants: existing.filter((id) => id !== ws.userId),
   }));
 
+  // Rattrapage du partage d'ecran en cours, pour lui seul. Sans cela, celui qui
+  // arrive au milieu d'une presentation recoit bien la piste video, mais rien ne
+  // lui dit que c'est un ecran et non une camera : il l'afficherait comme une
+  // vignette de visage. Le meme verbe que l'annonce sert ici, pour que le client
+  // n'ait qu'un seul gestionnaire a ecrire.
+  for (const auteur of partagesEcran.get(meetingId) ?? []) {
+    if (auteur === ws.userId) continue;
+    ws.send(JSON.stringify({
+      type: "meeting_screen",
+      meetingId,
+      fromUserId: auteur,
+      partage: true,
+    }));
+  }
+
   sendToMeeting(meetingId, {
     type: "meeting_user_joined",
     meetingId,
@@ -2497,6 +2526,13 @@ async function handleMeetingJoin(ws, msg) {
 async function handleMeetingLeave(ws, msg) {
   const { meetingId } = msg;
   if (!meetingId) return;
+
+  // AVANT de le retirer de la salle : il faut que l'arret du partage parte
+  // encore par le meme chemin que les autres messages de salle. Et avant
+  // `meeting_user_left`, pour que la presentation se referme pendant que son
+  // auteur est encore affiche — sinon les autres gardent un plein ecran qui
+  // n'appartient plus a personne.
+  arretePartageEcran(meetingId, ws.userId);
 
   const room = meetingRooms.get(meetingId);
   if (room) {
@@ -2682,6 +2718,80 @@ async function handleMeetingHand(ws, msg) {
     meetingId,
     fromUserId: ws.userId,
     levee: msg.levee === true,
+  });
+}
+
+/**
+ * Partage d'ecran : dit QUI presente, et si la presentation commence ou finit.
+ *
+ * POURQUOI UN VERBE. La piste video d'un ecran emprunte le meme tuyau que celle
+ * d'une camera : `replaceVideoTrack` la substitue chez tous les pairs sans
+ * renegocier. Rien dans WebRTC ne dit alors ce qu'elle montre. Sans annonce, un
+ * ecran partage arriverait chez les autres comme une vignette de visage,
+ * rognee et retournee en miroir. Ce message est la seule chose qui distingue
+ * les deux.
+ *
+ * Calque sur `meeting_hand` : relaye, jamais ecrit dans la conversation, meme
+ * nommage des champs, et l'expediteur est pose par le serveur — sans cela on
+ * declarerait un partage au nom d'un autre.
+ *
+ * Diffuse a TOUS, l'auteur compris : sa propre presentation s'affiche sur la
+ * reponse du serveur et non sur sa seule foi, donc tout le monde voit le meme
+ * etat au meme instant.
+ *
+ * DEUX PRESENTATEURS A LA FOIS SONT ACCEPTES. Refuser le second serait un
+ * mensonge : sa piste d'ecran est deja partie chez les pairs au moment ou il
+ * l'annonce, un refus ici ne la rappellerait pas et les autres verraient un
+ * ecran presente comme une camera. Le serveur relaie donc les deux et le client
+ * tranche ce qu'il met en grand.
+ */
+async function handleMeetingScreen(ws, msg) {
+  const { meetingId } = msg;
+  if (!meetingId) return;
+
+  // Seuls les gens PRESENTS dans la salle presentent, comme pour le fil et les
+  // mains : etre invite ne suffit pas.
+  const room = meetingRooms.get(meetingId);
+  if (!room || !room.has(ws.userId)) return;
+
+  if (msg.partage !== true) {
+    arretePartageEcran(meetingId, ws.userId);
+    return;
+  }
+
+  if (!partagesEcran.has(meetingId)) partagesEcran.set(meetingId, new Set());
+  partagesEcran.get(meetingId).add(ws.userId);
+
+  sendToMeeting(meetingId, {
+    type: "meeting_screen",
+    meetingId,
+    fromUserId: ws.userId,
+    partage: true,
+  });
+}
+
+/**
+ * Eteint le partage d'un participant et l'annonce a la salle.
+ *
+ * Appele des trois endroits ou un partage peut finir : l'arret demande, le
+ * depart annonce, et la socket qui tombe. Un presentateur qui ferme son onglet
+ * ne dit rien avant de partir ; sans ce rattrapage, les autres resteraient
+ * devant un plein ecran fige que plus personne n'alimente.
+ *
+ * Le retrait de l'ensemble sert de garde : on n'annonce un arret que si un
+ * partage etait bel et bien ouvert, sinon chaque depart de la salle diffuserait
+ * un arret pour un partage qui n'a jamais existe.
+ */
+function arretePartageEcran(meetingId, userId) {
+  const partages = partagesEcran.get(meetingId);
+  if (!partages || !partages.delete(userId)) return;
+  if (partages.size === 0) partagesEcran.delete(meetingId);
+
+  sendToMeeting(meetingId, {
+    type: "meeting_screen",
+    meetingId,
+    fromUserId: userId,
+    partage: false,
   });
 }
 
@@ -2879,6 +2989,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "meeting_extend") await handleMeetingExtend(ws, msg);
       else if (msg.type === "meeting_message") await handleMeetingMessage(ws, msg);
       else if (msg.type === "meeting_hand") await handleMeetingHand(ws, msg);
+      else if (msg.type === "meeting_screen") await handleMeetingScreen(ws, msg);
     } catch (e) {
       console.error("[ws] erreur de traitement:", e);
       ws.send(JSON.stringify({ type: "error", message: "Erreur serveur", tempId: msg?.tempId }));
@@ -2902,6 +3013,10 @@ wss.on("connection", (ws, req) => {
     // charge.
     for (const [meetingId, room] of meetingRooms) {
       if (room.has(userId)) {
+        // Un onglet ferme au milieu d'une presentation ne previent personne :
+        // l'arret du partage part donc d'ici, avant l'annonce du depart, comme
+        // dans le depart annonce.
+        arretePartageEcran(meetingId, userId);
         room.delete(userId);
         if (room.size === 0) meetingRooms.delete(meetingId);
         sendToMeeting(meetingId, {
