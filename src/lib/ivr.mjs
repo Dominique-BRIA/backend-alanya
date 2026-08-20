@@ -151,11 +151,19 @@ function urlPublique(fichier) {
  * évite une troisième colonne à nous dans une table du référentiel équipe.
  * Même mécanique que `VOCAL_BASE_URL`, née du même besoin.
  *
- * ⚠️ L'URL DOIT ÊTRE ABSOLUE. Contrairement à `url_vocal` et `url_music`, elle
- * ne se résout contre aucun `company.url_serveur` : il n'y a pas d'entreprise
- * dans cette lecture, c'est tout l'intérêt. Un chemin relatif est donc REFUSÉ
- * ici plutôt que concaténé à `alanyavox.com`, où il répondrait 404 et
- * produirait un silence sans erreur — le pire des échecs, déjà vécu le 12/08.
+ * ⚠️ UN CHEMIN RELATIF EST ACCEPTÉ, résolu contre `VOCAL_BASE_URL`. La première
+ * version l'exigeait absolu, à tort : la plateforme de la collègue ne produit
+ * PAS d'URL, elle range des chemins — `/uploads/vocaux/…`, `/uploads/vocal_bip/…`
+ * — comme le montrent `vocal` et `center_music`. Exiger une adresse complète
+ * aurait obligé à recopier à la main ce que le `.env` sait déjà, et à le
+ * corriger partout le jour où le serveur déménage. Une valeur déjà absolue est
+ * respectée telle quelle.
+ *
+ * ⚠️ IL FAUT LE CHEMIN DU FICHIER, PAS DU DOSSIER. Vérifié le 20/08/2026 :
+ * `/uploads/vocal_bip` existe (301) mais son listage répond 404 — le serveur
+ * n'expose pas son contenu, et les noms y sont générés
+ * (`vocal-1786551846937-443930217.mpeg`), donc indevinables. Un chemin de
+ * dossier ne lèverait aucune erreur, il donnerait un SILENCE.
  *
  * ⚠️ NON RENSEIGNÉE, ON REND `null` ET C'EST VOLONTAIRE : l'enregistrement
  * démarre alors sans annonce, plutôt que de ne pas démarrer du tout. Une
@@ -183,14 +191,38 @@ export const DUREE_PLAINTE_MAX_MS = 3 * 60_000;
 export function urlBipEnregistrement() {
   const brut = (process.env.BIP_ENREGISTREMENT_URL ?? "").trim();
   if (!brut) return null;
-  if (!/^https?:\/\//i.test(brut)) {
+  // Sans entreprise : le repli de `resoudreUrlPlateforme` est `VOCAL_BASE_URL`,
+  // le serveur de la plateforme — justement celui qui héberge le bip.
+  const resolue = resoudreUrlPlateforme(brut, null);
+  if (!resolue) {
+    console.warn("[ivr] BIP_ENREGISTREMENT_URL illisible :", brut);
+    return null;
+  }
+  // Un chemin terminé par « / » désigne un DOSSIER, jamais un fichier. Le
+  // donner au lecteur produirait un silence sans erreur — le pire des échecs.
+  if (/\/$/.test(resolue)) {
     console.warn(
-      "[ivr] BIP_ENREGISTREMENT_URL ignoree : une URL ABSOLUE est attendue, recu",
-      brut,
+      "[ivr] BIP_ENREGISTREMENT_URL designe un DOSSIER, il faut le FICHIER :",
+      resolue,
     );
     return null;
   }
-  return brut;
+  /*
+   * Dernier segment SANS POINT : très probablement un dossier écrit sans barre
+   * finale — le cas exact de `/uploads/vocal_bip`, qui répond 301 vers un
+   * listage interdit. On AVERTIT sans refuser : un serveur a parfaitement le
+   * droit de servir un fichier sans extension, et bloquer sur une supposition
+   * priverait d'une valeur légitime. Le filet reste le client, qui démarre
+   * l'enregistrement même si le bip ne se charge pas.
+   */
+  const dernierSegment = resolue.split("?")[0].split("/").pop() ?? "";
+  if (!dernierSegment.includes(".")) {
+    console.warn(
+      "[ivr] BIP_ENREGISTREMENT_URL sans extension — dossier oublie ?",
+      resolue,
+    );
+  }
+  return resolue;
 }
 
 /**
