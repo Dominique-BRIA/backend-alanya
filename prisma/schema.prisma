@@ -167,6 +167,11 @@ model User {
   musiques        CenterMusic[]    @relation("musiqueCentre")
   vocauxAttente   VocalAttente[]   @relation("vocalAttenteCentre")
   audiosMenu      CenterAudio[]    @relation("audioCentreVocal")
+  /// Les plaintes vocales reçues par ce centre vocal, et celles que ce compte a
+  /// laissées ailleurs. Deux relations distinctes vers la même table : un même
+  /// compte peut être l'un ou l'autre, jamais confondus.
+  plaintesRecues  VoiceComplaint[] @relation("plainteCentreVocal")
+  plaintesLaissees VoiceComplaint[] @relation("plainteAuteur")
 
   // --- Relations vers la file d'attente ---
   queueCenterFiles   QueueFile[]           @relation("QueueCenterUser")
@@ -885,6 +890,10 @@ model MediaFile {
   durationMs   Int? // pour audio/vidéo (messages vocaux, appels)
   createdAt    DateTime @default(now()) @db.Timestamptz
 
+  /// Une plainte vocale s'appuie sur ce média. `Cascade` : supprimer le fichier
+  /// retire la plainte, qui n'aurait plus rien à faire écouter.
+  plainteVocale VoiceComplaint[]
+
   @@index([ownerId])
   @@index([messageId])
   @@map("media_files")
@@ -1504,6 +1513,7 @@ model Company {
   Musiques      CenterMusic[]
   VocauxAttente VocalAttente[]
   AudiosMenu    CenterAudio[]
+  plaintesVocales VoiceComplaint[]
 
   QueueFiles     QueueFile[]
   QueueFileHists QueueFileHistorique[]
@@ -1647,6 +1657,17 @@ model Center {
   /// jamais été reliés. Sert à remplir `QueueFile`/`QueueFileHistorique.idService`
   /// avec le VRAI service choisi, plutôt qu'une correspondance devinée par nom.
   idService       Int?     @map("idservice")
+  /// Cet agent peut-il enregistrer ses conversations avec un client ?
+  ///
+  /// ⚠️ COLONNE À NOUS DANS UNE TABLE DU RÉFÉRENTIEL ÉQUIPE — choix explicite
+  /// du user (19/08/2026), contre la règle habituelle du projet. C'est un écart
+  /// de plus à défendre à la prochaine harmonisation, et la plateforme de la
+  /// collègue l'effacerait si elle recréait `center`.
+  ///
+  /// Aucune table de liaison n'a été créée, et il n'en fallait pas : une ligne
+  /// de `center` EST déjà le triplet (centre, touche, agent). Le réglage est
+  /// donc individuel par agent, et modifier un centre n'atteint aucun autre.
+  enregistrement  Boolean  @default(false)
 
   centerUser   User?    @relation("centerUser", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   assignedUser User?    @relation("assignedUser", fields: [users_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -1777,6 +1798,47 @@ model CenterAudio {
   @@unique([center_alanyaID, menuNro], map: "center_audio_center_menunro_key")
   @@index([idCompany], map: "center_audio_idCompany_idx")
   @@map("center_audio")
+}
+
+/// Plainte laissée oralement par un appelant sur la touche 0 d'un centre vocal.
+///
+/// SQL : `prisma/manual/2026-08_plainte_vocale.sql`, éprouvé sur base jetable.
+///
+/// Le FICHIER n'est jamais en base : `media` pointe `media_files`, qui porte
+/// déjà stockage, type MIME et durée.
+model VoiceComplaint {
+  idComplaint     String   @id @default(uuid()) @map("idComplaint") @db.Uuid
+  idCompany       Int      @map("idCompany")
+  center_alanyaID String   @map("center_alanyaID") @db.Uuid
+  /// ⚠️ NULLABLE À DESSEIN : un compte supprimé ne doit pas emporter la
+  /// plainte. Elle appartient à l'entreprise qui doit la traiter, pas à son
+  /// auteur — prouvé sur base jetable, la ligne survit à un `DELETE` du compte.
+  userId          String?  @map("user_id") @db.Uuid
+  mediaId         String   @map("media_id") @db.Uuid
+  /// Redondante avec `media_files.durationMs`, et c'est voulu : c'est la seule
+  /// mesure qu'un écran de tri lit sans joindre, et elle doit survivre à une
+  /// purge des médias.
+  dureeMs         Int      @default(0) @map("duree_ms")
+  /// 0 reçue, 1 en cours, 2 traitée, 3 rejetée. Un entier borné par un CHECK
+  /// et non une enum : tout le référentiel équipe code ses statuts ainsi, et
+  /// une enum PostgreSQL se migre bien plus mal.
+  statut          Int      @default(0) @db.SmallInt
+  /// 🔴 CE QUI REND L'ENVOI IDEMPOTENT, par CONTRAINTE et non par du code. Le
+  /// client pose une clé par enregistrement ; réseau qui hésite, double appui
+  /// ou réessai ne peuvent pas produire deux plaintes. Le contournement a été
+  /// TENTÉ sur base jetable : rejeté par l'index unique.
+  cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company    Company   @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User      @relation("plainteCentreVocal", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  auteur     User?     @relation("plainteAuteur", fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  media      MediaFile @relation(fields: [mediaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([cleEnvoi], map: "voice_complaint_cle_envoi_key")
+  @@index([center_alanyaID, createdAt(sort: Desc)], map: "voice_complaint_centre_date_idx")
+  @@index([idCompany], map: "voice_complaint_company_idx")
+  @@map("voice_complaint")
 }
 
 model AccesAdmin {
