@@ -394,3 +394,18 @@ export const createComplaintSchema = z.object({
   cleEnvoi: z.string().min(8).max(64),
   dureeMs: z.number().int().min(0).max(60 * 60_000).optional(),
 });
+
+/**
+ * Depot d'un enregistrement de conversation — POST /api/call-recordings.
+ *
+ * DEUX medias, pas un : le greffon WebRTC du mobile ne sait enregistrer qu'un
+ * cote a la fois, le serveur melange ensuite. Voir `call_recording`.
+ */
+export const createCallRecordingSchema = z.object({
+  callId: z.string().uuid().optional(),
+  companyId: z.number().int().positive(),
+  mediaAgentId: z.string().uuid(),
+  mediaClientId: z.string().uuid(),
+  cleEnvoi: z.string().min(8).max(64),
+  dureeMs: z.number().int().min(0).max(4 * 60 * 60_000).optional(),
+});
