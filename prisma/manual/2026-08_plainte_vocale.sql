@@ -112,3 +112,22 @@ CREATE INDEX IF NOT EXISTS voice_complaint_centre_date_idx
 
 CREATE INDEX IF NOT EXISTS voice_complaint_company_idx
   ON voice_complaint ("idCompany");
+
+-- ── 3. L'URL ABSOLUE de l'audio, lisible sans jeton ─────────────────────────
+--
+-- Décision du user (20/08/2026) : la plateforme de la collègue lit la table
+-- DIRECTEMENT, comme elle le fait déjà pour `center_music` et `center_audio`.
+-- Lui imposer une route authentifiée l'obligerait à intégrer notre mécanisme de
+-- jetons pour un seul écran ; une URL prête à l'emploi dans la ligne se lit une
+-- fois et s'écoute.
+--
+-- ⚠️ **CETTE URL N'EST PAS UN CONTRÔLE D'ACCÈS.** Quiconque la connaît écoute la
+-- plainte. Elle est rendue INDEVINABLE — elle porte l'UUID de la plainte, tiré
+-- au hasard — ce qui est le compromis habituel pour du média, mais reste de
+-- l'obscurité, pas une autorisation. À savoir avant d'y mettre autre chose que
+-- des réclamations.
+ALTER TABLE voice_complaint
+  ADD COLUMN IF NOT EXISTS url_audio varchar(500);
+
+COMMENT ON COLUMN voice_complaint.url_audio IS
+  'URL absolue de l audio, lisible SANS jeton. Pour la plateforme, qui lit cette table directement.';

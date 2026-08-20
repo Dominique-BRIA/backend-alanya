@@ -1844,6 +1844,13 @@ model VoiceComplaint {
   /// ou réessai ne peuvent pas produire deux plaintes. Le contournement a été
   /// TENTÉ sur base jetable : rejeté par l'index unique.
   cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  /// URL ABSOLUE de l'audio, lisible SANS jeton — la plateforme de la collègue
+  /// lit cette table directement et n'a pas notre mécanisme d'authentification.
+  ///
+  /// ⚠️ **CE N'EST PAS UN CONTRÔLE D'ACCÈS** : quiconque la connaît écoute la
+  /// plainte. Elle est indevinable (elle porte l'UUID de la plainte), ce qui est
+  /// le compromis habituel pour du média, mais reste de l'obscurité.
+  urlAudio        String?  @map("url_audio") @db.VarChar(500)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   company    Company   @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)

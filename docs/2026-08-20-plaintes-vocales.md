@@ -1,15 +1,18 @@
-# Plaintes vocales sur les centres vocaux
+# Plaintes vocales et enregistrement des appels
 
 **Statut : livré côté serveur et mobile, en attente de configuration et de test sur appareil.**
 **Date : 20/08/2026.**
 
-Un appelant qui joint un **centre vocal** (`users.type_compte = 4`) peut désormais
-taper **0** pour dicter une réclamation. Un signal sonore l'y invite, il parle,
-peut se réécouter, puis envoie. La plainte est rangée en base et le fichier
-audio dans le stockage des médias.
+Deux fonctions livrées ensemble, sur le même socle :
+
+1. **Plaintes vocales.** Un appelant qui joint un **centre vocal**
+   (`users.type_compte = 4`) peut taper **0** pour dicter une réclamation. Un
+   signal sonore l'y invite, il parle, peut se réécouter, puis envoie.
+2. **Enregistrement des conversations.** Un agent dont l'autorisation est posée
+   voit ses appels avec un client enregistrés automatiquement.
 
 Ce document décrit **ce que vous avez à configurer** et **le format des données**,
-pour que la plateforme puisse régler les centres et afficher les plaintes reçues.
+pour que la plateforme puisse régler les centres et afficher ce qui remonte.
 
 ---
 
@@ -47,9 +50,14 @@ n'affecte aucun autre. Il n'y a pas de table de liaison à créer.
 > plateforme recrée `center`, elle disparaîtra. Merci de la conserver dans vos
 > scripts de création.
 
-> **Note :** cette colonne est posée et lisible, mais **rien ne l'exploite
-> encore** côté Alanya. L'enregistrement effectif des conversations agent/client
-> est un chantier distinct — voir §5.
+**Elle est désormais exploitée.** Dès qu'un agent autorisé décroche, sa
+conversation est enregistrée et déposée à la fin de l'appel — voir §3.3.
+
+> ⚠️ **Aucune annonce n'est faite au correspondant.** Ni tonalité, ni message,
+> ni indicateur de son côté. C'est une décision explicite du propriétaire du
+> produit. Dans la plupart des pays, enregistrer sans informer expose
+> l'**entreprise qui exploite le centre** : à vous d'en tenir compte dans vos
+> conditions d'utilisation.
 
 ### 1.3 Ne pas utiliser la touche 0 dans `center_audio`
 
@@ -119,34 +127,79 @@ Index : `(center_alanyaID, created_at DESC)` pour l'affichage d'un centre,
   C'est une contrainte en base, pas une vérification applicative : un réseau qui
   hésite, un double appui ou un réessai ne produisent qu'une seule ligne.
 
-### 3.2 Lire les plaintes
+### 3.2 Lire les plaintes, et les écouter
 
-Il n'existe **pas encore de route HTTP** pour les lister. La plateforme lit la
-table directement, comme elle le fait déjà pour `center_audio` et
-`center_music`. Une requête type :
+La plateforme lit la table **directement**, comme elle le fait déjà pour
+`center_audio` et `center_music`. La colonne **`url_audio`** contient une
+**adresse absolue, prête à l'emploi et lisible sans authentification** : il n'y
+a rien à intégrer chez vous, ni jeton ni en-tête.
 
 ```sql
 SELECT vc."idComplaint",
        vc."created_at",
        vc."duree_ms",
        vc."statut",
-       mf.url        AS url_audio,
-       mf."mimeType" AS type_audio,
+       vc."url_audio",          -- ← à ouvrir ou à mettre dans un <audio src="…">
        u."alanyaPhone" AS numero_appelant
 FROM voice_complaint vc
-JOIN media_files mf ON mf.id = vc."media_id"
-LEFT JOIN users u   ON u."alanyaID" = vc."user_id"
+LEFT JOIN users u ON u."alanyaID" = vc."user_id"
 WHERE vc."center_alanyaID" = $1
 ORDER BY vc."created_at" DESC;
 ```
 
-> ⚠️ `media_files.url` est **protégée par un jeton** : elle n'est pas lisible
-> directement depuis un navigateur sans authentification. Dites-nous si vous
-> avez besoin d'un accès et nous ouvrirons une route dédiée — c'est une demi-
-> journée, et cela évite de contourner l'authentification.
+L'adresse a la forme :
+
+```text
+https://alanyavox.com/api/public/plaintes/<idComplaint>/audio
+```
+
+Elle est servie avec le bon type MIME, en `inline` — un `<audio>` la joue
+directement — et avec `Access-Control-Allow-Origin: *`, donc utilisable depuis
+votre domaine.
+
+> ⚠️ **CETTE URL N'EST PAS UN CONTRÔLE D'ACCÈS.** Quiconque la connaît écoute la
+> plainte. Sa seule protection est d'être **indevinable** : elle porte l'UUID de
+> la plainte, tiré au hasard. C'est le compromis habituel pour du média, mais
+> ce n'est pas une autorisation — ne la publiez pas, et ne la mettez pas dans
+> une page indexable.
+
+> **Pourquoi pas `media_files.url` ?** Elle est protégée par un jeton, et
+> l'exposer ouvrirait un second chemin vers **tous** les médias du produit —
+> photos, vocaux, documents. La route ci-dessus ne sait servir qu'une ligne de
+> `voice_complaint`, et rien d'autre.
 
 Le passage du `statut` à `1`, `2` ou `3` est à votre main : rien côté Alanya ne
 le modifie après la création.
+
+### 3.3 Table `call_recording` — les conversations enregistrées
+
+| Colonne | Type | Nul | Description |
+| --- | --- | --- | --- |
+| `idRecording` | `uuid` | non | Clé primaire |
+| `idCompany` | `integer` | non | Entreprise du centre |
+| `call_id` | `uuid` | oui | → `calls.id`, `NULL` si l'appel a été purgé |
+| `agent_alanyaID` | `uuid` | oui | L'agent enregistré |
+| `client_alanyaID` | `uuid` | oui | Le correspondant |
+| `media_agent_id` | `uuid` | non | Piste brute : la voix de l'agent |
+| `media_client_id` | `uuid` | non | Piste brute : la voix du client |
+| `media_mix_id` | `uuid` | **oui** | Le fichier **mélangé** — le seul à écouter |
+| `duree_ms` | `integer` | non | Durée de l'appel |
+| `statut` | `smallint` | non | `0` à mélanger · `1` en cours · `2` **prêt** · `3` échec |
+| `cle_envoi` | `varchar(64)` | non | Clé d'idempotence, unique |
+| `created_at` | `timestamptz` | non | |
+
+**Pourquoi trois fichiers.** Le composant WebRTC du mobile ne sait enregistrer
+qu'**un côté à la fois** : le téléphone envoie donc deux pistes séparées, et le
+serveur les mélange avec `ffmpeg`. Le fichier à écouter est **`media_mix_id`**.
+
+> ⚠️ **N'écoutez que les enregistrements en `statut = 2`.** Avant, le mélange
+> n'a pas eu lieu et `media_mix_id` est nul. Les deux pistes brutes sont
+> conservées **exprès** : elles permettent de refaire le mélange, elles ne sont
+> pas destinées à l'écoute — chacune ne contient qu'une seule voix.
+
+Il n'y a **pas encore d'URL publique** pour ces fichiers, contrairement aux
+plaintes. Dites-nous si vous en avez besoin : c'est la même mécanique, une
+heure de travail.
 
 ---
 
@@ -175,15 +228,15 @@ POST /api/complaints
 
 ## 5. Ce qui n'est pas fait
 
-- **L'enregistrement des conversations agent ↔ client.** Seul le drapeau de
-  configuration existe (§1.2). Capturer un appel demande de mélanger deux flux
-  WebRTC, de les encoder et de les stocker — et surtout de gérer le
-  **consentement de l'appelant**, qui est une obligation légale dans la plupart
-  des pays. À traiter comme un chantier à part.
-- **Aucune route de lecture des plaintes** (§3.2).
-- **Aucune purge automatique.** Les fichiers audio s'accumulent. À prévoir quand
-  le volume sera connu.
-- **Rien n'est encore testé sur appareil réel.**
+- **Aucune URL publique pour les enregistrements d'appels** (§3.3). Les plaintes
+  en ont une, pas eux.
+- **Aucune purge automatique.** Les fichiers audio s'accumulent, et un
+  enregistrement d'appel en garde **trois** — les deux pistes brutes plus le
+  mélange. À prévoir dès que le volume sera connu ; c'est la question 3 ci-dessous.
+- **Aucun écran côté Alanya** pour consulter les plaintes ou les enregistrements.
+- **Rien n'est encore testé sur appareil réel.** En particulier : la capture de
+  la voix du correspondant, et la qualité du mélange — les deux pistes étant
+  démarrées l'une après l'autre, un décalage audible reste possible.
 
 ---
 
@@ -193,4 +246,10 @@ POST /api/complaints
    Est-ce la plateforme qui les affichera ?
 2. **Faut-il notifier quelqu'un à l'arrivée d'une plainte ?** Aujourd'hui elle
    est déposée en silence.
-3. **Combien de temps les conserver ?** La réponse conditionne la purge.
+3. **Combien de temps conserver les audios ?** La réponse conditionne la purge,
+   qui n'existe pas. Un enregistrement d'appel occupe **trois fichiers**, et le
+   volume grandira bien plus vite que celui des plaintes.
+4. **Voulez-vous une URL publique pour les enregistrements d'appels**, comme
+   celle des plaintes ? Nous ne l'avons pas ouverte d'office : une conversation
+   entière derrière une adresse non authentifiée nous a paru mériter votre
+   accord explicite.

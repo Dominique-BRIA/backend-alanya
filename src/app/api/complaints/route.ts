@@ -6,6 +6,18 @@ import { createComplaintSchema } from "@/lib/validation";
 import { estDoublonUnique } from "@/lib/contact-lists";
 
 /**
+ * L'adresse publique de l'audio d'une plainte.
+ *
+ * ⚠️ `PUBLIC_BASE_URL` et non une valeur en dur : c'est déjà la variable qui
+ * sert aux sons du standard (`urlPublique` dans `ivr.mjs`), et un second endroit
+ * où écrire le domaine finirait par diverger du premier.
+ */
+function urlPubliquePlainte(id: string): string {
+  const base = (process.env.PUBLIC_BASE_URL ?? "https://alanyavox.com").replace(/\/+$/, "");
+  return `${base}/api/public/plaintes/${id}/audio`;
+}
+
+/**
  * POST /api/complaints — dépose la plainte vocale dictée sur la touche 0 d'un
  * centre vocal.
  *
@@ -72,6 +84,26 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       },
       select: { idComplaint: true, createdAt: true, statut: true },
     });
+    /*
+     * L'URL PUBLIQUE EST ÉCRITE EN BASE, pas calculée à la lecture.
+     *
+     * La plateforme de la collègue lit `voice_complaint` directement : elle doit
+     * y trouver une adresse prête à l'emploi, sans avoir à connaître notre
+     * schéma d'URL ni à le reconstruire. Le jour où le domaine change, c'est une
+     * requête `UPDATE` — pas une correction chez elle.
+     *
+     * ⚠️ Écrite APRÈS la création parce qu'elle contient l'identifiant, généré
+     * par la base. Un échec ici laisse la plainte valide avec `url_audio` nulle :
+     * l'audio reste accessible par la route, seule l'adresse toute faite manque.
+     */
+    try {
+      await prisma.voiceComplaint.update({
+        where: { idComplaint: plainte.idComplaint },
+        data: { urlAudio: urlPubliquePlainte(plainte.idComplaint) },
+      });
+    } catch (e) {
+      console.error("[complaints] url_audio non ecrite:", e);
+    }
     return ok({ complaint: plainte }, 201);
   } catch (err) {
     // Même clé : c'est un réessai, pas une erreur. On rend la plainte DÉJÀ
