@@ -139,6 +139,42 @@ function urlPublique(fichier) {
 }
 
 /**
+ * Le bip qui annonce à l'appelant qu'il peut commencer à dicter sa plainte,
+ * sur la touche 0 d'un centre vocal.
+ *
+ * 🔴 UNE VARIABLE D'ENVIRONNEMENT, ET PAS UNE COLONNE — décision du user
+ * (19/08/2026). La collègue téléverse le fichier sur SON serveur et en donne le
+ * lien ; nous le rangeons dans `BIP_ENREGISTREMENT_URL`. Une colonne
+ * `company.url_bip_enregistrement` avait été posée puis retirée : ne pas la
+ * réintroduire. Le son est le MÊME pour toute la plateforme — c'est exactement
+ * la demande « indépendant d'un centre vocal à un autre » — et une variable
+ * évite une troisième colonne à nous dans une table du référentiel équipe.
+ * Même mécanique que `VOCAL_BASE_URL`, née du même besoin.
+ *
+ * ⚠️ L'URL DOIT ÊTRE ABSOLUE. Contrairement à `url_vocal` et `url_music`, elle
+ * ne se résout contre aucun `company.url_serveur` : il n'y a pas d'entreprise
+ * dans cette lecture, c'est tout l'intérêt. Un chemin relatif est donc REFUSÉ
+ * ici plutôt que concaténé à `alanyavox.com`, où il répondrait 404 et
+ * produirait un silence sans erreur — le pire des échecs, déjà vécu le 12/08.
+ *
+ * ⚠️ NON RENSEIGNÉE, ON REND `null` ET C'EST VOLONTAIRE : l'enregistrement
+ * démarre alors sans annonce, plutôt que de ne pas démarrer du tout. Une
+ * variable oubliée ne doit jamais rendre la fonction inutilisable.
+ */
+export function urlBipEnregistrement() {
+  const brut = (process.env.BIP_ENREGISTREMENT_URL ?? "").trim();
+  if (!brut) return null;
+  if (!/^https?:\/\//i.test(brut)) {
+    console.warn(
+      "[ivr] BIP_ENREGISTREMENT_URL ignoree : une URL ABSOLUE est attendue, recu",
+      brut,
+    );
+    return null;
+  }
+  return brut;
+}
+
+/**
  * Rend joignable un chemin déposé par la plateforme — vocal comme musique.
  *
  * 🔴 `url_vocal` ET `url_music` NE SONT PAS DES URL, CE SONT DES CHEMINS. Les

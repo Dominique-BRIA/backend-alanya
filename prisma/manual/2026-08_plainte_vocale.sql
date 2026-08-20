@@ -30,29 +30,16 @@ ALTER TABLE center
 COMMENT ON COLUMN center.enregistrement IS
   'Cet agent est-il autorise a enregistrer ses conversations avec un client ? Pose par Alanya, absent du referentiel equipe.';
 
--- ── 1 bis. Le bip qui annonce le début de l'enregistrement ──────────────────
+-- ── Le bip d'enregistrement N'EST PAS EN BASE ───────────────────────────────
 --
--- Le fichier est déposé par la PLATEFORME DE LA COLLÈGUE, comme `vocal`,
--- `center_music` et `center_audio` : nous ne versionnons rien, nous lisons.
+-- Décision du user (19/08/2026) : la collègue téléverse le fichier sur SON
+-- serveur et en donne le lien, que nous rangeons dans une VARIABLE
+-- D'ENVIRONNEMENT — `BIP_ENREGISTREMENT_URL`, lue par `src/lib/ivr.mjs`.
 --
--- 🔴 POURQUOI PAR ENTREPRISE ET NON GLOBALEMENT. Le cahier des charges demande
--- un son « indépendant du centre vocal », valable pour tous. Une ligne unique
--- pour toute la plateforme serait pourtant INJOUABLE : les URLs déposées par la
--- plateforme sont RELATIVES et se résolvent contre `company.url_serveur` (voir
--- `resoudreUrlPlateforme`), or chaque entreprise range ses fichiers sur SON
--- serveur — l'entreprise 3 sert déjà les siens depuis `158.220.107.211:9010`.
--- Une colonne sur `company` donne donc un son unique pour TOUS les centres
--- vocaux d'une entreprise, ce qui est exactement la demande, et reste jouable.
---
--- ⚠️ COLONNE SUR UNE TABLE DU RÉFÉRENTIEL ÉQUIPE, comme `center.enregistrement`.
--- Elle suit toutefois une convention qui existe déjà là : `url_serveur`,
--- `url_media`, `url_doc` sont déjà des colonnes d'URL de cette table, et la
--- collègue a déjà l'écran qui les remplit.
-ALTER TABLE company
-  ADD COLUMN IF NOT EXISTS url_bip_enregistrement varchar(255);
-
-COMMENT ON COLUMN company.url_bip_enregistrement IS
-  'Son joue avant le debut de l enregistrement d une plainte vocale, commun a tous les centres vocaux de l entreprise. URL relative resolue contre url_serveur, ou absolue.';
+-- Une colonne `company.url_bip_enregistrement` avait été posée puis RETIRÉE :
+-- ne pas la réintroduire. Le son est le même pour toute la plateforme, il ne se
+-- règle pas par entreprise, et une variable évite une troisième colonne à nous
+-- dans une table du référentiel équipe. Précédent identique : `VOCAL_BASE_URL`.
 
 -- ── 2. Plaintes vocales ─────────────────────────────────────────────────────
 --

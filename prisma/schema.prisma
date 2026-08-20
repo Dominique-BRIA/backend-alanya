@@ -1496,20 +1496,10 @@ model Company {
   urlServeur  String? @map("url_serveur") @db.VarChar(255)
   urlMedia    String? @map("url_media") @db.VarChar(255)
   urlDoc      String? @map("url_doc") @db.VarChar(255)
-  /// Son joué avant le début de l'enregistrement d'une plainte vocale, COMMUN à
-  /// tous les centres vocaux de l'entreprise — c'est la demande du user :
-  /// indépendant du centre.
-  ///
-  /// ⚠️ PAR ENTREPRISE ET NON GLOBALEMENT, et ce n'est pas un compromis : les
-  /// URLs déposées par la plateforme sont RELATIVES et se résolvent contre
-  /// `urlServeur` (voir `resoudreUrlPlateforme`). Chaque entreprise range ses
-  /// fichiers sur SON serveur — la 3 sert déjà les siens depuis
-  /// `158.220.107.211:9010`. Une ligne unique pour toute la plateforme serait
-  /// donc injouable pour l'une des deux.
-  ///
-  /// Rempli par la plateforme de la collègue, comme `vocal` et `center_music` :
-  /// nous ne versionnons aucun fichier, nous lisons cette colonne.
-  urlBipEnregistrement String? @map("url_bip_enregistrement") @db.VarChar(255)
+  /// ⚠️ PAS DE COLONNE POUR LE BIP D'ENREGISTREMENT. `url_bip_enregistrement`
+  /// a été posée ici puis retirée le 19/08/2026 : le lien du fichier vit dans
+  /// la variable d'environnement `BIP_ENREGISTREMENT_URL`, décision du user.
+  /// Voir `src/lib/ivr.mjs`. Ne pas la recréer.
   /// Numéro court attribué à l'entreprise ; facturé à part.
   numeroCourt String? @map("numero_court") @db.VarChar(20)
   /// Suppression logique, comme sur `service` et `prixabonnement`.
