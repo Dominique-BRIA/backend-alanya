@@ -806,3 +806,41 @@ export async function choisirAgentLibre(prisma, agentIds) {
   }
   return null;
 }
+
+/**
+ * Cet agent doit-il enregistrer la conversation qu'il vient de prendre ?
+ *
+ * 🔴 LA RÉPONSE EST DANS `center`, ET NULLE PART AILLEURS. Une ligne y est le
+ * triplet (centre, touche, agent) : le drapeau `enregistrement` est donc réglé
+ * par agent ET par centre, et un même agent peut être enregistré sur un
+ * standard et pas sur un autre. On cherche donc « existe-t-il une ligne où cet
+ * agent est enregistré ? », sans se soucier de la touche : c'est la personne
+ * qui est autorisée, pas le service.
+ *
+ * ⚠️ **DÉCISION DU USER (20/08/2026) : NI CONSENTEMENT, NI NOTIFICATION DE
+ * L'APPELANT.** Le concern légal — enregistrer sans informer expose l'entreprise
+ * qui exploite le centre — a été soulevé une fois et tranché par lui. Écrit ici
+ * pour que ce soit une décision tracée et non un oubli : quiconque relit ce code
+ * doit savoir que l'absence d'annonce est VOULUE.
+ *
+ * Rend `{ idCompany }` quand l'agent est autorisé, `null` sinon — l'entreprise
+ * est nécessaire pour ranger l'enregistrement, et la relire ailleurs ferait une
+ * seconde requête pour une information qu'on tient déjà ici.
+ *
+ * ⚠️ Échec silencieux, et `null` par défaut. Une lecture qui échoue ne doit ni
+ * empêcher de décrocher, ni surtout déclencher un enregistrement qu'on n'aurait
+ * pas su autoriser : dans le doute, on n'enregistre pas.
+ */
+export async function enregistrementPourAgent(prisma, agentId) {
+  if (!agentId) return null;
+  try {
+    const ligne = await prisma.center.findFirst({
+      where: { users_alanyaID: agentId, enregistrement: true },
+      select: { idCenter: true, idCompany: true },
+    });
+    return ligne == null ? null : { idCompany: ligne.idCompany ?? null };
+  } catch (e) {
+    console.error("[ivr] lecture de center.enregistrement:", e?.message ?? e);
+    return null;
+  }
+}

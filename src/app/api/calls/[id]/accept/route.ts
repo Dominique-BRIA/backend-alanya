@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { activeCallParticipants, conversationMeta } from "@/lib/calls";
 import { marquerRecontacte } from "@/lib/queue";
+import { enregistrementPourAgent } from "@/lib/ivr.mjs";
 
 // POST /api/calls/:id/accept — accepte / rejoint un appel (direct ou groupe).
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -70,6 +71,27 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const meta = await conversationMeta(part.call.convId);
   const activeParticipants = await activeCallParticipants(id);
 
+  /*
+   * ENREGISTREMENT DE LA CONVERSATION — décidé ICI, au décrochage.
+   *
+   * C'est le seul instant où l'on connaît à la fois QUI décroche et que la
+   * conversation commence. Le porter par l'événement temps réel aurait obligé
+   * chaque client à le corréler avec son propre décrochage.
+   *
+   * ⚠️ **NI CONSENTEMENT NI NOTIFICATION DE L'APPELANT** — décision explicite du
+   * user (20/08/2026), tracée ici et dans `enregistrementPourAgent` pour que ce
+   * soit un choix et non un oubli. Rien n'est annoncé au correspondant.
+   *
+   * Silencieux en cas d'échec, et `false` par défaut : une lecture ratée ne doit
+   * ni empêcher de décrocher, ni déclencher un enregistrement non autorisé.
+   */
+  let enregistrement: { idCompany: number | null } | null = null;
+  try {
+    enregistrement = await enregistrementPourAgent(prisma, userId);
+  } catch (e) {
+    console.error("[accept] enregistrementPourAgent:", e);
+  }
+
   return ok({
     id,
     status: "ONGOING",
@@ -77,5 +99,9 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     isGroup: meta.isGroup,
     groupName: meta.groupName,
     activeParticipants,
+    /// Le client n'enregistre que si le serveur le lui dit. Absent ou faux chez
+    /// un client plus ancien : il ignorera simplement le champ.
+    enregistrer: enregistrement != null,
+    enregistrementCompanyId: enregistrement?.idCompany ?? null,
   });
 });
