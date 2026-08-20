@@ -172,6 +172,10 @@ model User {
   /// compte peut être l'un ou l'autre, jamais confondus.
   plaintesRecues  VoiceComplaint[] @relation("plainteCentreVocal")
   plaintesLaissees VoiceComplaint[] @relation("plainteAuteur")
+  /// Enregistrements de conversations où ce compte est l'agent, et ceux où il
+  /// est le correspondant. Deux relations distinctes, jamais confondues.
+  enregistrementsAgent  CallRecording[] @relation("enregistrementAgent")
+  enregistrementsClient CallRecording[] @relation("enregistrementClient")
 
   // --- Relations vers la file d'attente ---
   queueCenterFiles   QueueFile[]           @relation("QueueCenterUser")
@@ -893,6 +897,10 @@ model MediaFile {
   /// Une plainte vocale s'appuie sur ce média. `Cascade` : supprimer le fichier
   /// retire la plainte, qui n'aurait plus rien à faire écouter.
   plainteVocale VoiceComplaint[]
+  /// Les trois rôles qu'un média peut tenir dans un enregistrement d'appel.
+  enregistrementPisteAgent  CallRecording[] @relation("enregistrementPisteAgent")
+  enregistrementPisteClient CallRecording[] @relation("enregistrementPisteClient")
+  enregistrementMelange     CallRecording[] @relation("enregistrementMelange")
 
   @@index([ownerId])
   @@index([messageId])
@@ -998,6 +1006,9 @@ model Call {
   callerMask   User?   @relation("CallCallerMask", fields: [callerMaskId], references: [id], onDelete: SetNull)
 
   participants CallParticipant[]
+  /// ⚠️ `SetNull` et non `Cascade` : une purge des appels ne doit pas emporter
+  /// des enregistrements que l'entreprise est censée conserver.
+  enregistrements CallRecording[]
 
   @@index([initiatorId])
   @@map("calls")
@@ -1518,6 +1529,7 @@ model Company {
   VocauxAttente VocalAttente[]
   AudiosMenu    CenterAudio[]
   plaintesVocales VoiceComplaint[]
+  enregistrementsAppel CallRecording[]
 
   QueueFiles     QueueFile[]
   QueueFileHists QueueFileHistorique[]
@@ -1843,6 +1855,55 @@ model VoiceComplaint {
   @@index([center_alanyaID, createdAt(sort: Desc)], map: "voice_complaint_centre_date_idx")
   @@index([idCompany], map: "voice_complaint_company_idx")
   @@map("voice_complaint")
+}
+
+/// Enregistrement d'une conversation agent ↔ client d'un centre d'appels.
+///
+/// SQL : `prisma/manual/2026-08_enregistrement_appel.sql`, éprouvé sur base
+/// jetable. L'AUTORISATION, elle, vit dans `Center.enregistrement`.
+///
+/// 🔴 DEUX PISTES, PUIS UNE TROISIÈME. Le greffon `flutter_webrtc` ne sait
+/// enregistrer QU'UN côté à la fois — vérifié dans son code Android, où
+/// `startRecordingToFile` choisit `inputSamplesInterceptor` OU
+/// `outputSamplesInterceptor`, jamais les deux. Le téléphone envoie donc le
+/// micro et le distant séparément, et le serveur les mélange. C'est ce qui
+/// évite de maintenir un fork d'une dépendance critique.
+model CallRecording {
+  idRecording     String   @id @default(uuid()) @map("idRecording") @db.Uuid
+  idCompany       Int      @map("idCompany")
+  callId          String?  @map("call_id") @db.Uuid
+  agentId         String?  @map("agent_alanyaID") @db.Uuid
+  clientId        String?  @map("client_alanyaID") @db.Uuid
+
+  /// ⚠️ CONSERVÉES même après le mélange, et ce n'est pas du gaspillage : c'est
+  /// la seule façon de le REFAIRE si ffmpeg change ou si le résultat est
+  /// mauvais. Les effacer ferait de la première tentative la dernière.
+  mediaAgentId    String   @map("media_agent_id") @db.Uuid
+  mediaClientId   String   @map("media_client_id") @db.Uuid
+
+  /// Nul tant que le mélange n'a pas eu lieu — état NORMAL, pas une panne :
+  /// ffmpeg peut manquer sur le serveur, l'enregistrement reste alors
+  /// exploitable en deux pistes.
+  mediaMixId      String?  @map("media_mix_id") @db.Uuid
+
+  dureeMs         Int      @default(0) @map("duree_ms")
+  /// 0 à mélanger · 1 en cours · 2 mélangé · 3 mélange impossible.
+  statut          Int      @default(0) @db.SmallInt
+  cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company     Company    @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  call        Call?      @relation(fields: [callId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  agent       User?      @relation("enregistrementAgent", fields: [agentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  client      User?      @relation("enregistrementClient", fields: [clientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  mediaAgent  MediaFile  @relation("enregistrementPisteAgent", fields: [mediaAgentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  mediaClient MediaFile  @relation("enregistrementPisteClient", fields: [mediaClientId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  mediaMix    MediaFile? @relation("enregistrementMelange", fields: [mediaMixId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([cleEnvoi], map: "call_recording_cle_envoi_key")
+  @@index([agentId, createdAt(sort: Desc)], map: "call_recording_agent_date_idx")
+  @@index([idCompany], map: "call_recording_company_idx")
+  @@map("call_recording")
 }
 
 model AccesAdmin {
