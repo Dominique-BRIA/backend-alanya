@@ -28,7 +28,13 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   }
 
   const demandes = await prisma.meetingInviteRequest.findMany({
-    where: { idMeeting: id },
+    // EN ATTENTE SEULEMENT. La ligne decidee RESTE en base — c'est elle qui,
+    // par la contrainte d'unicite, rend un refus definitif et empeche de
+    // redemander. Mais la RENDRE ici faisait revenir la demande refusee dans le
+    // bandeau de l'organisateur au rechargement suivant, soit dix secondes plus
+    // tard : il la refusait, elle disparaissait, elle revenait, indefiniment.
+    // L'index (idMeeting, statut) existe deja pour ce filtre.
+    where: { idMeeting: id, statut: 0 },
     orderBy: { createdAt: "asc" },
     include: { demandeur: true, invite: true },
   });

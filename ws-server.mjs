@@ -2540,16 +2540,30 @@ async function handleMeetingLeave(ws, msg) {
     if (room.size === 0) meetingRooms.delete(meetingId);
   }
 
+  // La duree ne se calcule qu'au PREMIER depart, exactement comme dans la route
+  // REST POST /api/meetings/:id/leave. Ce chemin-ci est pourtant le chemin
+  // NOMINAL de la sortie, donc le plus rejoue de tous : le client emet
+  // `meeting_leave` sur la socket puis appelle la route HTTP, un onglet se
+  // ferme apres un clic sur « Quitter », deux appareils du meme compte partent
+  // l'un apres l'autre. A chaque repassage, recalculer depuis start_time
+  // ajouterait tout le temps ecoule depuis la vraie sortie — et d'autant plus
+  // que le navigateur reste ouvert longtemps derriere.
+  //
+  // `connecte` fait foi parce que l'entree le remet a 1 en repartant d'un
+  // start_time neuf : une seconde participation reelle est donc bien recomptee,
+  // seul le rejeu du meme depart est ignore.
   const participant = await prisma.meetingParticipant.findUnique({
     where: { idMeeting_IDparticipant: { idMeeting: meetingId, IDparticipant: ws.userId } },
   });
-  if (participant) {
+  if (participant && participant.connecte !== 0) {
     const duree = participant.start_time
       ? Math.round((Date.now() - participant.start_time.getTime()) / 1000)
       : null;
     await prisma.meetingParticipant.update({
       where: { ID: participant.ID },
-      data: { connecte: 0, duree },
+      // Sans start_time il n'y a rien a calculer : on conserve la duree deja
+      // enregistree plutot que d'ecrire null par-dessus.
+      data: { connecte: 0, duree: duree ?? participant.duree },
     });
   }
 
