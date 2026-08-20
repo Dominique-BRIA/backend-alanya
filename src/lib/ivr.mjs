@@ -161,6 +161,25 @@ function urlPublique(fichier) {
  * démarre alors sans annonce, plutôt que de ne pas démarrer du tout. Une
  * variable oubliée ne doit jamais rendre la fonction inutilisable.
  */
+/**
+ * La touche qui ouvre l'enregistrement d'une plainte sur un centre vocal.
+ *
+ * ⚠️ RÉSERVÉE PAR CONVENTION, pas par une ligne en base. Vérifié en production
+ * le 20/08/2026 : `center_audio` ne porte que les touches 1 à 6, le 0 était
+ * libre. Un son qu'on y déposerait est ignoré — voir `handleIvrDtmfVocal`.
+ */
+export const TOUCHE_PLAINTE_VOCALE = 0;
+
+/**
+ * Plafond de durée d'une plainte vocale.
+ *
+ * ⚠️ Le client s'arrête tout seul à cette borne : sans elle, un téléphone posé
+ * dans une poche enverrait un fichier de plusieurs heures, qu'il faudrait
+ * téléverser puis stocker. Trois minutes suffisent très largement à exposer une
+ * réclamation, et l'appelant voit son minuteur avancer.
+ */
+export const DUREE_PLAINTE_MAX_MS = 3 * 60_000;
+
 export function urlBipEnregistrement() {
   const brut = (process.env.BIP_ENREGISTREMENT_URL ?? "").trim();
   if (!brut) return null;

@@ -375,3 +375,22 @@ export const createRingtoneSchema = z.object({
   url: urlSonnerieSchema,
   label: libelleSonnerieSchema,
 });
+
+/**
+ * Depot d'une plainte vocale — POST /api/complaints.
+ *
+ * `cleEnvoi` est la cle d'IDEMPOTENCE posee par le client, une par
+ * enregistrement. Bornee a 64 caracteres comme la colonne : la refuser ici
+ * donne un 422 lisible plutot qu'une erreur Postgres a l'insertion.
+ *
+ * ⚠️ `dureeMs` est OPTIONNELLE et non requise. Un enregistrement dont le client
+ * n'a pas su mesurer la duree doit pouvoir partir quand meme : la plainte est
+ * ce qui compte, la duree n'est qu'un confort de tri. Le serveur retombe alors
+ * sur celle du media.
+ */
+export const createComplaintSchema = z.object({
+  centerId: z.string().uuid(),
+  mediaId: z.string().uuid(),
+  cleEnvoi: z.string().min(8).max(64),
+  dureeMs: z.number().int().min(0).max(60 * 60_000).optional(),
+});

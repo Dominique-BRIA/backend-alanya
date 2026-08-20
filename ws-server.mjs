@@ -37,6 +37,9 @@ import {
   lireMenuVocal,
   optionsPubliques,
   urlInviteCentre,
+  urlBipEnregistrement,
+  TOUCHE_PLAINTE_VOCALE,
+  DUREE_PLAINTE_MAX_MS,
 } from "./src/lib/ivr.mjs";
 import {
   ajouterClientFileWS,
@@ -1951,6 +1954,22 @@ function armerQueuePolling(session, option, touche) {
  *    exactement le geste qu'on fait quand on croit que « ça n'a pas marché ».
  */
 async function handleIvrDtmfVocal(session, touche) {
+  // 🔴 LA TOUCHE 0 EST RÉSERVÉE À LA PLAINTE VOCALE, avant toute autre lecture.
+  //
+  // Elle était libre : vérifié en production le 20/08/2026, `center_audio` ne
+  // porte que les touches 1 à 6. Elle le reste par CONVENTION — si la plateforme
+  // y dépose un son un jour, il sera ignoré, et un avertissement le dira. Un
+  // comportement qui dépend de la présence d'une ligne serait imprévisible pour
+  // l'appelant, qui entend toujours la même annonce.
+  if (touche === TOUCHE_PLAINTE_VOCALE) {
+    if (session.options.some((o) => o.digit === TOUCHE_PLAINTE_VOCALE)) {
+      console.warn(
+        `[ivr] centre ${session.nomCentre} : un son est configuré sur la touche 0, IGNORÉ — cette touche enregistre les plaintes.`,
+      );
+    }
+    return ouvrirEnregistrementPlainte(session);
+  }
+
   const option = session.options.find((o) => o.digit === touche);
   const menu = optionsPubliques(session.options);
 
@@ -2004,6 +2023,54 @@ async function handleIvrDtmfVocal(session, touche) {
 }
 
 /**
+ * L'appelant a tapé 0 : on l'invite à dicter sa plainte.
+ *
+ * LE SERVEUR NE FAIT QUE DONNER LE DÉPART. Il n'enregistre rien, ne reçoit
+ * aucun flux : le micro, le minuteur, la pause et la réécoute vivent sur le
+ * téléphone, et le fichier n'arrive qu'à l'envoi, par la route HTTP des médias.
+ * C'est ce qui rend la fonction possible sans toucher au transport de l'appel.
+ *
+ * ⚠️ L'ENREGISTREMENT NE DÉMARRE PAS À L'APPUI, mais À LA FIN DU BIP — demande
+ * explicite du user. C'est le CLIENT qui enchaîne, parce que lui seul sait quand
+ * la lecture se termine ; le serveur ne connaîtrait ni la durée du fichier ni le
+ * temps de mise en cache. Il envoie donc les deux ensemble et laisse faire.
+ *
+ * ⚠️ `bipUrl` peut être NULLE — variable d'environnement absente, ou URL
+ * relative refusée. Le client démarre alors sans annonce plutôt que de rester
+ * bloqué : une variable oubliée ne doit jamais rendre la touche inutilisable.
+ *
+ * Le minuteur du menu est coupé, comme pour une lecture : quelqu'un qui dicte sa
+ * plainte n'est pas inactif. Le plafond de sécurité le remplace — sans lui, une
+ * session dont l'appelant est parti resterait ouverte indéfiniment.
+ */
+async function ouvrirEnregistrementPlainte(session) {
+  // Ré-appui pendant qu'il enregistre déjà : on ne relance rien, sinon le bip
+  // repartirait par-dessus sa voix et le minuteur du client repartirait de zéro.
+  if (session.etape === "enregistrement") return;
+
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  session.etape = "enregistrement";
+  session.toucheEnLecture = null;
+  armerPlafondLecture(session);
+
+  const bipUrl = urlBipEnregistrement();
+  envoieAAppelant(session, {
+    type: "ivr_record",
+    callId: session.callId,
+    centerId: session.centreId,
+    centerName: session.nomCentre,
+    bipUrl,
+    // Explicite, et non deviné côté client : la borne pourra changer sans
+    // nouvel APK, comme la règle de boucle d'`ivr_play`.
+    maxMs: DUREE_PLAINTE_MAX_MS,
+  });
+  console.log(
+    `[ivr] touche 0 — appel ${session.callId}, enregistrement de plainte (bip ${bipUrl ? "présent" : "ABSENT"})`,
+  );
+}
+
+/**
  * Le plafond de sécurité d'une lecture en boucle — voir `DELAI_LECTURE_MAX_MS`.
  *
  * Referme comme le minuteur du menu : un `ivr_error` sans `call_ended`, pour que
@@ -2045,7 +2112,12 @@ async function handleIvrBack(ws, msg) {
   const session = sessionIvr(msg?.callId);
   if (!session || session.appelantId !== ws.userId) return;
   if (session.mode !== "vocal") return;
-  if (session.etape !== "lecture") return;
+  // ⚠️ « enregistrement » EST ACCEPTÉ AUTANT QUE « lecture ». Sans lui, le
+  // bouton « Accueil » serait INERTE pendant qu'on dicte une plainte — le seul
+  // état où l'appelant a le plus besoin de pouvoir revenir en arrière, et un
+  // bouton sans effet se lit comme une application figée. Les deux étapes
+  // partagent d'ailleurs le même plafond de sécurité, donc le même nettoyage.
+  if (session.etape !== "lecture" && session.etape !== "enregistrement") return;
 
   if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
   session.minuteurLecture = null;
@@ -2086,6 +2158,14 @@ async function handleIvrDtmf(ws, msg) {
    */
   const touche = Number(digit);
   if (session.mode === "vocal") {
+    /*
+     * ⚠️ « enregistrement » EST VOLONTAIREMENT ABSENT DE CETTE LISTE, et il ne
+     * faut pas l'y ajouter : pendant qu'on dicte une plainte, toute touche est
+     * ignorée. L'ajouter ferait perdre l'enregistrement en cours sur un appui
+     * distrait — le pavé reste à l'écran, il est facile à toucher. Le retour à
+     * l'accueil, lui, passe par `ivr_back`, qui accepte cette étape : c'est la
+     * seule sortie, et elle est explicite.
+     */
     if (session.etape !== "menu" && session.etape !== "lecture") return;
     return handleIvrDtmfVocal(session, touche);
   }
