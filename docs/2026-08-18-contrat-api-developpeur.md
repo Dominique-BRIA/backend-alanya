@@ -23,8 +23,9 @@ pas est susceptible de changer.
 >
 > **Pour `/api/v1/*`, c'est
 > [le guide d'intégration v1](2026-08-21-api-v1-integration.md) qui fait foi.**
-> Le présent document ne reste la référence que pour `/api/developer/*` et pour
-> le §3, toujours ouvert.
+> Le présent document reste la référence pour **`/api/developer/*`**, c'est-à-dire
+> pour qui construit un tableau de bord de gestion des clés. Le §3, longtemps
+> ouvert, est **tranché**.
 
 ---
 
@@ -57,28 +58,38 @@ Trois raisons, dont deux sont des garanties de sécurité :
 requête » depuis le navigateur fonctionne. `X-Api-Key` a été ajouté à cette
 liste le 18/08/2026 — sans lui, le préflight échouait silencieusement.
 
-## 3. ⚠️ À décider avant la mise en production : la session de la console
+## 3. ✅ TRANCHÉ le 21/08/2026 : la session de la console
 
-**C'est le point qui mordra en production s'il n'est pas tranché.**
+**Ce point était ouvert depuis le 18/08. Il est réglé — le comportement est
+assumé tel quel, aucun aménagement n'est fait.**
 
 Alanya applique une règle de session unique : au plus **un mobile et un poste**
-par compte. Un tableau de bord est un poste. Avec le réglage par défaut
-(`users.appareil_total = 2`), la limite « poste » vaut 1 — donc **se connecter
-au tableau de bord déconnecte l'utilisateur d'Alanya Web, et inversement**.
+par compte. Un tableau de bord est un poste, et avec le réglage par défaut
+(`users.appareil_total = 2`) la limite « poste » vaut 1. Donc, et c'est le
+comportement retenu :
 
-Ce n'est un défaut d'aucun des deux produits : c'est une décision d'architecture
-qui n'a jamais été prise, la console n'ayant jamais eu de client.
+> 🔴 **Se connecter à votre console déconnecte l'utilisateur d'Alanya Web, et se
+> reconnecter à Alanya Web le déconnecte de votre console.**
 
-Deux issues, compatibles entre elles :
+Deux précisions pour que vos utilisateurs ne le vivent pas comme une panne :
 
-1. **`appareil_total = 3` sur les comptes développeurs.** Aucun code, effet
-   immédiat, réglable depuis la plateforme. Débloque le développement dès
-   aujourd'hui. Fragile : c'est un réglage par compte qu'il faut penser à poser.
-2. **Une famille « console » distincte**, hors du décompte des postes. Une
-   dizaine de lignes côté Alanya, et le problème disparaît par construction.
+- **C'est mutuel et silencieux.** L'éviction porte sur les jetons de
+  rafraîchissement encore vivants ; celui qui se fait déconnecter n'en est pas
+  averti, il découvre un `401` à sa requête suivante. **Traitez un `401` comme
+  « la session a été reprise ailleurs »** et redemandez une connexion, plutôt
+  que d'afficher une erreur technique.
+- **Le mobile n'est pas concerné.** Il a sa propre place, plafonnée à 1 quoi
+  qu'il arrive. Quelqu'un peut donc garder son téléphone Alanya joignable
+  pendant qu'il travaille dans votre console ; c'est seulement Alanya **Web**
+  qui cède la place.
 
-> Recommandation : (1) tout de suite pour ne pas bloquer, (2) avant la mise en
-> production.
+Deux aménagements avaient été proposés — relever `users.appareil_total` à 3 sur
+les comptes concernés, ou sortir la console du décompte des postes. **Les deux
+sont écartés** : ni l'un ni l'autre n'est nécessaire au cas d'usage réel, et le
+second ajouterait une famille d'appareils à maintenir dans une règle de sécurité
+qui vaut aujourd'hui pour tout le monde de la même façon. Si l'usage montre que
+la gêne est réelle, le réglage par compte reste disponible sans aucune
+livraison.
 
 ---
 
