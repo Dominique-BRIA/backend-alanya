@@ -4,7 +4,12 @@ import { ok, fail, handleError } from "@/lib/http";
 import { requireUser, UnauthorizedError } from "@/lib/auth-context";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
-import { INTERVALLE_RELEVE_MIN, suiviPositionApplicable } from "@/lib/geo-distance";
+import {
+  INTERVALLE_RELEVE_MIN,
+  SEUIL_DEPLACEMENT_METRES,
+  INTERVALLE_HEARTBEAT_MIN,
+  suiviPositionApplicable,
+} from "@/lib/geo-distance";
 
 // GET /api/me — profil de l'utilisateur authentifié.
 export async function GET(req: NextRequest) {
@@ -36,6 +41,8 @@ export async function GET(req: NextRequest) {
        */
       suiviPosition: suiviPositionApplicable(user.idCompany),
       suiviPositionIntervalleMin: INTERVALLE_RELEVE_MIN,
+      suiviPositionSeuilMetres: SEUIL_DEPLACEMENT_METRES,
+      suiviPositionHeartbeatMin: INTERVALLE_HEARTBEAT_MIN,
     });
   } catch (err) {
     if (err instanceof UnauthorizedError) return fail(err.message, 401, "UNAUTHORIZED");

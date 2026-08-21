@@ -11,7 +11,7 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
-import { estCompteCentre } from "@/lib/ivr.mjs";
+import { ouvreUnStandard } from "@/lib/ivr.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 
 // GET /api/calls — historique des appels de l'utilisateur (50 derniers).
@@ -24,6 +24,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       call: {
         include: {
           initiator: true,
+          callerMask: true,
           participants: { include: { user: true } },
         },
       },
@@ -139,7 +140,19 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       where: { id: calleeId },
       select: { typeCompte: true },
     });
-    if (!estCompteCentre(cible) && (await estOccupe(calleeId))) {
+    /*
+     * ⚠️ `ouvreUnStandard` ET NON `estCompteCentre` (corrigé le 18/08/2026).
+     *
+     * `estCompteCentre` ne reconnaît que `type_compte = 3`. Un CENTRE VOCAL est
+     * en 4 : il retombait donc dans le cas ordinaire et se déclarait occupé dès
+     * le premier appelant, alors qu'un serveur vocal n'a par nature aucune
+     * raison de ne servir qu'une personne à la fois — il ne fait que jouer des
+     * sons, il n'y a personne à monopoliser.
+     *
+     * La question posée ici n'est pas « est-ce un centre d'appels ? » mais
+     * « ce numéro ouvre-t-il un standard ? ». Les deux sortes y répondent oui.
+     */
+    if (!ouvreUnStandard(cible) && (await estOccupe(calleeId))) {
       // L'appel est tracé plutôt que simplement refusé : sans cette ligne,
       // l'appelant ne verrait aucune trace de sa tentative dans l'historique.
       // Les deux participants sont marqués `leftAt` : l'appel est clos d'emblée

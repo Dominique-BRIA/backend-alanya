@@ -6,6 +6,9 @@ import { createConversationSchema } from "@/lib/validation";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { serialiseAppelPour } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
+// Le libellé d'une ligne d'un message — la règle est décidée là, pour les trois
+// clients qui lisent `conversation.lastMessage` tel quel.
+import { apercuMessage } from "@/lib/message-payload.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 
 // Convertit le type entier (BD) en string (API)
@@ -56,7 +59,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
         where: { convId: { in: convIds } },
         orderBy: { startedAt: "desc" },
         distinct: ["convId"],
-        include: { participants: { include: { user: true } } },
+        include: { callerMask: true, participants: { include: { user: true } } },
       })
     : [];
   const appelParConv = new Map(derniersAppels.map((c) => [c.convId as string, c]));
@@ -101,13 +104,48 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const conversations = parts.map((p) => {
     const conv = p.conv;
     const others = conv.participants.filter((pp) => pp.userId !== userId);
+    /*
+     * ⚠️ LA CONVERSATION AVEC SOI-MÊME N'A PAS D'« AUTRE ».
+     *
+     * `others` y est vide, et le repli tombait alors sur « Inconnu » — le nom le
+     * plus trompeur possible pour ses propres notes. Elle se reconnaît sans
+     * ambiguïté à sa forme : non-groupe et un seul participant, forme qu'aucune
+     * conversation de production n'avait avant celle-ci (vérifié).
+     *
+     * Le drapeau `isSelf` part avec la charge plutôt que d'être redéduit par
+     * chaque client : les trois auraient sinon à connaître la règle, et le
+     * mobile affiche déjà « Inconnu » pour toute conversation dont il ne trouve
+     * pas le correspondant.
+     */
+    const isSelf = !conv.isGroup && conv.participants.length === 1;
     const title = conv.isGroup
       ? conv.name
-      : (others[0] ? nomAffichage(others[0].user) : null) ?? "Inconnu";
+      : isSelf
+        ? "Moi"
+        : (others[0] ? nomAffichage(others[0].user) : null) ?? "Inconnu";
 
     // F11 : dernier message — utilise le champ dénormalisé OU le fallback
     const fallbackLast = conv.messages[0];
-    const lastContent = conv.lastMessage ?? fallbackLast?.content ?? null;
+    /*
+     * 🔴 LE REPLI PASSE PAR `apercuMessage`, ET C'EST CE QUI RÉPARE L'EXISTANT.
+     *
+     * Le défaut signalé le 18/08/2026 — « j'envoie une photo, la liste affiche
+     * l'état du dernier appel » — vient d'ici : pour un média SANS LÉGENDE,
+     * `conv.lastMessage` valait NULL (le libellé n'était calculé que pour
+     * CONTACT et LOCATION) et `fallbackLast.content` était vide lui aussi. La
+     * route rendait donc `lastMessage: null`, et le client bascule alors sur
+     * l'aperçu du dernier APPEL, sans condition.
+     *
+     * Corriger seulement l'écriture aurait laissé les conversations DÉJÀ dans
+     * cet état — 6 sur 94 en production — cassées jusqu'au message suivant.
+     * Calculer le libellé ici aussi les répare toutes, sans migration de
+     * données ni écriture : c'est une lecture, elle vaut pour l'historique.
+     */
+    const lastContent =
+      conv.lastMessage ??
+      (fallbackLast
+        ? apercuMessage(fallbackLast.type, fallbackLast.content)
+        : null);
     const lastType = conv.lastMessageType != null
         ? _typeToString(conv.lastMessageType)
         : (fallbackLast?.type ?? null);
@@ -117,8 +155,31 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     return {
       id: conv.id,
       isGroup: conv.isGroup,
+      /// Mes notes personnelles. Envoyé explicitement : un client qui l'ignore
+      /// affiche « Moi » comme titre et se comporte normalement — dégradé,
+      /// jamais cassé.
+      isSelf,
       title,
-      avatarUrl: avatarPublicUrl(conv.isGroup ? conv.avatarUrl : others[0]?.user.avatarUrl ?? null),
+      /*
+       * 🐛 « MOI » N'AVAIT PAS DE PHOTO (signalé le 19/08/2026).
+       *
+       * L'avatar se lisait chez `others[0]`, qui n'existe justement pas pour la
+       * conversation avec soi-même : la liste affichait donc l'initiale de
+       * « Moi » sur fond de couleur, alors que l'appareil connaît parfaitement
+       * mon visage. Dans mes notes, l'autre bout, c'est moi — c'est donc ma
+       * photo qu'il faut rendre, et `conv.participants[0]` EST moi puisque je
+       * suis le seul participant.
+       *
+       * Corrigé ICI et non dans les clients : les trois lisent la même charge,
+       * et le web aurait sinon gardé le défaut.
+       */
+      avatarUrl: avatarPublicUrl(
+        conv.isGroup
+          ? conv.avatarUrl
+          : isSelf
+            ? conv.participants[0]?.user.avatarUrl ?? null
+            : others[0]?.user.avatarUrl ?? null,
+      ),
       members: conv.participants.map((pp) => {
         // Confidentialité : masque la présence d'un pair qui a choisi « personne ».
         const hidePresence =
@@ -180,10 +241,22 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   if (body.publicNumber) {
     const target = await prisma.user.findUnique({ where: { publicNumber: body.publicNumber } });
     if (!target) return fail("Aucun utilisateur avec ce numéro", 404, "NOT_FOUND");
-    if (target.id === userId) return fail("Conversation avec soi-même impossible", 400, "SELF");
 
+    /*
+     * 🔴 L'INTERDICTION DE SE PARLER À SOI-MÊME EST LEVÉE (18/08/2026).
+     *
+     * Elle renvoyait `400 SELF`, et c'était le bon réflexe tant que le cas
+     * n'était pas modélisé : `findOrCreateDirectConversation(moi, moi)` aurait
+     * rendu la conversation d'un tiers, puis violé l'unicité en créant deux
+     * participants identiques. Le garde protégeait donc d'un vrai dégât.
+     *
+     * Ce que le user demande — le « Moi » de WhatsApp, pour se garder des notes
+     * — est désormais une forme à part entière : une conversation non-groupe à
+     * UN participant, traitée par `findOrCreateSelfConversation`. Le garde n'a
+     * plus lieu d'être, et son maintien empêcherait la fonctionnalité.
+     */
     const conv = await findOrCreateDirectConversation(userId, target.id);
-    return ok({ id: conv.id, isGroup: false }, 201);
+    return ok({ id: conv.id, isGroup: false, isSelf: target.id === userId }, 201);
   }
 
   const members = await prisma.user.findMany({

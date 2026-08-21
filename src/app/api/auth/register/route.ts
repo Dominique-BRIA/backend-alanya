@@ -32,7 +32,24 @@ export async function POST(req: NextRequest) {
     });
     await prisma.emailVerification.create({ data: { email, codeHash, expiresAt } });
 
-    await sendOtpEmail(email, code);
+    /*
+     * ⚠️ L'ÉCHEC D'ENVOI EST DÉSORMAIS SIGNALÉ (18/08/2026).
+     *
+     * `sendOtpEmail` avalait l'erreur et écrivait le code en clair dans les
+     * journaux « pour ne pas bloquer l'utilisateur ». Le repli a été retiré —
+     * un code d'authentification dans `pm2 logs` est un code publié — et il
+     * n'est PAS remplacé par un silence : sans cette garde, l'écran annoncerait
+     * « code envoyé » à quelqu'un qui attendra un courriel qui n'arrivera
+     * jamais, et qui n'aura aucune raison de réessayer.
+     */
+    const envoi = await sendOtpEmail(email, code);
+    if (!envoi.remis) {
+      return fail(
+        "Impossible d'envoyer le code de confirmation. Réessayez dans un instant.",
+        502,
+        "MAIL_NON_REMIS",
+      );
+    }
 
     return ok({ message: "Code de confirmation envoyé", email });
   } catch (err) {

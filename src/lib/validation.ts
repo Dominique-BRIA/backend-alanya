@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { chargeValide } from "@/lib/message-payload.mjs";
 
 /// `max(100)` est aligné sur la colonne `users.email`, ramenée à VARCHAR(100)
 /// pour suivre le référentiel équipe. Sans cette borne, un email plus long
@@ -176,10 +177,18 @@ export const createConversationSchema = z.object({
 
 export const sendMessageSchema = z.object({
   content: z.string().trim().min(1).max(8000).optional(),
-  type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO"]).default("TEXT"),
+  type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO", "CONTACT", "LOCATION"]).default("TEXT"),
   mediaId: z.string().uuid().optional(),
   mediaIds: z.array(z.string().uuid()).max(10).optional(),
   replyToId: z.string().uuid().optional(),
+}).refine((d) => chargeValide(d.type, d.content ?? null), {
+  // CONTACT et LOCATION portent leur charge en JSON dans `content` : sans ce
+  // contrôle, un client mal réglé écrirait une ligne que plus rien ne peut
+  // rendre — et l'erreur n'apparaîtrait que chez le destinataire, longtemps
+  // après. Le format est tenu par `src/lib/message-payload.mjs`, seul endroit
+  // que les trois clients traversent.
+  message: "Charge invalide : un message CONTACT ou LOCATION doit porter sa charge JSON dans content",
+  path: ["content"],
 });
 
 export const createStatusSchema = z.object({
@@ -365,4 +374,38 @@ const libelleSonnerieSchema = z
 export const createRingtoneSchema = z.object({
   url: urlSonnerieSchema,
   label: libelleSonnerieSchema,
+});
+
+/**
+ * Depot d'une plainte vocale — POST /api/complaints.
+ *
+ * `cleEnvoi` est la cle d'IDEMPOTENCE posee par le client, une par
+ * enregistrement. Bornee a 64 caracteres comme la colonne : la refuser ici
+ * donne un 422 lisible plutot qu'une erreur Postgres a l'insertion.
+ *
+ * ⚠️ `dureeMs` est OPTIONNELLE et non requise. Un enregistrement dont le client
+ * n'a pas su mesurer la duree doit pouvoir partir quand meme : la plainte est
+ * ce qui compte, la duree n'est qu'un confort de tri. Le serveur retombe alors
+ * sur celle du media.
+ */
+export const createComplaintSchema = z.object({
+  centerId: z.string().uuid(),
+  mediaId: z.string().uuid(),
+  cleEnvoi: z.string().min(8).max(64),
+  dureeMs: z.number().int().min(0).max(60 * 60_000).optional(),
+});
+
+/**
+ * Depot d'un enregistrement de conversation — POST /api/call-recordings.
+ *
+ * DEUX medias, pas un : le greffon WebRTC du mobile ne sait enregistrer qu'un
+ * cote a la fois, le serveur melange ensuite. Voir `call_recording`.
+ */
+export const createCallRecordingSchema = z.object({
+  callId: z.string().uuid().optional(),
+  companyId: z.number().int().positive(),
+  mediaAgentId: z.string().uuid(),
+  mediaClientId: z.string().uuid(),
+  cleEnvoi: z.string().min(8).max(64),
+  dureeMs: z.number().int().min(0).max(4 * 60 * 60_000).optional(),
 });

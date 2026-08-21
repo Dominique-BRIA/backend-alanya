@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { activeCallParticipants, conversationMeta } from "@/lib/calls";
+import { marquerRecontacte } from "@/lib/queue";
+import { enregistrementPourAgent } from "@/lib/ivr.mjs";
 
 // POST /api/calls/:id/accept — accepte / rejoint un appel (direct ou groupe).
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -38,6 +40,28 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       where: { id },
       data: { status: "ONGOING", answeredAt: now },
     });
+
+    /*
+     * RAPPEL ABOUTI (15/08/2026) — `callerMaskId` n'est posé que par
+     * `POST /api/queue/callback` : sa présence signifie que cet appel est le
+     * rappel d'un client abandonné, et on arrive ici parce qu'il A DÉCROCHÉ.
+     * Il sort donc de la liste « à rappeler ».
+     *
+     * Ici et pas à la création de l'appel : un rappel que le client ne prend
+     * pas doit rester dans la liste. Et dans le `if (RINGING)` : un
+     * participant qui rejoint un appel DÉJÀ en cours (invitation, transfert)
+     * n'est pas le décrochage du client rappelé.
+     *
+     * Volontairement silencieux en cas d'échec — une ligne d'historique de
+     * file qui ne bascule pas ne doit pas faire échouer un décrochage.
+     */
+    if (part.call.callerMaskId) {
+      try {
+        await marquerRecontacte(part.call.callerMaskId, userId);
+      } catch (e) {
+        console.error("[accept] marquerRecontacte:", e);
+      }
+    }
   }
   await prisma.callParticipant.update({
     where: { callId_userId: { callId: id, userId } },
@@ -47,6 +71,27 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const meta = await conversationMeta(part.call.convId);
   const activeParticipants = await activeCallParticipants(id);
 
+  /*
+   * ENREGISTREMENT DE LA CONVERSATION — décidé ICI, au décrochage.
+   *
+   * C'est le seul instant où l'on connaît à la fois QUI décroche et que la
+   * conversation commence. Le porter par l'événement temps réel aurait obligé
+   * chaque client à le corréler avec son propre décrochage.
+   *
+   * ⚠️ **NI CONSENTEMENT NI NOTIFICATION DE L'APPELANT** — décision explicite du
+   * user (20/08/2026), tracée ici et dans `enregistrementPourAgent` pour que ce
+   * soit un choix et non un oubli. Rien n'est annoncé au correspondant.
+   *
+   * Silencieux en cas d'échec, et `false` par défaut : une lecture ratée ne doit
+   * ni empêcher de décrocher, ni déclencher un enregistrement non autorisé.
+   */
+  let enregistrement: { idCompany: number | null } | null = null;
+  try {
+    enregistrement = await enregistrementPourAgent(prisma, userId);
+  } catch (e) {
+    console.error("[accept] enregistrementPourAgent:", e);
+  }
+
   return ok({
     id,
     status: "ONGOING",
@@ -54,5 +99,9 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     isGroup: meta.isGroup,
     groupName: meta.groupName,
     activeParticipants,
+    /// Le client n'enregistre que si le serveur le lui dit. Absent ou faux chez
+    /// un client plus ancien : il ignorera simplement le champ.
+    enregistrer: enregistrement != null,
+    enregistrementCompanyId: enregistrement?.idCompany ?? null,
   });
 });

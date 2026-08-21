@@ -115,7 +115,9 @@ model User {
   ownedMedia       MediaFile[]
   statuses         Status[]
   statusViews      StatusView[]
-  callsInitiated   Call[]              @relation("CallInitiator")
+  callsInitiated   Call[]            @relation("CallInitiator")
+  /// Appels où ce compte sert d'identité de rappel (voir `Call.callerMaskId`).
+  callsAsMask      Call[]            @relation("CallCallerMask")
   callParticipants CallParticipant[]
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
@@ -131,6 +133,9 @@ model User {
   blockedUsers          Blocked[]            @relation("BlockOwner")
   blockedByUsers        Blocked[]            @relation("BlockedUser")
   conversationLocks     ConversationLock[]
+
+  // --- Espace Développeur ---
+  developerAccount DeveloperAccount?
 
   // --- Relations vers les nouvelles tables du référentiel ---
   accessLogs      UserAccess[]
@@ -160,6 +165,25 @@ model User {
   assignedCenters Center[]         @relation("assignedUser")
   vocaux          Vocal[]          @relation("vocalCentre")
   musiques        CenterMusic[]    @relation("musiqueCentre")
+  vocauxAttente   VocalAttente[]   @relation("vocalAttenteCentre")
+  audiosMenu      CenterAudio[]    @relation("audioCentreVocal")
+  /// Les plaintes vocales reçues par ce centre vocal, et celles que ce compte a
+  /// laissées ailleurs. Deux relations distinctes vers la même table : un même
+  /// compte peut être l'un ou l'autre, jamais confondus.
+  plaintesRecues  VoiceComplaint[] @relation("plainteCentreVocal")
+  plaintesLaissees VoiceComplaint[] @relation("plainteAuteur")
+  /// Enregistrements de conversations où ce compte est l'agent, et ceux où il
+  /// est le correspondant. Deux relations distinctes, jamais confondues.
+  enregistrementsAgent  CallRecording[] @relation("enregistrementAgent")
+  enregistrementsClient CallRecording[] @relation("enregistrementClient")
+
+  // --- Relations vers la file d'attente ---
+  queueCenterFiles   QueueFile[]           @relation("QueueCenterUser")
+  queueAgentFiles    QueueFile[]           @relation("QueueAgentUser")
+  queueCustomerFiles QueueFile[]           @relation("QueueCustomerUser")
+  queueCenterHists   QueueFileHistorique[] @relation("QueueHistCenterUser")
+  queueAgentHists    QueueFileHistorique[] @relation("QueueHistAgentUser")
+  queueCustomerHists QueueFileHistorique[] @relation("QueueHistCustomerUser")
 
   @@index([publicNumber])
   @@index([idCompany])
@@ -747,6 +771,12 @@ enum MessageType {
   AUDIO // message vocal
   VIDEO
   SYSTEM
+  /// Fiche de contact partagée. La charge est du JSON dans `content` —
+  /// voir `src/lib/message-payload.mjs`, qui tient le format pour les trois
+  /// clients. La photo éventuelle du contact est un média du message.
+  CONTACT
+  /// Position GPS partagée. Charge JSON dans `content` (même module).
+  LOCATION
 }
 
 enum MessageStatus {
@@ -864,6 +894,14 @@ model MediaFile {
   durationMs   Int? // pour audio/vidéo (messages vocaux, appels)
   createdAt    DateTime @default(now()) @db.Timestamptz
 
+  /// Une plainte vocale s'appuie sur ce média. `Cascade` : supprimer le fichier
+  /// retire la plainte, qui n'aurait plus rien à faire écouter.
+  plainteVocale VoiceComplaint[]
+  /// Les trois rôles qu'un média peut tenir dans un enregistrement d'appel.
+  enregistrementPisteAgent  CallRecording[] @relation("enregistrementPisteAgent")
+  enregistrementPisteClient CallRecording[] @relation("enregistrementPisteClient")
+  enregistrementMelange     CallRecording[] @relation("enregistrementMelange")
+
   @@index([ownerId])
   @@index([messageId])
   @@map("media_files")
@@ -956,7 +994,21 @@ model Call {
   answeredAt  DateTime?  @db.Timestamptz
   endedAt     DateTime?  @db.Timestamptz
 
+  /// Identité à MONTRER À L'APPELÉ, ajouté le 15/08/2026 pour le rappel « sous
+  /// le nom du centre » (`/api/queue/callback`) : un agent rappelle un client
+  /// abandonné, mais le client doit voir le centre, pas l'agent. `initiatorId`
+  /// reste le VRAI agent — il porte toute la sécurité (verrous, sonnerie,
+  /// historique CÔTÉ AGENT) sans le moindre changement ; seule la vue offerte
+  /// au CALLÉ substitue cette identité à la sienne. Nul pour tout appel
+  /// ordinaire, y compris l'IVR entrant (qui masque déjà autrement, via un
+  /// vrai `callParticipant` centre — voir `serialiseAppelPour`).
+  callerMaskId String? @db.Uuid
+  callerMask   User?   @relation("CallCallerMask", fields: [callerMaskId], references: [id], onDelete: SetNull)
+
   participants CallParticipant[]
+  /// ⚠️ `SetNull` et non `Cascade` : une purge des appels ne doit pas emporter
+  /// des enregistrements que l'entreprise est censée conserver.
+  enregistrements CallRecording[]
 
   @@index([initiatorId])
   @@map("calls")
@@ -1520,6 +1572,10 @@ model Company {
   urlServeur  String? @map("url_serveur") @db.VarChar(255)
   urlMedia    String? @map("url_media") @db.VarChar(255)
   urlDoc      String? @map("url_doc") @db.VarChar(255)
+  /// ⚠️ PAS DE COLONNE POUR LE BIP D'ENREGISTREMENT. `url_bip_enregistrement`
+  /// a été posée ici puis retirée le 19/08/2026 : le lien du fichier vit dans
+  /// la variable d'environnement `BIP_ENREGISTREMENT_URL`, décision du user.
+  /// Voir `src/lib/ivr.mjs`. Ne pas la recréer.
   /// Numéro court attribué à l'entreprise ; facturé à part.
   numeroCourt String? @map("numero_court") @db.VarChar(20)
   /// Suppression logique, comme sur `service` et `prixabonnement`.
@@ -1533,8 +1589,15 @@ model Company {
   Services   Service[]
   CenterComs CenterCom[]
   Centers    Center[]
-  Vocaux     Vocal[]
-  Musiques   CenterMusic[]
+  Vocaux        Vocal[]
+  Musiques      CenterMusic[]
+  VocauxAttente VocalAttente[]
+  AudiosMenu    CenterAudio[]
+  plaintesVocales VoiceComplaint[]
+  enregistrementsAppel CallRecording[]
+
+  QueueFiles     QueueFile[]
+  QueueFileHists QueueFileHistorique[]
 
   /// Plafond de participants propre a cette entreprise, s'il a ete pose. AU
   /// PLUS UN : c'est `LimiteReunion.idCompany` qui est unique. Absent = les
@@ -1610,6 +1673,11 @@ model Service {
   transfertsDestinataire Transferer[]       @relation("TransfertDestinataire")
   bordereauxService      BordereauService[]
 
+  QueueFiles     QueueFile[]
+  QueueFileHists QueueFileHistorique[]
+  /// Touches du menu IVR rattachées à ce service — voir `Center.idService`.
+  centers        Center[]
+
   @@map("service")
 }
 
@@ -1670,14 +1738,32 @@ model Center {
   /// la plateforme du collègue et déclaré ici le 12/08/2026. `libelle` reste le
   /// nom interne de la ligne et sert de repli quand celle-ci est vide.
   nomService      String?  @map("nom_service") @db.VarChar(45)
+  /// Lien vers le catalogue formel `service`, ajouté le 15/08/2026 : `center`
+  /// (routage par touche) et `service` (catalogue par entreprise) n'avaient
+  /// jamais été reliés. Sert à remplir `QueueFile`/`QueueFileHistorique.idService`
+  /// avec le VRAI service choisi, plutôt qu'une correspondance devinée par nom.
+  idService       Int?     @map("idservice")
+  /// Cet agent peut-il enregistrer ses conversations avec un client ?
+  ///
+  /// ⚠️ COLONNE À NOUS DANS UNE TABLE DU RÉFÉRENTIEL ÉQUIPE — choix explicite
+  /// du user (19/08/2026), contre la règle habituelle du projet. C'est un écart
+  /// de plus à défendre à la prochaine harmonisation, et la plateforme de la
+  /// collègue l'effacerait si elle recréait `center`.
+  ///
+  /// Aucune table de liaison n'a été créée, et il n'en fallait pas : une ligne
+  /// de `center` EST déjà le triplet (centre, touche, agent). Le réglage est
+  /// donc individuel par agent, et modifier un centre n'atteint aucun autre.
+  enregistrement  Boolean  @default(false)
 
   centerUser   User?    @relation("centerUser", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   assignedUser User?    @relation("assignedUser", fields: [users_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
   company      Company? @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  service      Service? @relation(fields: [idService], references: [idService], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([center_alanyaID], map: "center_center_alanyaid_idx")
   @@index([users_alanyaID], map: "center_users_alanyaid_idx")
   @@index([idCompany], map: "center_idcompany_idx")
+  @@index([idService], map: "center_idservice_idx")
   @@map("center")
 }
 
@@ -1736,6 +1822,165 @@ model CenterMusic {
   @@unique([idCompany, center_alanyaID], map: "center_music_company_center_key")
   @@index([idCompany], map: "center_music_idCompany_idx")
   @@map("center_music")
+}
+
+/// Musiques d'attente d'un centre d'appels quand tous les agents sont occupés.
+///
+/// Créée par la collègue pour gérer les attentes des clients lorsqu'ils contactent
+/// un centre dont tous les agents sont occupés. Contient une série de musiques
+/// classées par ordre d'écoute.
+model VocalAttente {
+  idVocalAttente  Int     @id @default(autoincrement()) @map("idVocalAttente")
+  idCompany       Int     @map("idCompany")
+  center_alanyaID String  @map("center_alanyaID") @db.Uuid
+  titre           String? @db.VarChar(150)
+  urlVocal        String  @map("url_vocal") @db.VarChar(255)
+  ordre           Int     @default(1)
+
+  company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User    @relation("vocalAttenteCentre", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([idCompany], map: "vocal_attente_idCompany_idx")
+  @@index([center_alanyaID], map: "vocal_attente_center_alanyaID_idx")
+  @@map("vocal_attente")
+}
+
+/// Le menu d'un CENTRE VOCAL : un audio par touche.
+///
+/// ⚠️ TABLE DE LA PLATEFORME DU COLLÈGUE, présente en production bien avant
+/// d'être déclarée ici (18/08/2026) — comme l'ont été `geo`, `vocal`,
+/// `center_music` et `company.url_serveur`. Ne rien y ajouter sans l'équipe.
+///
+/// C'est l'équivalent de [Center] pour un centre vocal, et la différence tient
+/// en un mot : `center` fait pointer une touche vers un AGENT à faire sonner,
+/// `center_audio` la fait pointer vers un SON à jouer. Un centre vocal n'a donc
+/// aucune ligne `center`, et réciproquement.
+///
+/// ⚠️ `url_audio` est un CHEMIN, pas une URL — même piège que `Vocal.urlVocal` :
+/// les lignes de production valent `/uploads/audios_menu/…`, relatifs au serveur
+/// de la plateforme. Toujours passer par `resoudreUrlPlateforme` de `ivr.mjs`,
+/// jamais lire la colonne telle quelle.
+///
+/// L'unicité `(center_alanyaID, menunro)` est posée en base comme INDEX unique
+/// et non comme contrainte : une touche porte donc au plus un son, il n'y a
+/// aucun départage à écrire (contrairement à [Vocal], dont l'unicité inclut
+/// l'entreprise et qui peut avoir plusieurs lignes pour un même numéro).
+model CenterAudio {
+  idCenterAudio   Int      @id @default(autoincrement()) @map("idcenteraudio")
+  idCompany       Int      @map("idCompany")
+  center_alanyaID String   @map("center_alanyaID") @db.Uuid
+  /// La touche, bornée 0–9 en base par un CHECK — c'est un pavé téléphonique.
+  menuNro         Int      @map("menunro") @db.SmallInt
+  /// Le nom montré sur la touche. ⚠️ NULLABLE, et vide sur 3 des 4 lignes de
+  /// production : le repli est le nom du centre vocal, décidé par le user le
+  /// 18/08/2026 (même règle que `center.libelle` pour un centre d'appels).
+  titre           String?  @db.VarChar(150)
+  urlAudio        String   @map("url_audio") @db.VarChar(255)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company    Company @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User    @relation("audioCentreVocal", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([center_alanyaID, menuNro], map: "center_audio_center_menunro_key")
+  @@index([idCompany], map: "center_audio_idCompany_idx")
+  @@map("center_audio")
+}
+
+/// Plainte laissée oralement par un appelant sur la touche 0 d'un centre vocal.
+///
+/// SQL : `prisma/manual/2026-08_plainte_vocale.sql`, éprouvé sur base jetable.
+///
+/// Le FICHIER n'est jamais en base : `media` pointe `media_files`, qui porte
+/// déjà stockage, type MIME et durée.
+model VoiceComplaint {
+  idComplaint     String   @id @default(uuid()) @map("idComplaint") @db.Uuid
+  idCompany       Int      @map("idCompany")
+  center_alanyaID String   @map("center_alanyaID") @db.Uuid
+  /// ⚠️ NULLABLE À DESSEIN : un compte supprimé ne doit pas emporter la
+  /// plainte. Elle appartient à l'entreprise qui doit la traiter, pas à son
+  /// auteur — prouvé sur base jetable, la ligne survit à un `DELETE` du compte.
+  userId          String?  @map("user_id") @db.Uuid
+  mediaId         String   @map("media_id") @db.Uuid
+  /// Redondante avec `media_files.durationMs`, et c'est voulu : c'est la seule
+  /// mesure qu'un écran de tri lit sans joindre, et elle doit survivre à une
+  /// purge des médias.
+  dureeMs         Int      @default(0) @map("duree_ms")
+  /// 0 reçue, 1 en cours, 2 traitée, 3 rejetée. Un entier borné par un CHECK
+  /// et non une enum : tout le référentiel équipe code ses statuts ainsi, et
+  /// une enum PostgreSQL se migre bien plus mal.
+  statut          Int      @default(0) @db.SmallInt
+  /// 🔴 CE QUI REND L'ENVOI IDEMPOTENT, par CONTRAINTE et non par du code. Le
+  /// client pose une clé par enregistrement ; réseau qui hésite, double appui
+  /// ou réessai ne peuvent pas produire deux plaintes. Le contournement a été
+  /// TENTÉ sur base jetable : rejeté par l'index unique.
+  cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  /// URL ABSOLUE de l'audio, lisible SANS jeton — la plateforme de la collègue
+  /// lit cette table directement et n'a pas notre mécanisme d'authentification.
+  ///
+  /// ⚠️ **CE N'EST PAS UN CONTRÔLE D'ACCÈS** : quiconque la connaît écoute la
+  /// plainte. Elle est indevinable (elle porte l'UUID de la plainte), ce qui est
+  /// le compromis habituel pour du média, mais reste de l'obscurité.
+  urlAudio        String?  @map("url_audio") @db.VarChar(500)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company    Company   @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  centerUser User      @relation("plainteCentreVocal", fields: [center_alanyaID], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  auteur     User?     @relation("plainteAuteur", fields: [userId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  media      MediaFile @relation(fields: [mediaId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([cleEnvoi], map: "voice_complaint_cle_envoi_key")
+  @@index([center_alanyaID, createdAt(sort: Desc)], map: "voice_complaint_centre_date_idx")
+  @@index([idCompany], map: "voice_complaint_company_idx")
+  @@map("voice_complaint")
+}
+
+/// Enregistrement d'une conversation agent ↔ client d'un centre d'appels.
+///
+/// SQL : `prisma/manual/2026-08_enregistrement_appel.sql`, éprouvé sur base
+/// jetable. L'AUTORISATION, elle, vit dans `Center.enregistrement`.
+///
+/// 🔴 DEUX PISTES, PUIS UNE TROISIÈME. Le greffon `flutter_webrtc` ne sait
+/// enregistrer QU'UN côté à la fois — vérifié dans son code Android, où
+/// `startRecordingToFile` choisit `inputSamplesInterceptor` OU
+/// `outputSamplesInterceptor`, jamais les deux. Le téléphone envoie donc le
+/// micro et le distant séparément, et le serveur les mélange. C'est ce qui
+/// évite de maintenir un fork d'une dépendance critique.
+model CallRecording {
+  idRecording     String   @id @default(uuid()) @map("idRecording") @db.Uuid
+  idCompany       Int      @map("idCompany")
+  callId          String?  @map("call_id") @db.Uuid
+  agentId         String?  @map("agent_alanyaID") @db.Uuid
+  clientId        String?  @map("client_alanyaID") @db.Uuid
+
+  /// ⚠️ CONSERVÉES même après le mélange, et ce n'est pas du gaspillage : c'est
+  /// la seule façon de le REFAIRE si ffmpeg change ou si le résultat est
+  /// mauvais. Les effacer ferait de la première tentative la dernière.
+  mediaAgentId    String   @map("media_agent_id") @db.Uuid
+  mediaClientId   String   @map("media_client_id") @db.Uuid
+
+  /// Nul tant que le mélange n'a pas eu lieu — état NORMAL, pas une panne :
+  /// ffmpeg peut manquer sur le serveur, l'enregistrement reste alors
+  /// exploitable en deux pistes.
+  mediaMixId      String?  @map("media_mix_id") @db.Uuid
+
+  dureeMs         Int      @default(0) @map("duree_ms")
+  /// 0 à mélanger · 1 en cours · 2 mélangé · 3 mélange impossible.
+  statut          Int      @default(0) @db.SmallInt
+  cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  company     Company    @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+  call        Call?      @relation(fields: [callId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  agent       User?      @relation("enregistrementAgent", fields: [agentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  client      User?      @relation("enregistrementClient", fields: [clientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  mediaAgent  MediaFile  @relation("enregistrementPisteAgent", fields: [mediaAgentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  mediaClient MediaFile  @relation("enregistrementPisteClient", fields: [mediaClientId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  mediaMix    MediaFile? @relation("enregistrementMelange", fields: [mediaMixId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([cleEnvoi], map: "call_recording_cle_envoi_key")
+  @@index([agentId, createdAt(sort: Desc)], map: "call_recording_agent_date_idx")
+  @@index([idCompany], map: "call_recording_company_idx")
+  @@map("call_recording")
 }
 
 model AccesAdmin {
@@ -1876,4 +2121,328 @@ model JustificatifPaiement {
 
   @@index([idFacture], map: "justificatif_facture_idx")
   @@map("justificatif_paiement")
+}
+
+// ---------------------------------------------------------------------------
+// ESPACE DÉVELOPPEUR & API BILLING (MESSAGES X & MINUTES Y)
+// ---------------------------------------------------------------------------
+
+enum ApiKeyType {
+  SANDBOX
+  LIVE
+}
+
+enum TransactionType {
+  PURCHASE      // Achat/Recharge de crédits
+  MESSAGE_SENT  // Consommation message API
+  CALL_MINUTE   // Consommation minute d'appel API
+  HOLD_RESERVE  // Réservation d'appel WebRTC (5 min)
+  REFUND        // Remboursement / Ajustement
+}
+
+enum TransactionStatus {
+  PENDING
+  SETTLED
+  CANCELLED
+}
+
+/// Compte Développeur Tiers
+model DeveloperAccount {
+  id             String   @id @default(uuid()) @map("developer_id") @db.Uuid
+  userId         String   @unique @map("user_id") @db.Uuid
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName    String?  @map("company_name") @db.VarChar(100)
+  /// 🔴 PLUS UTILISÉES depuis le 21/08/2026 — la facturation a été supprimée
+  /// (l'API sert la plateforme de l'équipe, qui gère son propre paiement).
+  /// Aucune route ne les lit ni ne les écrit ; les valeurs en base sont figées
+  /// à ce qu'elles valaient. ⚠️ NON SUPPRIMÉES DE LA BASE À DESSEIN : elle est
+  /// partagée avec un second système, et un DROP COLUMN casserait ses lectures.
+  /// Ne pas les recâbler sans en reparler.
+  balanceCredits BigInt   @default(1000) @map("balance_credits")
+  holdCredits    BigInt   @default(0) @map("hold_credits")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  apiKeys    ApiKey[]
+  ledger     DevLedger[]
+  workspaces DeveloperWorkspace[]
+  logs       DeveloperApiLog[]
+  webhooks   DeveloperWebhook?
+  otps       DeveloperOtp[]
+  medias     DeveloperMedia[]
+  /// Codes de vérification — remplace [otps], voir [Verification].
+  verifications Verification[]
+
+  @@map("developer_accounts")
+}
+
+/// Un code de vérification : double authentification, création d'agent, etc.
+///
+/// 🔴 REMPLACE [DeveloperOtp], qui ne pouvait pas garder un second facteur —
+/// code stocké en clair, aucun compteur de tentatives, aucune finalité, aucun
+/// état de livraison. Les quatre manques sont comblés ici, et les bornes sont
+/// portées par des CHECK en base plutôt que par le code : deux systèmes
+/// écrivent dans cette base, et une garantie qui ne vit que dans notre code ne
+/// protège plus que la moitié des écritures.
+///
+/// ⚠️ Le code brut n'est JAMAIS stocké. Seule son empreinte SHA-256, salée par
+/// ligne — sans sel, un code à six chiffres se retrouve instantanément, son
+/// espace ne comptant qu'un million d'entrées.
+///
+/// La politique (durée, nombre d'essais, plafonds d'émission) n'est pas ici :
+/// elle vit dans `src/lib/verification/politique.mjs`, sans dépendance, donc
+/// exécutable et vérifiable.
+model Verification {
+  id          String           @id @default(uuid()) @map("id_verification") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  /// `AUTH_2FA`, `CREATION_AGENT`, `VALIDATION_CONTACT` — chacune a SA politique.
+  finalite    String   @db.VarChar(30)
+  /// `ALANYA` ou `EMAIL`. **Nous livrons dans les deux cas** : le code brut ne
+  /// figure dans aucune réponse d'API. Un canal « délégué », où l'appelant
+  /// aurait livré lui-même, a été écarté — il suffisait que son relais
+  /// journalise les réponses pour publier tous les codes.
+  canal       String   @db.VarChar(20)
+  destination String   @db.VarChar(120)
+
+  codeEmpreinte String @map("code_empreinte") @db.Char(64)
+  codeSel       String @map("code_sel") @db.Char(32)
+
+  tentatives    Int @default(0) @db.SmallInt
+  maxTentatives Int @map("max_tentatives") @db.SmallInt
+
+  expireA   DateTime  @map("expire_a") @db.Timestamptz
+  /// Renseignée à la première présentation réussie — c'est l'usage unique.
+  consommeA DateTime? @map("consomme_a") @db.Timestamptz
+
+  /// Ce qui s'est RÉELLEMENT passé à la remise, jamais supposé : la route
+  /// annonçait « envoyé avec succès » alors que rien ne partait.
+  livraison       String  @default("EN_ATTENTE") @db.VarChar(20)
+  livraisonDetail String? @map("livraison_detail") @db.VarChar(255)
+
+  /// Source de la demande, pour le plafond par IP. Nullable : un appel
+  /// serveur à serveur derrière un relais peut ne pas en fournir.
+  ipDemande String?  @map("ip_demande") @db.Inet
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([destination, createdAt(sort: Desc)], map: "verification_destination_date_idx")
+  @@index([ipDemande, createdAt(sort: Desc)], map: "verification_ip_date_idx")
+  @@index([developerId, createdAt(sort: Desc)], map: "verification_developer_date_idx")
+  @@map("verification")
+}
+
+/// Workspace / Projet Développeur (Multi-Projets)
+model DeveloperWorkspace {
+  id          String           @id @default(uuid()) @map("workspace_id") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  name        String           @db.VarChar(100) // ex: "App Mobile Production", "Bot Support"
+  description String?          @db.VarChar(255)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  apiKeys ApiKey[]
+  logs    DeveloperApiLog[]
+
+  @@map("developer_workspaces")
+}
+
+/// Clés d'API Développeur
+model ApiKey {
+  id          String              @id @default(uuid()) @map("key_id") @db.Uuid
+  developerId String              @map("developer_id") @db.Uuid
+  developer   DeveloperAccount    @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  workspaceId String?             @map("workspace_id") @db.Uuid
+  workspace   DeveloperWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  keyHash     String              @unique @map("key_hash") @db.VarChar(255)
+  prefix      String              @db.VarChar(15) // ak_test_... ou ak_live_...
+  name        String              @db.VarChar(50) // ex: "Application Mobile Prod"
+  type        ApiKeyType          @default(SANDBOX)
+  isActive    Boolean             @default(true) @map("is_active")
+  lastUsedAt  DateTime?           @map("last_used_at") @db.Timestamptz
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("developer_api_keys")
+}
+
+/// Journal de Consommation & Télémétrie API Développeur
+model DeveloperApiLog {
+  id          String              @id @default(uuid()) @map("log_id") @db.Uuid
+  developerId String              @map("developer_id") @db.Uuid
+  developer   DeveloperAccount    @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  workspaceId String?             @map("workspace_id") @db.Uuid
+  workspace   DeveloperWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  keyPrefix   String?             @map("key_prefix") @db.VarChar(15)
+  endpoint    String              @db.VarChar(255)
+  method      String              @default("POST") @db.VarChar(10)
+  statusCode  Int                 @map("status_code")
+  latencyMs   Int                 @map("latency_ms")
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([developerId, createdAt(sort: Desc)])
+  @@map("developer_api_logs")
+}
+
+/// Webhooks Développeur pour Callbacks de Statut et Messages Entrants (Standard WhatsApp)
+model DeveloperWebhook {
+  id          String           @id @default(uuid()) @map("webhook_id") @db.Uuid
+  developerId String           @unique @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  url         String           @db.VarChar(500)
+  verifyToken String?          @map("verify_token") @db.VarChar(100)
+  secretKey   String?          @map("secret_key") @db.VarChar(100)
+  isActive    Boolean          @default(true) @map("is_active")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("developer_webhooks")
+}
+
+/// Codes OTP d'Authentification 2FA Développeur.
+/// 🔴 TABLE MORTE — remplacée par [Verification], qui sale et hache le code
+/// (celle-ci le stockait EN CLAIR dans `code`), compte les tentatives et
+/// constate la livraison. Aucun code ne l'écrit plus.
+/// ⚠️ NON SUPPRIMÉE : base partagée. Ne pas la réutiliser.
+model DeveloperOtp {
+  id              String           @id @default(uuid()) @map("otp_id") @db.Uuid
+  developerId     String           @map("developer_id") @db.Uuid
+  developer       DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  recipientNumber String           @map("recipient_number") @db.VarChar(30)
+  code            String           @db.VarChar(10)
+  expiresAt       DateTime         @map("expires_at") @db.Timestamptz
+  isVerified      Boolean          @default(false) @map("is_verified")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([recipientNumber, code])
+  @@map("developer_otps")
+}
+
+/// Registre des Médias API (Image, Audio, Documents - Standard WhatsApp Media API)
+/// 🔴 TABLE MORTE depuis le 21/08/2026 — plus aucun code ne l'écrit ni ne la
+/// lit. `POST /api/v1/media` téléverse désormais pour de vrai et crée un
+/// [MediaFile] ordinaire, ce qui lui donne le contrôle d'accès de
+/// `/api/media/:id`. Cette table n'enregistrait qu'une URL fournie par
+/// l'appelant, avec une taille en dur et un type MIME jamais vérifié.
+/// ⚠️ NON SUPPRIMÉE : base partagée avec un second système. Ne pas la
+/// réutiliser — c'est [MediaFile] qui fait foi.
+model DeveloperMedia {
+  id          String           @id @default(uuid()) @map("media_id") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  url         String           @db.VarChar(500)
+  mimeType    String           @map("mime_type") @db.VarChar(100)
+  size        Int
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("developer_medias")
+}
+
+/// Registre Financier Double-Entrée pour Développeurs (Ledger)
+model DevLedger {
+  id          String            @id @default(uuid()) @map("ledger_id") @db.Uuid
+  developerId String            @map("developer_id") @db.Uuid
+  developer   DeveloperAccount  @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  amount      BigInt            // Positif = recharge, Négatif = consommation
+  type        TransactionType
+  status      TransactionStatus @default(SETTLED)
+  referenceId String?           @map("reference_id") @db.VarChar(100) // ID de message, ID d'appel ou ID Stripe
+  description String?           @db.VarChar(255)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([developerId, createdAt])
+  @@map("developer_ledgers")
+}
+
+// ===============================================================
+// FILE D'ATTENTE TEMPS RÉEL (Table active : file)
+// ===============================================================
+
+/// File d'attente active des clients pour un centre, un service ou un agent.
+/// Une ligne = un client actuellement en train d'attendre un agent libre.
+/// Nettoyée dès que l'appel est pris en charge, abandonné ou expiré.
+model QueueFile {
+  idFile          Int      @id @default(autoincrement()) @map("idFile")
+  idCompany       Int      @map("idCompany")
+  center_alanyaID String   @map("center_alanyaID") @db.Uuid
+  idService       Int?     @map("idService")
+  idAgent         String?  @map("idAgent") @db.Uuid
+  idCustomer      String   @map("idCustomer") @db.Uuid
+  
+  /// Position / Rang du client dans la file (1, 2, 3...)
+  rang            Int      @default(1)
+  /// Niveau de priorité (0 = normal, 1 = VIP, 2 = urgent)
+  priorite        Int      @default(0) @db.SmallInt
+  
+  /// Date et heure d'entrée dans la file
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations Prisma
+  company    Company  @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade)
+  centerUser User     @relation("QueueCenterUser", fields: [center_alanyaID], references: [id], onDelete: Cascade)
+  service    Service? @relation(fields: [idService], references: [idService], onDelete: SetNull)
+  agent      User?    @relation("QueueAgentUser", fields: [idAgent], references: [id], onDelete: SetNull)
+  customer   User     @relation("QueueCustomerUser", fields: [idCustomer], references: [id], onDelete: Cascade)
+
+  @@unique([center_alanyaID, idCustomer], map: "queue_file_center_customer_key")
+  @@index([center_alanyaID, rang(sort: Asc)], map: "queue_file_center_rang_idx")
+  @@index([idService, rang(sort: Asc)], map: "queue_file_service_rang_idx")
+  @@index([idAgent], map: "queue_file_idAgent_idx")
+  @@map("file")
+}
+
+// ===============================================================
+// HISTORIQUE DE LA FILE D'ATTENTE (Table d'archivage : file_historique)
+// ===============================================================
+
+/// Statut final du passage en file d'attente.
+enum QueueStatus {
+  MIS_EN_RELATION // Le client a pu contacter l'agent (succès)
+  ABANDON         // Le client a raccroché pendant l'attente
+  TIMEOUT         // Attente maximale atteinte sans réponse
+  REJETE          // File pleine ou rejeté
+  RECONTACTER     // Rappelé par un agent APRÈS un abandon, et il a décroché
+}
+
+/// Historique complet de la file d'attente pour chaque appel vers un centre.
+/// Permet de mesurer les statistiques par service, par agent, les abandons,
+/// les durées d'attente et la note globale sur 5 attribuée par le client.
+model QueueFileHistorique {
+  idHist          BigInt      @id @default(autoincrement()) @map("idHist")
+  idCompany       Int         @map("idCompany")
+  center_alanyaID String      @map("center_alanyaID") @db.Uuid
+  idService       Int?        @map("idService")
+  idAgent         String?     @map("idAgent") @db.Uuid
+  idCustomer      String      @map("idCustomer") @db.Uuid
+
+  /// Statut de l'attente : MIS_EN_RELATION, ABANDON, TIMEOUT, REJETE
+  statut          QueueStatus @default(MIS_EN_RELATION)
+
+  /// Heure d'entrée dans la file
+  joinedAt        DateTime    @default(now()) @map("joined_at") @db.Timestamptz
+  /// Heure de sortie de la file (prise en charge ou abandon)
+  leftAt          DateTime?   @map("left_at") @db.Timestamptz
+  /// Temps passé à attendre en secondes
+  attenteDureeSec Int         @default(0) @map("attente_duree_sec")
+  /// Durée de la communication effective avec l'agent en secondes (0 si abandon)
+  appelDureeSec   Int         @default(0) @map("appel_duree_sec")
+
+  /// Note de satisfaction optionnelle donnée par le client à la fin (1 à 5 étoiles)
+  note            Int?        @db.SmallInt
+  /// Avis/Commentaire optionnel laissé par le client
+  avisCommentaire String?     @map("avis_commentaire") @db.Text
+
+  // Relations Prisma
+  company    Company  @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade)
+  centerUser User     @relation("QueueHistCenterUser", fields: [center_alanyaID], references: [id], onDelete: Cascade)
+  service    Service? @relation(fields: [idService], references: [idService], onDelete: SetNull)
+  agent      User?    @relation("QueueHistAgentUser", fields: [idAgent], references: [id], onDelete: SetNull)
+  customer   User     @relation("QueueHistCustomerUser", fields: [idCustomer], references: [id], onDelete: Cascade)
+
+  @@index([idCompany, joinedAt(sort: Desc)], map: "queue_hist_company_joined_idx")
+  @@index([center_alanyaID, joinedAt(sort: Desc)], map: "queue_hist_center_joined_idx")
+  @@index([idService, joinedAt(sort: Desc)], map: "queue_hist_service_joined_idx")
+  @@index([idAgent, joinedAt(sort: Desc)], map: "queue_hist_agent_joined_idx")
+  @@index([statut], map: "queue_hist_statut_idx")
+  @@map("file_historique")
 }

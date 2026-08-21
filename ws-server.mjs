@@ -18,15 +18,34 @@ import {
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
 import {
+  TYPES_STRUCTURES,
+  chargeValide,
+  apercuStructure,
+  apercuMessage,
+} from "./src/lib/message-payload.mjs";
+import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
-  choisirAgentLibre,
+  DELAI_ATTENTE_MAX_MS,
+  agentDisponible,
   choisirMusiqueAttente,
-  estCompteCentre,
+  urlsVocalAttente,
+  DELAI_LECTURE_MAX_MS,
+  estCentreVocal,
+  ouvreUnStandard,
   lireMenuCentre,
+  lireMenuVocal,
   optionsPubliques,
   urlInviteCentre,
+  urlBipEnregistrement,
+  TOUCHE_PLAINTE_VOCALE,
+  DUREE_PLAINTE_MAX_MS,
 } from "./src/lib/ivr.mjs";
+import {
+  ajouterClientFileWS,
+  depilerClientSuivantWS,
+  abandonnerFileWS,
+} from "./src/lib/queue-ws.mjs";
 
 const prisma = new PrismaClient();
 // Render injecte automatiquement $PORT. WS_PORT sert pour le dev local.
@@ -345,8 +364,23 @@ async function fermeAppelsPerimes() {
       where: { status: "RINGING", startedAt: { lt: limite } },
       select: { id: true },
     });
-    if (perimes.length === 0) return;
-    const ids = perimes.map((c) => c.id);
+    /*
+     * ⚠️ EXCLUT LES APPELS IVR EN COURS (15/08/2026, bug rapporté par le user :
+     * des appelants en file d'attente s'arrêtaient avant même les 5 minutes
+     * promises). Un appel routé par un standard reste `RINGING` tout le temps
+     * qu'il navigue le menu, sonne un agent, ou PATIENTE EN FILE — jusqu'à 5
+     * min (`DELAI_ATTENTE_MAX_MS`), largement au-delà des 90 s de ce balayage
+     * générique conçu pour les appels ORDINAIRES sans réponse. Sans cette
+     * exclusion, ce balayage clôturait en NO_ANSWER des appels parfaitement
+     * vivants, gérés par leurs PROPRES minuteurs (`armerMinuteurMenu`,
+     * `armerMinuteurAgent`, `armerQueuePolling`) qui les referment déjà
+     * proprement le moment venu. Une session IVR disparue (redémarrage du
+     * process, qui vide `sessionsIvr`) redevient en revanche une cible légitime
+     * : c'est le seul cas où ce filet redevient nécessaire pour un appel IVR.
+     */
+    const perimesHorsIvr = perimes.filter((c) => !sessionsIvr.has(c.id));
+    if (perimesHorsIvr.length === 0) return;
+    const ids = perimesHorsIvr.map((c) => c.id);
     const maintenant = new Date();
     await prisma.call.updateMany({
       where: { id: { in: ids } },
@@ -695,7 +729,22 @@ async function handleSend(ws, msg) {
   if (Array.isArray(mediaIds)) allMediaIds.push(...mediaIds);
   const uniqueMediaIds = [...new Set(allMediaIds)];
 
-  if (type !== "TEXT" && uniqueMediaIds.length === 0) return;
+  /**
+   * CONTACT et LOCATION n'ont PAS de média obligatoire : leur charge est du
+   * JSON dans `content` (voir `src/lib/message-payload.mjs`). Sans cette
+   * exception, la garde ci-dessous les jetait en silence — le pire des
+   * comportements, l'expéditeur n'ayant jamais d'accusé et son message restant
+   * « en cours d'envoi » pour toujours.
+   *
+   * Une charge invalide est refusée EXPLICITEMENT, elle : mieux vaut une erreur
+   * chez l'expéditeur qu'une ligne que le destinataire ne pourra pas afficher.
+   */
+  const structure = TYPES_STRUCTURES.has(type);
+  if (structure && !chargeValide(type, content ?? null)) {
+    ws.send(JSON.stringify({ type: "error", message: "Charge de message invalide", tempId }));
+    return;
+  }
+  if (type !== "TEXT" && !structure && uniqueMediaIds.length === 0) return;
   if (type === "TEXT" && uniqueMediaIds.length === 0 && (!content || !content.trim())) return;
 
   if (!(await isParticipant(convId, ws.userId))) {
@@ -826,7 +875,14 @@ async function handleSend(ws, msg) {
   await prisma.conversation.update({
     where: { id: convId },
     data: {
-      lastMessage: content?.slice(0, 500) ?? null,
+      // Libellé, jamais la charge : un CONTACT ou une LOCATION porte du JSON
+      // dans `content`, et cette colonne est affichée telle quelle par les trois
+      // clients dans la liste des conversations.
+      // ⚠️ `apercuMessage` et non `apercuStructure` : ce dernier ne connaît que
+      // CONTACT et LOCATION, si bien qu'un média SANS LÉGENDE retombait sur un
+      // `content` vide et laissait la colonne à NULL — la liste affichait alors
+      // le dernier APPEL à la place de la photo (user, 18/08/2026).
+      lastMessage: apercuMessage(type, content ?? null)?.slice(0, 500) ?? null,
       lastMessageAt: new Date(),
       lastMessageSenderID: ws.userId,
       lastMessageType: type === "TEXT" ? 0 : type === "IMAGE" ? 1 : type === "AUDIO" ? 3 : type === "VIDEO" ? 4 : 2,
@@ -897,7 +953,11 @@ async function handleSend(ws, msg) {
       convTitle =
         (other ? nomAffichage(other.user) : null) ?? convTitle;
     }
-    const preview = type === "TEXT" ? (content ?? "").slice(0, 120) : null;
+    // Aperçu du push : le texte pour un TEXT, le libellé pour un message
+    // structuré (« 👤 Jean Dupont »), rien pour un média — `pushNewMessage`
+    // pose alors son propre libellé selon le type.
+    const preview =
+      type === "TEXT" ? (content ?? "").slice(0, 120) : apercuStructure(type, content ?? null);
 
     for (const uid of recipients) {
       if (uid === ws.userId || isUserOnline(uid)) continue;
@@ -1290,7 +1350,19 @@ function fermerSessionIvr(callId) {
   const session = sessionsIvr.get(callId);
   if (!session) return;
   if (session.minuteur) clearTimeout(session.minuteur);
+  if (session.pollingInterval) clearInterval(session.pollingInterval);
+  // Le plafond de lecture d'un centre vocal. Oublié ici, il survivrait à la
+  // session : 30 min plus tard il enverrait un message de fin à un appelant qui
+  // a raccroché depuis longtemps, ou pire, en pleine autre communication.
+  if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
   session.minuteur = null;
+  session.pollingInterval = null;
+  session.minuteurLecture = null;
+
+  if (session.etape === "attente" && session.centreId && session.appelantId) {
+    abandonnerFileWS(prisma, session.centreId, session.appelantId);
+  }
+
   sessionsIvr.delete(callId);
 }
 
@@ -1381,12 +1453,25 @@ async function ouvrirSessionIvr(ws, call, centre) {
     convId: call.convId,
     appelantId: ws.userId,
     centreId: centre.id,
+    // ⚠️ 15/08/2026 : ce champ manquait ici — chaque écriture dans `file` /
+    // `file_historique` retombait sur le repli `?? 1`, et `idcompany = 1`
+    // n'existe pas (seuls 2 et 3 existent). Violation de contrainte FK sur
+    // CHAQUE appel, avalée par le try/catch de queue-ws.mjs : le flux IVR
+    // continuait normalement (musique d'attente, message « en file
+    // d'attente ») pendant que les deux tables restaient vides.
+    centreCompanyId: centre.idCompany,
+    // Posé par `depilerClientSuivantWS` dès qu'un agent prend l'appel — c'est
+    // ce qui permet au client de noter la communication à la fin. Nul tant que
+    // l'appel n'a jamais atteint d'agent (abandon, timeout) : on ne demande
+    // pas de noter une communication qui n'a pas eu lieu.
+    idHist: null,
     nomCentre,
     centrePublicNumber: centre.publicNumber,
     options,
     // Tirée MAINTENANT, pas au moment de la touche : le client la met en cache
     // pendant que l'invite se joue.
     urlAttente: await choisirMusiqueAttente(prisma, centre),
+    urlsQueue: await urlsVocalAttente(prisma, centre),
     agentId: null,
     agentLabel: null,
     etape: "menu",
@@ -1409,10 +1494,132 @@ async function ouvrirSessionIvr(ws, call, centre) {
     centerNumber: centre.publicNumber,
     centerAvatarUrl: centre.avatarUrl ?? null,
     promptUrl: await urlInviteCentre(prisma, centre),
+    promptLoop: true,
     holdUrl: session.urlAttente,
+    holdLoop: true,
+    queueUrls: session.urlsQueue,
+    queueLoop: true,
     options: optionsPubliques(options),
   });
   console.log(`[ivr] menu ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} service(s)`);
+}
+
+/**
+ * Ouvre un CENTRE VOCAL : personne ne sonne, et personne ne sonnera jamais.
+ *
+ * Miroir de [ouvrirSessionIvr], réduit à ce qu'un centre vocal utilise
+ * réellement. Ce qui en est ABSENT est aussi délibéré que ce qui y figure :
+ *
+ *  - pas de musique d'attente ni de `vocal_attente` — on n'attend rien ni
+ *    personne, l'appui joue le son immédiatement ;
+ *  - pas de `centreCompanyId` pour la file : aucune écriture dans `file` ni
+ *    `file_historique`, ces tables décrivent des clients à mettre en relation
+ *    avec un agent. Un centre vocal n'en a pas, y écrire fabriquerait des
+ *    « clients à rappeler » que personne ne rappellera ;
+ *  - pas d'`idHist`, donc pas de demande de notation à la fin : on ne note pas
+ *    un message enregistré ;
+ *  - pas de réécriture d'anonymat : il n'y a aucun agent dont l'identité
+ *    pourrait fuir.
+ *
+ * `mode: "vocal"` voyage jusqu'au client, qui en a besoin pour son écran (un
+ * bouton « Retour à l'accueil » plutôt qu'une mise en relation). Un client plus
+ * ancien qui ignore le champ affichera le pavé et enverra ses touches — le
+ * serveur, lui, répondra `ivr_play` : dégradé, jamais cassé.
+ */
+async function ouvrirSessionVocale(ws, call, centre) {
+  const nomCentre = nomAffichage(centre) ?? centre.publicNumber;
+  const options = await lireMenuVocal(prisma, centre);
+
+  if (options.length === 0) {
+    sendTo(ws.userId, {
+      type: "ivr_error",
+      callId: call.id,
+      code: "no_service",
+      retry: false,
+      message: `${nomCentre} n'a aucun menu disponible pour le moment.`,
+    });
+    await cloreAppelIvr(call.id);
+    return;
+  }
+
+  // Même raison qu'au centre d'appels : une session résiduelle sur le même
+  // identifiant ne doit pas emporter le nouvel appel avec elle.
+  fermerSessionIvr(call.id);
+
+  const session = {
+    callId: call.id,
+    convId: call.convId,
+    appelantId: ws.userId,
+    centreId: centre.id,
+    centreCompanyId: centre.idCompany,
+    nomCentre,
+    centrePublicNumber: centre.publicNumber,
+    options,
+    mode: "vocal",
+    etape: "menu",
+    minuteur: null,
+    // Armé seulement pendant une lecture, et le seul minuteur qui puisse
+    // refermer la session tant qu'un son tourne en boucle.
+    minuteurLecture: null,
+    // La touche en cours de lecture, ou nulle hors de cet état. Sert à ignorer
+    // un ré-appui sur la touche DÉJÀ en train de jouer : le son boucle, le
+    // relancer le ferait repartir du début sans que l'appelant l'ait demandé.
+    toucheEnLecture: null,
+    // Jamais posés pour un centre vocal — déclarés pour que les chemins de
+    // sortie partagés (`fermerSessionIvr`, `handleCallState`) trouvent la même
+    // forme d'objet que pour un centre d'appels.
+    agentId: null,
+    agentLabel: null,
+    idHist: null,
+  };
+  sessionsIvr.set(call.id, session);
+  armerMinuteurMenu(session);
+
+  ws.callIdActif = call.id;
+
+  await envoyerMenuVocal(session, centre);
+  console.log(
+    `[ivr] menu VOCAL ouvert — appel ${call.id}, centre ${nomCentre}, ${options.length} touche(s)`,
+  );
+}
+
+/**
+ * Envoie (ou renvoie) le menu d'accueil d'un centre vocal.
+ *
+ * Extrait parce qu'il sert DEUX FOIS, et que les deux doivent être identiques :
+ * à l'ouverture, et au retour à l'accueil demandé par l'appelant. Le client
+ * rejoue l'invite en boucle sur réception d'`ivr_menu` — c'est ce qui fait que
+ * « Retour à l'accueil » n'a besoin d'aucun message dédié ni d'aucun code de
+ * lecture supplémentaire côté client : il réemprunte un chemin déjà éprouvé sur
+ * device.
+ *
+ * ⚠️ `promptUrl` est relu à chaque envoi et non mémorisé : la plateforme peut
+ * changer l'invite pendant l'appel, et surtout une lecture qui aurait échoué à
+ * l'ouverture a une seconde chance ici.
+ */
+async function envoyerMenuVocal(session, centre) {
+  envoieAAppelant(session, {
+    type: "ivr_menu",
+    mode: "vocal",
+    callId: session.callId,
+    convId: session.convId,
+    centerId: session.centreId,
+    centerName: session.nomCentre,
+    centerNumber: session.centrePublicNumber,
+    centerAvatarUrl: centre?.avatarUrl ?? null,
+    promptUrl: await urlInviteCentre(prisma, {
+      id: session.centreId,
+      publicNumber: session.centrePublicNumber,
+      idCompany: session.centreCompanyId,
+    }),
+    promptLoop: true,
+    // Ni musique d'attente ni file : un centre vocal ne fait patienter personne.
+    // Envoyés explicitement à `null`/vide plutôt qu'omis, pour qu'un client qui
+    // réutilise une session précédente ne conserve pas les URL de la sienne.
+    holdUrl: null,
+    queueUrls: [],
+    options: optionsPubliques(session.options),
+  });
 }
 
 /**
@@ -1494,6 +1701,12 @@ async function sonnerAgentIvr(session, agentId) {
     groupName: null,
     memberCount: 2,
     ivrFrom: session.nomCentre,
+    // Alanya ID du centre, ajouté le 15/08/2026 : `ivrFrom` ne portait que le
+    // nom, illisible pour une requête. Sert au client à interroger
+    // /api/queue/live et /api/queue/history?centerAlanyaID=… depuis l'écran
+    // d'appel de l'agent (tiroir « Liste d'attente »). Additif, comme
+    // `ivrFrom` — un client qui l'ignore n'est pas affecté.
+    ivrFromId: session.centreId,
   };
   if (!sendTo(agentId, charge)) bufferPendingCall(agentId, charge);
   if (isPushEnabled()) {
@@ -1591,6 +1804,60 @@ function armerMinuteurAgent(session) {
 }
 
 /**
+ * Le CENTRE est-il libre pour prendre CET appel comme son propre agent
+ * (touche 0 implicite, voir `lireMenuCentre`) ?
+ *
+ * `agentDisponible` seul ne peut pas répondre : le centre est
+ * `callParticipant` de CHAQUE appel qui compose son numéro — la ligne posée
+ * par `POST /api/calls` avant même que l'IVR décide où router, et rien ne la
+ * referme tant que l'appel dure (voir `sonnerAgentIvr`, qui la RÉUTILISE via
+ * upsert plutôt que d'en créer une seconde). Une lecture brute de
+ * `callParticipant` déclarerait donc le centre occupé dès qu'UN SEUL appel
+ * entre sur la ligne — y compris un appelant qui navigue encore dans le menu,
+ * ou qui parle à un agent réel via une AUTRE touche.
+ *
+ * La session IVR en mémoire (`sessionsIvr`) fait la différence : elle seule
+ * sait QUEL appel a réellement choisi le centre comme agent
+ * (`session.agentId === centreId`, posé au moment de sonner). Une ligne
+ * `callParticipant` sans session associée n'est pas un artefact de routage —
+ * le centre est alors occupé pour une raison hors standard (il a par exemple
+ * appelé quelqu'un lui-même, en utilisant son compte comme un utilisateur
+ * ordinaire).
+ */
+async function centreIvrDisponible(prisma, centreId) {
+  const lignes = await prisma.callParticipant.findMany({
+    where: {
+      userId: centreId,
+      leftAt: null,
+      call: { status: { in: ["RINGING", "ONGOING"] } },
+    },
+    select: { callId: true },
+  });
+  for (const { callId } of lignes) {
+    const autreSession = sessionIvr(callId);
+    if (!autreSession || autreSession.agentId === centreId) return false;
+  }
+  return true;
+}
+
+/**
+ * `choisirAgentLibre` de ivr.mjs, adapté au pool qui peut contenir le CENTRE
+ * lui-même (touche 0 implicite). Les vrais agents passent par
+ * `agentDisponible`, inchangé ; seul le candidat `centreId` passe par
+ * `centreIvrDisponible`, ci-dessus.
+ */
+async function choisirAgentIvrLibre(prisma, agentIds, centreId) {
+  for (const id of agentIds) {
+    const libre =
+      id === centreId
+        ? await centreIvrDisponible(prisma, centreId)
+        : await agentDisponible(prisma, id);
+    if (libre) return id;
+  }
+  return null;
+}
+
+/**
  * L'appelant tape une touche.
  *
  * Trois refus possibles, et ils ne disent PAS la même chose :
@@ -1603,18 +1870,308 @@ function armerMinuteurAgent(session) {
  *
  * Les trois ramènent au menu (`retry: true`), aucun ne raccroche.
  */
+function armerQueuePolling(session, option, touche) {
+  if (session.pollingInterval) clearInterval(session.pollingInterval);
+  session.pollingInterval = setInterval(async () => {
+    const vivante = sessionsIvr.get(session.callId);
+    if (!vivante || vivante.etape !== "attente") {
+      if (session.pollingInterval) clearInterval(session.pollingInterval);
+      session.pollingInterval = null;
+      return;
+    }
+
+    if (Date.now() - (vivante.debutAttente ?? Date.now()) > DELAI_ATTENTE_MAX_MS) {
+      if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
+      vivante.pollingInterval = null;
+      console.log(`[ivr] attente expirée (5 min) — appel ${vivante.callId}`);
+      // ⚠️ 15/08/2026 : sans cet appel, la ligne restait fantôme dans `file` —
+      // `ivrRetourAuMenu` fait passer la session en "menu", et l'abandon sur
+      // raccrochage de `fermerSessionIvr` ne se déclenche QUE depuis "attente".
+      // Sans clôture ici, ce client n'aurait jamais existé pour /api/queue/history
+      // ni pour la vue « clients à rappeler ».
+      await abandonnerFileWS(prisma, vivante.centreId, vivante.appelantId, "TIMEOUT");
+      await ivrRetourAuMenu(vivante, {
+        code: "busy_timeout",
+        message: `${option.label} est toujours occupé. Veuillez choisir un autre service.`,
+      });
+      return;
+    }
+
+    const agentLibreId = await choisirAgentIvrLibre(prisma, option.agentIds, vivante.centreId);
+    if (!agentLibreId) return;
+
+    if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
+    vivante.pollingInterval = null;
+
+    vivante.agentId = agentLibreId;
+    vivante.agentLabel = option.label;
+    vivante.etape = "sonnerie";
+
+    // Capturé : c'est ce idHist que le client notera à la fin de l'appel
+    // (voir le message `queue_rating_available` envoyé à la clôture de la
+    // session, plus bas dans handleCallState).
+    const depile = await depilerClientSuivantWS(prisma, vivante.centreId, agentLibreId, vivante.appelantId, vivante.centreCompanyId, option.idService ?? null);
+    vivante.idHist = depile?.idHist ?? null;
+
+    envoieAAppelant(vivante, {
+      type: "ivr_hold",
+      callId: vivante.callId,
+      digit: touche,
+      label: option.label,
+      nomService: option.nomService ?? null,
+      holdUrl: vivante.urlAttente,
+    });
+
+    if (!(await sonnerAgentIvr(vivante, agentLibreId))) {
+      return ivrRetourAuMenu(vivante, {
+        code: "offline",
+        message: `${option.label} est momentanément injoignable.`,
+      });
+    }
+    armerMinuteurAgent(vivante);
+    console.log(`[ivr] file d'attente : agent ${agentLibreId} attribué automatiquement à l'appel ${vivante.callId}`);
+  }, 4000);
+}
+
+/**
+ * L'appelant tape une touche d'un CENTRE VOCAL : on joue le son, point.
+ *
+ * Aucun agent à chercher, donc aucune file, aucune sonnerie, aucun minuteur de
+ * décrochage. Les deux refus possibles reprennent mot pour mot la sémantique du
+ * centre d'appels — `invalid` pour une touche qui n'existe pas, `unavailable`
+ * pour une touche annoncée dont le son est introuvable — parce que l'appelant
+ * ne fait pas la différence entre les deux sortes de standard et n'a pas à la
+ * faire.
+ *
+ * ⚠️ LE SON TOURNE EN BOUCLE (décision du user, 18/08/2026). Trois conséquences
+ * qui tiennent toutes dans cette fonction :
+ *  - le minuteur de 60 s du menu est COUPÉ : l'appelant écoute, il n'est pas
+ *    inactif, et une boucle n'arrive jamais à sa fin pour le réarmer ;
+ *  - il est remplacé par le plafond de sécurité, seul moyen de refermer une
+ *    session dont plus personne ne s'occupe ;
+ *  - un ré-appui sur la touche DÉJÀ en lecture est ignoré. Sans cette garde, il
+ *    ferait repartir le son du début, ce que personne n'a demandé — et c'est
+ *    exactement le geste qu'on fait quand on croit que « ça n'a pas marché ».
+ */
+async function handleIvrDtmfVocal(session, touche) {
+  // 🔴 LA TOUCHE 0 EST RÉSERVÉE À LA PLAINTE VOCALE, avant toute autre lecture.
+  //
+  // Elle était libre : vérifié en production le 20/08/2026, `center_audio` ne
+  // porte que les touches 1 à 6. Elle le reste par CONVENTION — si la plateforme
+  // y dépose un son un jour, il sera ignoré, et un avertissement le dira. Un
+  // comportement qui dépend de la présence d'une ligne serait imprévisible pour
+  // l'appelant, qui entend toujours la même annonce.
+  if (touche === TOUCHE_PLAINTE_VOCALE) {
+    if (session.options.some((o) => o.digit === TOUCHE_PLAINTE_VOCALE)) {
+      console.warn(
+        `[ivr] centre ${session.nomCentre} : un son est configuré sur la touche 0, IGNORÉ — cette touche enregistre les plaintes.`,
+      );
+    }
+    return ouvrirEnregistrementPlainte(session);
+  }
+
+  const option = session.options.find((o) => o.digit === touche);
+  const menu = optionsPubliques(session.options);
+
+  if (!option) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId: session.callId,
+      code: "invalid",
+      retry: true,
+      message: "Ce choix ne correspond à aucune option.",
+      options: menu,
+    });
+  }
+  if (option.audioUrl == null) {
+    return envoieAAppelant(session, {
+      type: "ivr_error",
+      callId: session.callId,
+      code: "unavailable",
+      retry: true,
+      message: `${option.nomService ?? option.label} n'est pas disponible pour le moment.`,
+      options: menu,
+    });
+  }
+
+  // Déjà en train de jouer CETTE touche : on ne relance rien.
+  if (session.etape === "lecture" && session.toucheEnLecture === touche) return;
+
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  session.etape = "lecture";
+  session.toucheEnLecture = touche;
+  armerPlafondLecture(session);
+
+  envoieAAppelant(session, {
+    type: "ivr_play",
+    callId: session.callId,
+    digit: touche,
+    // Les deux libellés sont envoyés pour la même raison qu'à `ivr_hold` : le
+    // client afficherait sinon le nom d'une touche en le retrouvant dans une
+    // liste d'options qu'un retour à l'accueil peut avoir remplacée entre-temps.
+    label: option.label,
+    nomService: option.nomService ?? null,
+    audioUrl: option.audioUrl,
+    // Explicite, et non déduit côté client : c'est le serveur qui décide de la
+    // règle de lecture, et elle pourra changer sans nouvel APK.
+    loop: true,
+  });
+  console.log(
+    `[ivr] touche ${touche} « ${option.nomService ?? option.label} » — appel ${session.callId}, lecture vocale`,
+  );
+}
+
+/**
+ * L'appelant a tapé 0 : on l'invite à dicter sa plainte.
+ *
+ * LE SERVEUR NE FAIT QUE DONNER LE DÉPART. Il n'enregistre rien, ne reçoit
+ * aucun flux : le micro, le minuteur, la pause et la réécoute vivent sur le
+ * téléphone, et le fichier n'arrive qu'à l'envoi, par la route HTTP des médias.
+ * C'est ce qui rend la fonction possible sans toucher au transport de l'appel.
+ *
+ * ⚠️ L'ENREGISTREMENT NE DÉMARRE PAS À L'APPUI, mais À LA FIN DU BIP — demande
+ * explicite du user. C'est le CLIENT qui enchaîne, parce que lui seul sait quand
+ * la lecture se termine ; le serveur ne connaîtrait ni la durée du fichier ni le
+ * temps de mise en cache. Il envoie donc les deux ensemble et laisse faire.
+ *
+ * ⚠️ `bipUrl` peut être NULLE — variable d'environnement absente, ou URL
+ * relative refusée. Le client démarre alors sans annonce plutôt que de rester
+ * bloqué : une variable oubliée ne doit jamais rendre la touche inutilisable.
+ *
+ * Le minuteur du menu est coupé, comme pour une lecture : quelqu'un qui dicte sa
+ * plainte n'est pas inactif. Le plafond de sécurité le remplace — sans lui, une
+ * session dont l'appelant est parti resterait ouverte indéfiniment.
+ */
+async function ouvrirEnregistrementPlainte(session) {
+  // Ré-appui pendant qu'il enregistre déjà : on ne relance rien, sinon le bip
+  // repartirait par-dessus sa voix et le minuteur du client repartirait de zéro.
+  if (session.etape === "enregistrement") return;
+
+  if (session.minuteur) clearTimeout(session.minuteur);
+  session.minuteur = null;
+  session.etape = "enregistrement";
+  session.toucheEnLecture = null;
+  armerPlafondLecture(session);
+
+  const bipUrl = urlBipEnregistrement();
+  envoieAAppelant(session, {
+    type: "ivr_record",
+    callId: session.callId,
+    centerId: session.centreId,
+    centerName: session.nomCentre,
+    bipUrl,
+    // Explicite, et non deviné côté client : la borne pourra changer sans
+    // nouvel APK, comme la règle de boucle d'`ivr_play`.
+    maxMs: DUREE_PLAINTE_MAX_MS,
+  });
+  console.log(
+    `[ivr] touche 0 — appel ${session.callId}, enregistrement de plainte (bip ${bipUrl ? "présent" : "ABSENT"})`,
+  );
+}
+
+/**
+ * Le plafond de sécurité d'une lecture en boucle — voir `DELAI_LECTURE_MAX_MS`.
+ *
+ * Referme comme le minuteur du menu : un `ivr_error` sans `call_ended`, pour que
+ * le message ait le temps d'être lu avant que le client décide de raccrocher.
+ */
+function armerPlafondLecture(session) {
+  if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
+  session.minuteurLecture = setTimeout(async () => {
+    const vivante = sessionsIvr.get(session.callId);
+    if (!vivante || vivante.etape !== "lecture") return;
+    console.log(`[ivr] lecture vocale plafonnée (30 min) — appel ${vivante.callId}`);
+    envoieAAppelant(vivante, {
+      type: "ivr_error",
+      callId: vivante.callId,
+      code: "timeout",
+      retry: false,
+      message: "Fin de la communication. Rappelez quand vous voudrez.",
+    });
+    fermerSessionIvr(vivante.callId);
+    await cloreAppelIvr(vivante.callId);
+  }, DELAI_LECTURE_MAX_MS);
+}
+
+/**
+ * « Retour à l'accueil » d'un centre vocal.
+ *
+ * Répond en RENVOYANT `ivr_menu`, et non par un message dédié : le client sait
+ * déjà traiter ce message — il rebâtit son écran et rejoue l'invite en boucle —
+ * ce qui fait tenir tout le retour à l'accueil sur un chemin déjà éprouvé sur
+ * device. Le menu est relu au passage, donc une touche dont le son est devenu
+ * résoluble depuis l'ouverture cesse d'être grisée.
+ *
+ * Sans effet sur un centre d'APPELS : là-bas le retour au menu est décidé par le
+ * serveur (agent qui ne répond pas, refus, file expirée), jamais demandé par
+ * l'appelant, et laisser ce message y toucher permettrait de sortir d'une mise
+ * en relation en cours par un simple bouton.
+ */
+async function handleIvrBack(ws, msg) {
+  const session = sessionIvr(msg?.callId);
+  if (!session || session.appelantId !== ws.userId) return;
+  if (session.mode !== "vocal") return;
+  // ⚠️ « enregistrement » EST ACCEPTÉ AUTANT QUE « lecture ». Sans lui, le
+  // bouton « Accueil » serait INERTE pendant qu'on dicte une plainte — le seul
+  // état où l'appelant a le plus besoin de pouvoir revenir en arrière, et un
+  // bouton sans effet se lit comme une application figée. Les deux étapes
+  // partagent d'ailleurs le même plafond de sécurité, donc le même nettoyage.
+  if (session.etape !== "lecture" && session.etape !== "enregistrement") return;
+
+  if (session.minuteurLecture) clearTimeout(session.minuteurLecture);
+  session.minuteurLecture = null;
+  session.toucheEnLecture = null;
+
+  // Relit le menu : une touche peut être devenue disponible depuis l'ouverture.
+  const centre = await prisma.user
+    .findUnique({
+      where: { id: session.centreId },
+      select: { id: true, nom: true, pseudo: true, publicNumber: true, avatarUrl: true, idCompany: true },
+    })
+    .catch(() => null);
+  if (centre) {
+    const options = await lireMenuVocal(prisma, centre);
+    // ⚠️ Un menu devenu VIDE ne remplace pas celui qu'on a : l'appelant se
+    // retrouverait devant un pavé sans aucune touche, sans rien pour expliquer
+    // pourquoi. Une lecture qui échoue laisse l'écran tel qu'il était.
+    if (options.length > 0) session.options = options;
+  }
+
+  // Repose l'étape ET le minuteur de 60 s, suspendu pendant toute la lecture.
+  armerMinuteurMenu(session);
+  await envoyerMenuVocal(session, centre);
+  console.log(`[ivr] retour à l'accueil — appel ${session.callId}`);
+}
+
 async function handleIvrDtmf(ws, msg) {
   const { callId, digit } = msg;
   const session = sessionIvr(callId);
 
-  // Identité vérifiée par le JETON porté par la socket, jamais par la charge
-  // utile : sans cela, n'importe qui connaissant un identifiant d'appel pourrait
-  // faire sonner les agents d'un centre.
   if (!session || session.appelantId !== ws.userId) return;
-  // Une touche pendant l'attente est ignorée en silence — l'agent sonne déjà.
-  if (session.etape !== "menu") return;
 
+  /*
+   * ⚠️ « lecture » EST UN ÉTAT QUI ACCEPTE LES TOUCHES, contrairement à
+   * « sonnerie » : le user a demandé de pouvoir passer d'un son à l'autre sans
+   * repasser par l'accueil. C'est pour cela que la garde d'étape est écrite par
+   * sorte de standard et non une fois pour toutes.
+   */
   const touche = Number(digit);
+  if (session.mode === "vocal") {
+    /*
+     * ⚠️ « enregistrement » EST VOLONTAIREMENT ABSENT DE CETTE LISTE, et il ne
+     * faut pas l'y ajouter : pendant qu'on dicte une plainte, toute touche est
+     * ignorée. L'ajouter ferait perdre l'enregistrement en cours sur un appui
+     * distrait — le pavé reste à l'écran, il est facile à toucher. Le retour à
+     * l'accueil, lui, passe par `ivr_back`, qui accepte cette étape : c'est la
+     * seule sortie, et elle est explicite.
+     */
+    if (session.etape !== "menu" && session.etape !== "lecture") return;
+    return handleIvrDtmfVocal(session, touche);
+  }
+
+  if (session.etape !== "menu" && session.etape !== "attente") return;
+
   const option = session.options.find((o) => o.digit === touche);
   const menu = optionsPubliques(session.options);
 
@@ -1639,16 +2196,52 @@ async function handleIvrDtmf(ws, msg) {
     });
   }
 
-  const agentId = await choisirAgentLibre(prisma, option.agentIds);
+  const agentId = await choisirAgentIvrLibre(prisma, option.agentIds, session.centreId);
   if (!agentId) {
-    return envoieAAppelant(session, {
+    if (session.minuteur) clearTimeout(session.minuteur);
+    session.minuteur = null;
+    session.etape = "attente";
+    session.optionAttente = option;
+    session.toucheAttente = touche;
+    session.debutAttente = Date.now();
+
+    const queueUrls =
+      session.urlsQueue ??
+      (await urlsVocalAttente(prisma, {
+        id: session.centreId,
+        publicNumber: session.centrePublicNumber,
+        idCompany: session.centreCompanyId,
+      }));
+
+    envoieAAppelant(session, {
       type: "ivr_error",
       callId,
       code: "busy",
       retry: true,
-      message: `${option.label} est en ligne. Choisissez un autre service.`,
+      inQueue: true,
+      message: `${option.label} est actuellement occupé. Votre appel reste en file d'attente.`,
       options: menu,
+      queueUrls,
+      queueLoop: true,
+      holdUrl: session.urlAttente,
+      holdLoop: true,
     });
+
+    armerQueuePolling(session, option, touche);
+    ajouterClientFileWS(prisma, {
+      idCompany: session.centreCompanyId,
+      centerAlanyaID: session.centreId,
+      idCustomer: session.appelantId,
+      idService: option.idService ?? null,
+      // Un pool à un seul candidat (systématiquement le cas de la touche 0
+      // implicite, [centreId]) désigne son agent sans ambiguïté même en file
+      // d'attente. Un pool à plusieurs agents reste `null` : on ne sait pas
+      // encore lequel se libérera.
+      idAgent: option.agentIds.length === 1 ? option.agentIds[0] : null,
+      priorite: 0,
+    });
+    console.log(`[ivr] tous agents occupés pour ${option.label} — appel ${callId} placé en file d'attente`);
+    return;
   }
 
   // ⚠️ L'ÉTAT BASCULE AVANT LE MOINDRE ENVOI. Un double appui — sur un réseau
@@ -1660,6 +2253,9 @@ async function handleIvrDtmf(ws, msg) {
   session.agentId = agentId;
   session.agentLabel = option.label;
   session.etape = "sonnerie";
+
+  const depile = await depilerClientSuivantWS(prisma, session.centreId, agentId, session.appelantId, session.centreCompanyId, option.idService ?? null);
+  session.idHist = depile?.idHist ?? null;
 
   envoieAAppelant(session, {
     type: "ivr_hold",
@@ -1691,7 +2287,7 @@ async function handleCallRing(ws, msg) {
   for (let attempt = 0; attempt < 5; attempt++) {
     call = await prisma.call.findUnique({
       where: { id: callId },
-      include: { initiator: true },
+      include: { initiator: true, callerMask: true },
     });
     if (call) break;
     await new Promise((r) => setTimeout(r, 200));
@@ -1758,7 +2354,16 @@ async function handleCallRing(ws, msg) {
         idCompany: true,
       },
     });
-    if (estCompteCentre(cible)) {
+    /*
+     * DEUX SORTES DE STANDARD, UN SEUL AIGUILLAGE.
+     *
+     * `type_compte = 3` mène à un agent, `= 4` à un son (centre vocal). Tout ce
+     * qui précède la bascule leur est commun — le tête-à-tête, la garde de
+     * ré-entrée, le fait que personne ne sonne — d'où la question unique. Les
+     * séparer aurait dupliqué la garde ci-dessous, c'est-à-dire le seul endroit
+     * où un oubli ne se voit pas tout de suite.
+     */
+    if (ouvreUnStandard(cible)) {
       /**
        * ⚠️ GARDE DE RÉ-ENTRÉE. `call_ring` n'arrive pas forcément une seule
        * fois : le client web le RENVOIE à 4 s et à 10 s, au cas où le premier se
@@ -1766,16 +2371,27 @@ async function handleCallRing(ws, msg) {
        * appel ordinaire — le destinataire ignore un appel déjà connu — mais
        * dévastateur ici : le menu repartirait de zéro, l'invite se rejouerait
        * par-dessus, et surtout un agent déjà sollicité se retrouverait à sonner
-       * pour une session que plus personne ne référence.
+       * pour une session que plus personne ne référence. Vaut tout autant pour
+       * un centre vocal, où le second passage couperait le son en cours de
+       * lecture pour rouvrir un menu que l'appelant n'a pas redemandé.
        */
       if (sessionsIvr.has(callId)) return;
-      await ouvrirSessionIvr(ws, call, cible);
+      if (estCentreVocal(cible)) await ouvrirSessionVocale(ws, call, cible);
+      else await ouvrirSessionIvr(ws, call, cible);
       return; // personne ne sonne
     }
   }
 
-  const callerName = nomAffichage(call.initiator);
-  const callerAvatarUrl = call.initiator.avatarUrl ?? null;
+  /*
+   * RAPPEL « SOUS LE NOM DU CENTRE » (15/08/2026) — `call.callerMask`, quand
+   * il existe, remplace l'identité montrée au CALLÉ. `call.initiatorId` reste
+   * le vrai agent partout ailleurs (verrous, sonnerie ci-dessus déjà validée
+   * par `call.initiatorId === ws.userId`) : seule cette vue-ci est masquée.
+   */
+  const identiteAffichee = call.callerMask ?? call.initiator;
+  const callerName = nomAffichage(identiteAffichee);
+  const callerAvatarUrl = identiteAffichee.avatarUrl ?? null;
+  const callerIdAffiche = call.callerMaskId ?? ws.userId;
   let isGroup = false;
   let groupName = null;
   let memberCount = 0;
@@ -1797,7 +2413,7 @@ async function handleCallRing(ws, msg) {
       callId,
       convId: call.convId,
       callType: call.type,
-      callerId: ws.userId,
+      callerId: callerIdAffiche,
       callerName,
       callerAvatarUrl,
       isGroup,
@@ -2021,7 +2637,7 @@ async function diffuseAppelTermine(callId, ids) {
   try {
     const call = await prisma.call.findUnique({
       where: { id: callId },
-      include: { participants: { include: { user: true } } },
+      include: { callerMask: true, participants: { include: { user: true } } },
     });
     if (!call || !STATUTS_TERMINAUX.includes(call.status)) return;
 
@@ -2060,7 +2676,7 @@ async function pousseDepartParticipant(callId, userId) {
   try {
     const call = await prisma.call.findUnique({
       where: { id: callId },
-      include: { participants: { include: { user: true } } },
+      include: { callerMask: true, participants: { include: { user: true } } },
     });
     if (!call) return;
     // Appel déjà clos pour tout le monde : `diffuseAppelTermine` s'en est chargé.
@@ -2156,6 +2772,18 @@ async function handleCallState(ws, msg) {
    */
   const finPourTous = ["ended", "rejected", "declined", "cancelled"].includes(state);
   if (finPourTous || (state === "left" && sessionIvr(callId)?.appelantId === ws.userId)) {
+    // Lu AVANT `fermerSessionIvr`, qui retire la session du registre. Envoyé
+    // uniquement si l'appel a réellement atteint un agent (idHist posé par
+    // `depilerClientSuivantWS`) : un abandon en file ou un menu jamais résolu
+    // n'ont rien à noter. Ciblé sur l'appelant seul — jamais l'agent.
+    const sessionAvantFermeture = sessionIvr(callId);
+    if (sessionAvantFermeture?.idHist) {
+      sendTo(sessionAvantFermeture.appelantId, {
+        type: "queue_rating_available",
+        callId,
+        idHist: sessionAvantFermeture.idHist,
+      });
+    }
     fermerSessionIvr(callId);
   }
 
@@ -2388,7 +3016,9 @@ async function handleForwardMessage(ws, msg) {
       where: { id: targetConvId },
       data: {
         updatedAt: new Date(),
-        lastMessage: (original.content ?? "").slice(0, 500) || null,
+        // Même règle qu'à l'envoi : un média transféré sans légende laissait
+        // lui aussi la colonne à NULL.
+        lastMessage: apercuMessage(original.type, original.content)?.slice(0, 500) ?? null,
         lastMessageAt: new Date(),
         lastMessageSenderID: ws.userId,
         lastMessageType:
@@ -3250,6 +3880,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_state") await handleCallState(ws, msg);
       else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
       else if (msg.type === "ivr_dtmf") await handleIvrDtmf(ws, msg);
+      else if (msg.type === "ivr_back") await handleIvrBack(ws, msg);
       else if (msg.type === "delete_message") await handleDeleteMessage(ws, msg);
       else if (msg.type === "edit_message") await handleEditMessage(ws, msg);
       else if (msg.type === "pin_message") await handlePinMessage(ws, msg);
