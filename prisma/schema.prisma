@@ -2082,8 +2082,14 @@ model DeveloperAccount {
   userId         String   @unique @map("user_id") @db.Uuid
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   companyName    String?  @map("company_name") @db.VarChar(100)
-  balanceCredits BigInt   @default(1000) @map("balance_credits") // 1 000 crédits de bienvenue offerts
-  holdCredits    BigInt   @default(0) @map("hold_credits") // Crédits sous réservation HOLD
+  /// 🔴 PLUS UTILISÉES depuis le 21/08/2026 — la facturation a été supprimée
+  /// (l'API sert la plateforme de l'équipe, qui gère son propre paiement).
+  /// Aucune route ne les lit ni ne les écrit ; les valeurs en base sont figées
+  /// à ce qu'elles valaient. ⚠️ NON SUPPRIMÉES DE LA BASE À DESSEIN : elle est
+  /// partagée avec un second système, et un DROP COLUMN casserait ses lectures.
+  /// Ne pas les recâbler sans en reparler.
+  balanceCredits BigInt   @default(1000) @map("balance_credits")
+  holdCredits    BigInt   @default(0) @map("hold_credits")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
@@ -2223,7 +2229,11 @@ model DeveloperWebhook {
   @@map("developer_webhooks")
 }
 
-/// Codes OTP d'Authentification 2FA Développeur
+/// Codes OTP d'Authentification 2FA Développeur.
+/// 🔴 TABLE MORTE — remplacée par [Verification], qui sale et hache le code
+/// (celle-ci le stockait EN CLAIR dans `code`), compte les tentatives et
+/// constate la livraison. Aucun code ne l'écrit plus.
+/// ⚠️ NON SUPPRIMÉE : base partagée. Ne pas la réutiliser.
 model DeveloperOtp {
   id              String           @id @default(uuid()) @map("otp_id") @db.Uuid
   developerId     String           @map("developer_id") @db.Uuid
@@ -2239,6 +2249,13 @@ model DeveloperOtp {
 }
 
 /// Registre des Médias API (Image, Audio, Documents - Standard WhatsApp Media API)
+/// 🔴 TABLE MORTE depuis le 21/08/2026 — plus aucun code ne l'écrit ni ne la
+/// lit. `POST /api/v1/media` téléverse désormais pour de vrai et crée un
+/// [MediaFile] ordinaire, ce qui lui donne le contrôle d'accès de
+/// `/api/media/:id`. Cette table n'enregistrait qu'une URL fournie par
+/// l'appelant, avec une taille en dur et un type MIME jamais vérifié.
+/// ⚠️ NON SUPPRIMÉE : base partagée avec un second système. Ne pas la
+/// réutiliser — c'est [MediaFile] qui fait foi.
 model DeveloperMedia {
   id          String           @id @default(uuid()) @map("media_id") @db.Uuid
   developerId String           @map("developer_id") @db.Uuid

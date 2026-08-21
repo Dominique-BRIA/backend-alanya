@@ -77,31 +77,20 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Création ou récupération du compte developer_accounts avec 1 000 crédits offerts
-    let devAccount = await prisma.developerAccount.findUnique({
-      where: { userId: user.id },
-    });
-
-    if (!devAccount) {
-      devAccount = await prisma.developerAccount.create({
-        data: {
-          userId: user.id,
-          balanceCredits: 1000,
-          holdCredits: 0,
-        },
-      });
-
-      // Transaction initiale au ledger
-      await prisma.devLedger.create({
-        data: {
-          developerId: devAccount.id,
-          amount: 1000,
-          type: "PURCHASE",
-          status: "SETTLED",
-          description: "Bienvenue Développeur Alanya - 1 000 Crédits offerts",
-        },
-      });
-    }
+    /*
+     * Création du compte `developer_accounts` — il porte l'accès à l'API, plus
+     * aucun solde. Les « 1 000 crédits offerts » et leur ligne de registre ont
+     * disparu avec la facturation (21/08/2026) : l'API n'est pas vendue, elle
+     * sert la plateforme de l'équipe, qui gère son propre paiement.
+     *
+     * ⚠️ Les colonnes `balance_credits` / `hold_credits` RESTENT en base, avec
+     * leur valeur par défaut — elles sont partagées avec le second système qui
+     * écrit dans cette base, et personne n'a demandé de les retirer. Elles ne
+     * sont simplement plus ni lues ni écrites par nous.
+     */
+    const devAccount =
+      (await prisma.developerAccount.findUnique({ where: { userId: user.id } })) ??
+      (await prisma.developerAccount.create({ data: { userId: user.id } }));
 
     // Journal d'accès
     await recordAccess(prisma, { userId: user.id, req });
@@ -120,8 +109,6 @@ export async function POST(req: NextRequest) {
       },
       developer: {
         id: devAccount.id,
-        balanceCredits: devAccount.balanceCredits.toString(),
-        holdCredits: devAccount.holdCredits.toString(),
       },
       tokens,
     });

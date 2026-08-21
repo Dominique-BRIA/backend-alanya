@@ -4,7 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { sendMessageSchema } from "@/lib/validation";
 import { assertParticipant } from "@/modules/messaging/access";
-import { apercuMessage } from "@/lib/message-payload.mjs";
+import { creerMessage, serialiserMessage } from "@/modules/messaging/envoi";
 
 const PAGE_SIZE = 50;
 
@@ -166,106 +166,35 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   const body = sendMessageSchema.parse(await req.json());
 
-  /**
-   * Blocage : on refuse ici aussi.
+  /*
+   * La séquence d'envoi vit dans `creerMessage` — contrôle de blocage, messages
+   * éphémères, liaison des médias, `lastMessage`, compteurs de non-lus.
    *
-   * Le client bascule sur cette route quand le WebSocket n'acquitte pas — ce
-   * qui est précisément ce qui se passe entre deux personnes bloquées. Sans ce
-   * contrôle, le repli serait une porte dérobée : le message passerait par HTTP
-   * ce que le temps réel venait de refuser.
+   * Elle en a été EXTRAITE plutôt que recopiée : l'API v1 avait sa propre
+   * version, qui avait perdu quatre de ces cinq éléments en chemin. Voir
+   * `src/modules/messaging/envoi.ts`.
    *
-   * On répond 403 et non 200 : mentir à l'appelant n'est pas le rôle de l'API.
-   * C'est le client qui, connaissant le blocage, n'envoie rien et laisse le
-   * message en « en cours d'envoi » — l'indicateur qui ne se résout jamais.
+   * ⚠️ Sur le blocage, on répond 403 et non 200 : c'est le client qui, le
+   * connaissant, n'envoie rien. Cette route est le repli utilisé quand le
+   * WebSocket n'acquitte pas — c'est-à-dire exactement ce qui se produit entre
+   * deux personnes bloquées. Sans ce refus, le repli serait une porte dérobée.
    */
-  const participants = await prisma.participant.findMany({
-    where: { convId },
-    select: { userId: true },
+  const envoi = await creerMessage({
+    convId,
+    expediteurId: userId,
+    type: body.type,
+    content: body.content,
+    mediaId: body.mediaId,
+    mediaIds: body.mediaIds,
+    replyToId: body.replyToId,
   });
-  if (participants.length === 2) {
-    const autre = participants.find((p) => p.userId !== userId)?.userId;
-    if (autre) {
-      const blocage = await prisma.blocked.findFirst({
-        where: {
-          OR: [
-            { alanyaID: userId, idCallerBlock: autre },
-            { alanyaID: autre, idCallerBlock: userId },
-          ],
-        },
-        select: { idBlock: true },
-      });
-      if (blocage) return fail("Message non distribuable", 403, "BLOCKED");
+
+  if (!envoi.ok) {
+    if (envoi.motif === "MEDIA_ETRANGER") {
+      return fail("Média inconnu ou non possédé", 403, "MEDIA_FORBIDDEN");
     }
+    return fail("Message non distribuable", 403, "BLOCKED");
   }
 
-  // Messages éphémères : calcule l'expiration selon le réglage de la conversation.
-  const convCfg = await prisma.conversation.findUnique({
-    where: { id: convId },
-    select: { disappearingSeconds: true },
-  });
-  const ttl = convCfg?.disappearingSeconds ?? 0;
-  const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
-
-  const message = await prisma.message.create({
-    data: {
-      convId,
-      senderId: userId,
-      content: body.content ?? null,
-      type: body.type,
-      replyToId: body.replyToId,
-      status: "SENT",
-      expiresAt,
-      ...(body.mediaIds && body.mediaIds.length > 0
-        ? { media: { connect: body.mediaIds.map((id: string) => ({ id })) } }
-        : body.mediaId
-        ? { media: { connect: { id: body.mediaId } } }
-        : {}),
-    },
-    include: { media: true },
-  });
-
-  // F10 + F11 : met à jour le dernier message + incrémente unreadCount
-  await prisma.conversation.update({
-    where: { id: convId },
-    data: {
-      // Un CONTACT ou une LOCATION porte du JSON dans `content` : on dénormalise
-      // son LIBELLÉ, jamais la charge. `lastMessage` est lu tel quel par les
-      // trois clients dans la liste des conversations — y écrire la charge
-      // afficherait `{"v":1,…}` sous le nom du correspondant.
-      // ⚠️ `apercuMessage` : `apercuStructure` seul laissait la colonne à NULL
-      // pour un média sans légende, et la liste des conversations basculait
-      // alors sur l'aperçu du dernier appel (user, 18/08/2026).
-      lastMessage: apercuMessage(body.type, body.content ?? null)?.slice(0, 500) ?? null,
-      lastMessageAt: new Date(),
-      lastMessageSenderID: userId,
-      lastMessageType: body.type === "TEXT" ? 0 : body.type === "IMAGE" ? 1 : body.type === "AUDIO" ? 3 : body.type === "VIDEO" ? 4 : 2,
-      lastMessageStatus: 0,
-    },
-  });
-  await prisma.participant.updateMany({
-    where: { convId, userId: { not: userId } },
-    data: { unreadCount: { increment: 1 } },
-  });
-
-  return ok(
-    {
-      id: message.id,
-      convId: message.convId,
-      senderId: message.senderId,
-      content: message.content,
-      type: message.type,
-      status: message.status,
-      replyToId: message.replyToId,
-      media: message.media.map((f) => ({
-        id: f.id,
-        url: `/api/media/${f.id}`,
-        filename: f.filename,
-        mimeType: f.mimeType,
-        sizeBytes: f.sizeBytes,
-        durationMs: f.durationMs,
-      })),
-      createdAt: message.createdAt,
-    },
-    201,
-  );
+  return ok(serialiserMessage(envoi.message), 201);
 });

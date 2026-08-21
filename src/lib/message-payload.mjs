@@ -179,6 +179,17 @@ export function apercuStructure(type, content) {
  * Un libellé calculé côté client n'aurait corrigé qu'un client sur trois.
  *
  * `nomFichier` vient du média, que la charge utile ne porte pas.
+ *
+ * ⚠️ LES TYPES SONT ANNOTÉS, et ce n'est pas de la décoration : sans eux,
+ * TypeScript infère `nomFichier` depuis sa seule valeur par défaut et en déduit
+ * `null | undefined`. Le paramètre devenait donc impossible à renseigner depuis
+ * un appelant `.ts` — aucun ne le faisait, personne ne l'avait vu, et le premier
+ * qui a voulu nommer un fichier s'est fait refuser au build.
+ *
+ * @param {string} type
+ * @param {string|null|undefined} content
+ * @param {string|null} [nomFichier]
+ * @returns {string|null}
  */
 export function apercuMessage(type, content, nomFichier = null) {
   const structure = apercuStructure(type, content);

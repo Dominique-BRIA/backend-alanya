@@ -1,27 +1,30 @@
 /**
- * LE CONTRAT DE L'API DÉVELOPPEUR — codes d'erreur et règles de statut.
+ * LE CONTRAT DE L'API — codes d'erreur et règles de statut.
  *
- * 🔴 CE FICHIER EST LA RÉFÉRENCE, et il est gelé : le tableau de bord est
- * construit par une équipe extérieure, sur un autre backend. Chaque valeur
- * ci-dessous est lue par du code que nous ne compilons pas et ne pouvons pas
- * corriger. En changer une casse leur produit sans que rien ne le signale ici.
+ * 🔴 CE FICHIER EST LA RÉFÉRENCE. Chaque valeur ci-dessous est lue par du code
+ * que nous ne compilons pas — la plateforme de l'équipe. En changer une casse
+ * leur produit sans que rien ne le signale ici.
  *
  * Pourquoi il existe. Les routes `/api/v1/*` appelaient `fail(message, status)`
  * **sans code** : la seule façon de distinguer deux erreurs était de comparer
  * des phrases en français. Un client qui fait ça se casse à la première
  * reformulation, et il ne peut pas être traduit.
  *
- * ⚠️ RÈGLE DE STATUT LA PLUS IMPORTANTE — 402 ≠ 429.
+ * 🔴 **IL N'Y A PLUS DE FACTURATION** (décision du user, 21/08/2026). Cette API
+ * n'est pas vendue à des développeurs extérieurs : elle sert la plateforme de
+ * l'équipe, qui porte son propre mécanisme de paiement de son côté. Nous
+ * livrons un moyen de COMMUNIQUER avec les utilisateurs — codes de
+ * vérification, messages, et la suite — pas un produit à crédits.
  *
- * Les deux veulent dire « votre requête n'est pas passée », mais la conduite à
- * tenir est opposée : sur 402 il faut RECHARGER, sur 429 il faut RALENTIR et
- * réessayer. Le code 429 servait jusqu'ici au solde insuffisant ; comme la
- * limitation de débit devra elle aussi répondre 429, un client n'aurait plus
- * jamais pu les distinguer — et il aurait réessayé en boucle une requête que
- * seul un paiement peut débloquer.
+ * Ce qui a donc disparu : `INSUFFICIENT_CREDITS` et le statut **402**. Un appel
+ * ne peut plus être refusé faute d'argent, seulement faute de droit (401), de
+ * données (400/404) ou de mesure (429).
  *
- * La séparation est faite MAINTENANT, avant que la console soit écrite, parce
- * qu'après elle coûterait une reprise des deux côtés.
+ * ⚠️ Le **429** reste, et il est désormais SEUL à dire « refusé, réessayez ».
+ * C'est ce qui rend sa lecture non ambiguë : attendre puis réessayer est
+ * toujours la bonne conduite. Avant, 429 servait aussi au solde insuffisant —
+ * un client bien écrit réessayait donc en boucle une requête que seul un
+ * paiement pouvait débloquer.
  */
 
 /** Codes rendus dans `{ error: { message, code } }`. */
@@ -37,12 +40,25 @@ export const CODE = {
   REQUETE_INVALIDE: "INVALID_REQUEST",
   /** Le numéro visé ne correspond à aucun compte Alanya. */
   DESTINATAIRE_INTROUVABLE: "RECIPIENT_NOT_FOUND",
-
-  // — Facturation —
   /**
-   * Solde insuffisant. **HTTP 402**, jamais 429 : réessayer n'y changera rien.
+   * Le destinataire a bloqué l'expéditeur, ou l'inverse. **HTTP 403.**
+   *
+   * Distinct de `RECIPIENT_NOT_FOUND` à dessein : l'appelant légitime doit
+   * pouvoir cesser de réessayer, et le cas n'a rien d'une erreur passagère.
+   * (Il révèle l'existence du compte — mais l'appelant la connaissait déjà,
+   * puisqu'il faut un numéro valide pour arriver jusqu'ici.)
    */
-  SOLDE_INSUFFISANT: "INSUFFICIENT_CREDITS",
+  DESTINATAIRE_BLOQUE: "RECIPIENT_BLOCKED",
+  /**
+   * Un média cité n'existe pas, ou n'appartient pas à l'appelant. **HTTP 403.**
+   * Les deux cas répondent pareil : distinguer permettrait de tester
+   * l'existence d'un identifiant qui ne vous regarde pas.
+   */
+  MEDIA_INTERDIT: "MEDIA_FORBIDDEN",
+  /** Type de fichier hors liste blanche. **HTTP 415.** */
+  MEDIA_TYPE_REFUSE: "MEDIA_TYPE_REJECTED",
+  /** Fichier au-delà du plafond de taille. **HTTP 413.** */
+  MEDIA_TROP_VOLUMINEUX: "MEDIA_TOO_LARGE",
 
   // — Débit —
   /**
@@ -64,43 +80,49 @@ export const CODE = {
   VERIFICATION_NON_REMISE: "VERIFICATION_NOT_DELIVERED",
 
   // — Serveur —
+  /**
+   * Le stockage de fichiers n'a pas répondu. **HTTP 502**, et non 500 : la
+   * requête était bonne, c'est notre dépendance qui a lâché. La distinction dit
+   * à l'appelant de réessayer plus tard au lieu de chercher son erreur.
+   */
+  STOCKAGE_INDISPONIBLE: "STORAGE_UNAVAILABLE",
   /** Défaillance interne. Le client peut réessayer plus tard. */
   ERREUR_INTERNE: "INTERNAL_ERROR",
 } as const;
 
 export type CodeErreur = (typeof CODE)[keyof typeof CODE];
 
-/**
- * Statut HTTP d'un refus pour solde insuffisant.
- *
- * Constante plutôt que littéral : elle est citée par trois routes, et c'est
- * précisément le genre de valeur qu'on corrige à un endroit sur trois.
- */
-export const STATUT_SOLDE_INSUFFISANT = 402;
-
 /** Statut HTTP de la limitation de débit. */
 export const STATUT_TROP_DE_REQUETES = 429;
 
-/**
- * Fabrique l'identifiant public d'un message, au format de WhatsApp Cloud API.
+/*
+ * 🔴 `identifiantPublic()` / `identifiantInterne()` ont été SUPPRIMÉES.
  *
- * 🔴 IL CONTIENT DÉSORMAIS L'IDENTIFIANT RÉEL DU MESSAGE. Il était fabriqué à
- * partir de l'horloge et de `Math.random()`, donc il ne désignait RIEN : ni la
- * ligne `message` créée dans la foulée, ni quoi que ce soit d'autre. Il partait
- * pourtant dans la réponse au développeur, dans le registre de facturation
- * (`referenceId`) et dans le webhook — trois pistes d'audit qui ne menaient
- * nulle part, et un écran « détail d'un message » impossible à construire.
+ * Elles enrobaient l'identifiant du message d'un préfixe `wamid.` pour imiter
+ * WhatsApp Cloud API. Personne n'ayant intégré l'API, cette compatibilité ne
+ * servait rien et coûtait deux conversions à tenir accordées : **l'identifiant
+ * rendu est maintenant l'identifiant de la ligne `message`, tel quel.**
  *
- * Le préfixe `wamid.` est conservé : c'est lui qui rend la réponse
- * interchangeable avec celle de WhatsApp pour un client existant.
+ * (Le préfixe avait par ailleurs son propre passé : il enrobait autrefois un
+ * tirage `horloge + Math.random()` qui ne désignait RIEN, ni la ligne créée
+ * dans la foulée ni quoi que ce soit d'autre.)
  */
-export function identifiantPublic(messageId: string): string {
-  return `wamid.${messageId}`;
-}
 
-/** L'inverse : retrouve l'identifiant de la ligne `message`. */
-export function identifiantInterne(identifiantPublic: string): string | null {
-  if (!identifiantPublic.startsWith("wamid.")) return null;
-  const brut = identifiantPublic.slice("wamid.".length);
-  return brut.length > 0 ? brut : null;
+/**
+ * Le vocabulaire de statut rendu par l'API, en français comme le reste de la
+ * surface v1. `Message.status` reste en anglais en base — la traduction se fait
+ * ICI, à la frontière, et nulle part ailleurs.
+ */
+export const STATUT_MESSAGE = {
+  SENT: "ENVOYE",
+  DELIVERED: "REMIS",
+  READ: "LU",
+  FAILED: "ECHEC",
+} as const;
+
+export type StatutMessage = (typeof STATUT_MESSAGE)[keyof typeof STATUT_MESSAGE];
+
+/** Traduit un statut de base vers le vocabulaire de l'API. */
+export function statutPublic(statutBase: string): StatutMessage {
+  return STATUT_MESSAGE[statutBase as keyof typeof STATUT_MESSAGE] ?? "ENVOYE";
 }

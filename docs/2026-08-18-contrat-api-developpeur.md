@@ -7,6 +7,25 @@ Ce document décrit ce qui est **gelé** — donc ce contre quoi on peut constru
 sans risque de reprise — et ce qui reste **à décider**. Tout ce qui n'y figure
 pas est susceptible de changer.
 
+> 🔴 **CE DOCUMENT EST PARTIELLEMENT PÉRIMÉ — mise à jour du 21/08/2026.**
+>
+> **La facturation a été SUPPRIMÉE.** Cette API n'est pas vendue à des
+> développeurs extérieurs : elle sert la plateforme de l'équipe, qui porte son
+> propre mécanisme de paiement. Il n'y a plus ni crédits, ni solde, ni bac à
+> sable. Sont donc **caducs** dans les pages qui suivent : le code
+> `INSUFFICIENT_CREDITS` et le statut **402** (§4.2 et §4.3), les champs
+> `creditsConsumed` / `balanceRemaining`, la route
+> `POST /api/developer/billing/sandbox` (**supprimée**), et toute la distinction
+> `ak_test_` / `ak_live_`, qui ne change plus aucun comportement.
+>
+> Livrés en revanche : les plafonds de cadence (`RATE_LIMITED` est réellement
+> émis) et la signature HMAC des webhooks.
+>
+> **Pour `/api/v1/*`, c'est
+> [le guide d'intégration v1](2026-08-21-api-v1-integration.md) qui fait foi.**
+> Le présent document ne reste la référence que pour `/api/developer/*` et pour
+> le §3, toujours ouvert.
+
 ---
 
 ## 1. Deux API, deux publics
@@ -164,18 +183,22 @@ que le tableau de bord prévoie la place, pas pour être attendus.
 | # | Lot | Effet visible côté console |
 |---|---|---|
 | 2 | Session console | Voir §3 |
-| 3 | Sécurité | `RATE_LIMITED` devient réellement émis ; les clés `ak_test_` cessent d'envoyer de vrais messages ; la signature des webhooks passe à un HMAC |
+| 3 | Sécurité | ✅ **LIVRÉ le 21/08/2026** — `RATE_LIMITED` est réellement émis ; les clés `ak_test_` n'envoient plus de vrais messages ; la signature des webhooks est un HMAC-SHA256. Détail au §9 du guide d'intégration v1 |
 | 4 | Facturation | Le solde réservé pendant un appel est enfin libéré ; un échec d'envoi rembourse le crédit |
 | 5 | Justesse | Diffusion temps réel des messages envoyés par l'API |
 
-**Sur les webhooks** : l'en-tête `X-Alanya-Signature` transmet aujourd'hui le
-secret en clair — il ne permet donc rien de vérifier. Il portera un
-`HMAC-SHA256(corps, secret)`. **Ne pas documenter la vérification avant ce
-changement.**
+**Sur les webhooks** : ✅ réglé le 21/08/2026. `X-Alanya-Signature` transmettait
+le secret en clair et ne permettait donc rien de vérifier ; il porte désormais
+`sha256=HMAC-SHA256(corps_brut, secret)`. Le secret est tiré par nos soins et
+**n'est plus relisible** — `GET /api/developer/webhooks` rend `secretKeyDefini`
+au lieu de `secretKey`. **C'est une rupture pour tout écran qui affichait le
+secret.**
 
-**Sur les clés de test** : aujourd'hui `ak_test_` envoie de vrais messages à de
-vrais utilisateurs et débite de vrais crédits. Ne pas présenter le bac à sable
-comme sûr tant que le lot 3 n'est pas livré.
+**Sur les clés de test** : ✅ réglé le 21/08/2026. `ak_test_` n'écrit plus de
+message, ne pousse plus de notification et ne débite plus de crédit ; la réponse
+porte `"sandbox": true` et un identifiant `wamid.sandbox_…`. Seules les routes de
+vérification livrent encore réellement, et c'est une exception assumée
+(sans quoi le parcours 2FA serait intestable).
 
 ---
 

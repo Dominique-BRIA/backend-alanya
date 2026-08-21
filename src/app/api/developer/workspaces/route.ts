@@ -13,7 +13,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
 
     if (!developer) {
       developer = await prisma.developerAccount.create({
-        data: { userId, balanceCredits: BigInt(1000) },
+        data: { userId },
         select: { id: true },
       });
     }
@@ -64,7 +64,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
 
     if (!developer) {
       developer = await prisma.developerAccount.create({
-        data: { userId, balanceCredits: BigInt(1000) },
+        data: { userId },
         select: { id: true },
       });
     }

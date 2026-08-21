@@ -28,31 +28,25 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // Création automatique du compte dev si première visite (avec 1 000 crédits de bienvenue offerts !)
+    /*
+     * Création automatique du compte à la première visite.
+     *
+     * 🔴 PLUS DE SOLDE, PLUS DE REGISTRE (21/08/2026). Les « 1 000 crédits de
+     * bienvenue » et leur ligne `DevLedger` ont disparu avec la facturation :
+     * cette API sert la plateforme de l'équipe, qui porte son propre paiement.
+     * `balanceCredits` et `holdCredits` ne sont plus rendus — un champ qui
+     * survit à son système laisse bâtir des écrans sur une valeur morte.
+     */
     if (!devAccount) {
       devAccount = await prisma.developerAccount.create({
-        data: {
-          userId,
-          balanceCredits: BigInt(1000), // 1 000 crédits offerts
-          ledger: {
-            create: {
-              amount: BigInt(1000),
-              type: 'PURCHASE',
-              description: 'Bonus de bienvenue Développeur (1 000 Crédits offerts)',
-            },
-          },
-        },
-        include: {
-          apiKeys: true,
-        },
+        data: { userId },
+        include: { apiKeys: true },
       });
     }
 
     return ok({
       developer: {
         id: devAccount.id,
-        balanceCredits: devAccount.balanceCredits.toString(),
-        holdCredits: devAccount.holdCredits.toString(),
         companyName: devAccount.companyName ?? null,
       },
       apiKeys: devAccount.apiKeys,
@@ -77,17 +71,7 @@ export async function POST(req: NextRequest) {
 
     if (!devAccount) {
       devAccount = await prisma.developerAccount.create({
-        data: {
-          userId,
-          balanceCredits: BigInt(1000),
-          ledger: {
-            create: {
-              amount: BigInt(1000),
-              type: 'PURCHASE',
-              description: 'Bonus de bienvenue Développeur (1 000 Crédits offerts)',
-            },
-          },
-        },
+        data: { userId },
       });
     }
 

@@ -1,15 +1,13 @@
 import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/http";
-import { validateApiKey } from "@/lib/developer/key-service";
+import { routeV1, type CleAuthentifiee } from "@/lib/developer/authentifier";
 import { CODE, STATUT_TROP_DE_REQUETES } from "@/lib/developer/api-contract";
 import { emettreCode } from "@/lib/verification/service";
 
+const CHEMIN = "/api/v1/verifications";
+
 /**
  * POST /api/v1/verifications — émet un code de vérification et le livre.
- *
- * Remplace `POST /api/v1/auth/otp/send`. Le nom change parce que l'usage a
- * changé : ces codes gardent désormais la double authentification d'une
- * plateforme tierce, pas seulement une confirmation d'inscription.
  *
  * Corps : `{ finalite, destination, canal? }`
  *   `finalite`    AUTH_2FA | CREATION_AGENT | VALIDATION_CONTACT
@@ -21,89 +19,81 @@ import { emettreCode } from "@/lib/verification/service";
  * qu'il suffisait que son relais journalise les réponses pour publier tous les
  * codes.
  *
- * **Gratuit** : aucun crédit n'est débité. Un solde à zéro ne doit jamais
- * pouvoir empêcher quelqu'un de se connecter.
+ * ⚠️ LE SEUL GARDE-FOU EST LE PLAFOND, et il n'a rien d'optionnel. Il n'y a plus
+ * de facturation (21/08/2026) : rien ne rend une rafale de codes coûteuse pour
+ * l'appelant, donc rien ne l'en dissuade par accident. Ce qui protège la
+ * personne qui reçoit les codes, ce sont les plafonds de `politique.mjs` — par
+ * destination et par heure, par IP et par heure — tous deux contrôlés AVANT le
+ * tirage du code, plus le plafond par clé de `routeV1`.
  */
 export async function POST(req: NextRequest) {
-  try {
-    const authHeader = req.headers.get("Authorization") || "";
-    const customHeader = req.headers.get("X-Api-Key") || "";
-    const rawKey = authHeader.replace(/^Bearer\s+/i, "") || customHeader;
+  return routeV1(req, { chemin: CHEMIN, plafondParMinute: 20 }, (cle) => emettre(req, cle));
+}
 
-    if (!rawKey) return fail("Clé API manquante.", 401, CODE.CLE_MANQUANTE);
+async function emettre(req: NextRequest, cle: CleAuthentifiee): Promise<Response> {
+  const body = await req.json().catch(() => ({}));
+  const finalite = body.finalite?.toString().trim();
+  const destination = body.destination?.toString().trim();
+  const canal = body.canal?.toString().trim() || null;
 
-    const keyData = await validateApiKey(rawKey);
-    if (!keyData || !keyData.developer) {
-      return fail("Clé API invalide ou révoquée.", 401, CODE.CLE_INVALIDE);
-    }
-
-    const body = await req.json().catch(() => ({}));
-    const finalite = body.finalite?.toString().trim();
-    const destination = body.destination?.toString().trim();
-    const canal = body.canal?.toString().trim() || null;
-
-    if (!finalite || !destination) {
-      return fail(
-        "Les champs finalite et destination sont requis.",
-        400,
-        CODE.REQUETE_INVALIDE,
-      );
-    }
-
-    /*
-     * L'IP sert le plafond par source. `x-forwarded-for` peut contenir une
-     * chaîne de relais : on prend la PREMIÈRE, celle du client d'origine.
-     * Falsifiable par l'appelant — c'est pourquoi ce plafond complète celui par
-     * destination, qui lui ne l'est pas, au lieu de le remplacer.
-     */
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      null;
-
-    const r = await emettreCode({
-      developerId: keyData.developer.id,
-      finalite,
-      destination,
-      canal,
-      ip,
-    });
-
-    if (!r.ok) {
-      if (r.motif === "TROP_DE_DEMANDES") {
-        return fail(
-          "Trop de demandes de code pour cette destination. Réessayez plus tard.",
-          STATUT_TROP_DE_REQUETES,
-          CODE.TROP_DE_REQUETES,
-        );
-      }
-      if (r.motif === "NON_REMIS") {
-        // ⚠️ 502 et non 200. C'est LE défaut corrigé : l'ancienne route
-        // répondait « envoyé avec succès » quand rien ne partait, et l'appelant
-        // n'avait aucun moyen de le savoir.
-        return fail(
-          "Le code n'a pas pu être remis à cette destination.",
-          502,
-          CODE.VERIFICATION_NON_REMISE,
-        );
-      }
-      return fail(
-        "Finalité, canal ou compte invalide.",
-        400,
-        CODE.REQUETE_INVALIDE,
-      );
-    }
-
-    return ok({
-      id: r.id,
-      finalite,
-      canal: r.canal,
-      destination,
-      expireA: r.expireA.toISOString(),
-      livraison: "REMIS",
-    });
-  } catch (error) {
-    console.error("[verifications] émission :", error);
-    return fail("Erreur lors de l'émission du code.", 500, CODE.ERREUR_INTERNE);
+  if (!finalite || !destination) {
+    return fail(
+      "Les champs finalite et destination sont requis.",
+      400,
+      CODE.REQUETE_INVALIDE,
+    );
   }
+
+  /*
+   * L'IP sert le plafond par source. `x-forwarded-for` peut contenir une
+   * chaîne de relais : on prend la PREMIÈRE, celle du client d'origine.
+   * Falsifiable par l'appelant — c'est pourquoi ce plafond complète celui par
+   * destination, qui lui ne l'est pas, au lieu de le remplacer.
+   */
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    null;
+
+  const r = await emettreCode({
+    developerId: cle.developerId,
+    finalite,
+    destination,
+    canal,
+    ip,
+  });
+
+  if (!r.ok) {
+    if (r.motif === "TROP_DE_DEMANDES") {
+      return fail(
+        "Trop de demandes de code pour cette destination. Réessayez plus tard.",
+        STATUT_TROP_DE_REQUETES,
+        CODE.TROP_DE_REQUETES,
+      );
+    }
+    if (r.motif === "NON_REMIS") {
+      // ⚠️ 502 et non 200. C'est LE défaut corrigé : l'ancienne route
+      // répondait « envoyé avec succès » quand rien ne partait, et l'appelant
+      // n'avait aucun moyen de le savoir.
+      return fail(
+        "Le code n'a pas pu être remis à cette destination.",
+        502,
+        CODE.VERIFICATION_NON_REMISE,
+      );
+    }
+    return fail(
+      "Finalité, canal ou compte invalide.",
+      400,
+      CODE.REQUETE_INVALIDE,
+    );
+  }
+
+  return ok({
+    id: r.id,
+    finalite,
+    canal: r.canal,
+    destination,
+    expireA: r.expireA.toISOString(),
+    livraison: "REMIS",
+  });
 }
