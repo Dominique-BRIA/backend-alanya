@@ -134,6 +134,7 @@ curl -X POST https://alanyavox.com/api/v1/messages \
 | `type` | non | `TEXT` (défaut), `IMAGE`, `VIDEO`, `AUDIO`, `FILE`, `CONTACT`, `LOCATION` |
 | `texte` | selon | Le message, ou la légende d'un média. Charge JSON pour `CONTACT` / `LOCATION` |
 | `mediaIds` | selon | Jusqu'à 10 identifiants rendus par `POST /api/v1/media` |
+| `options` | non | Boutons de réponse rapide — voir §5.1 |
 
 Il faut **au moins** un `texte` ou un `mediaIds` non vide : sinon `422`.
 
@@ -160,6 +161,44 @@ Trois refus à traiter :
   passager : cessez de réessayer.
 - **403 `MEDIA_FORBIDDEN`** — un `mediaIds` est inconnu, ou a été téléversé par
   une autre clé. Vous ne pouvez joindre que vos propres fichiers.
+
+### 5.1 Boutons de réponse rapide
+
+```bash
+curl -X POST https://alanyavox.com/api/v1/messages \
+  -H "X-Api-Key: ak_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "destinataire": "12345678",
+    "texte": "Veux-tu manger ?",
+    "options": ["OUI", "NON"]
+  }'
+```
+
+L'utilisateur voit **« Veux-tu manger ? »** avec deux pastilles cliquables sous
+le message, sur mobile comme sur le web. **Un clic renvoie le libellé du bouton
+comme message texte ordinaire** — la réponse vaut donc exactement `"OUI"` ou
+`"NON"`, ce que la réponse à votre requête vous rappelle dans `options`.
+
+| Contrainte | Valeur |
+|---|---|
+| Nombre | 1 à 10 — mais 2 ou 3 se lisent bien mieux dans une bulle |
+| Longueur d'un libellé | 24 caractères |
+| Caractères interdits | `[` et `]` |
+| Types acceptés | tous **sauf** `CONTACT` et `LOCATION` |
+| `texte` | obligatoire — un bouton répond à une question |
+
+⚠️ **Tout crochet dans un texte devient un bouton**, même sans `options` :
+« Votre commande [12345] est prête » affiche un bouton « 12345 » **et retire le
+numéro de la phrase**. C'est le comportement des clients, pas de l'API.
+N'utilisez pas de crochets dans vos textes.
+
+🔴 **Vous ne recevez PAS la réponse par webhook.** Les webhooks ne portent
+aujourd'hui que le statut d'un message que *vous* avez envoyé (§8) ; il n'existe
+pas encore de notification de message entrant. La réponse de l'utilisateur
+arrive dans la conversation Alanya, et votre serveur n'en est pas averti.
+**Dites-nous si vous en avez besoin** — c'est la première chose à ajouter si
+vous construisez un parcours à questions.
 
 ## 6. Téléverser un fichier
 
