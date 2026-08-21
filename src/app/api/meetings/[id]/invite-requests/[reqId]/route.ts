@@ -8,6 +8,11 @@ import {
   notifieInvitationReunion,
   notifieDecisionDemandeReunion,
 } from "@/lib/push";
+import {
+  occupantsContingent,
+  plafondReunion,
+  refusContingentPlein,
+} from "@/lib/plafond-reunion";
 
 /**
  * PATCH /api/meetings/:id/invite-requests/:reqId — l'organisateur tranche.
@@ -37,7 +42,13 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   const demande = await prisma.meetingInviteRequest.findUnique({
     where: { id: reqId },
-    include: { meeting: true, demandeur: true, invite: true },
+    // Les participants de la reunion viennent avec : c'est sur eux que se
+    // compte le plafond, et les charger ici evite une seconde lecture.
+    include: {
+      meeting: { include: { participants: true } },
+      demandeur: true,
+      invite: true,
+    },
   });
   if (!demande || demande.idMeeting !== id) {
     return fail("Demande introuvable", 404, "NOT_FOUND");
@@ -55,6 +66,38 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const objet = demande.meeting.objet;
 
   if (accepter) {
+    // PLAFOND. Le contingent a pu se remplir entre la demande et la decision —
+    // l'organisateur a ajoute du monde entre-temps, ou une autre demande est
+    // passee avant celle-ci. C'est le dernier moment ou l'on peut encore
+    // l'arreter avant qu'elle ne devienne une invitation.
+    //
+    // LA DEMANDE RESTE EN ATTENTE. Ne pas la marquer tranchee est delibere :
+    // l'organisateur peut exclure quelqu'un, puis revenir l'accepter. La
+    // classer ici l'obligerait a la faire reformuler par son auteur, pour un
+    // refus qui n'est pas le sien.
+    //
+    // La personne deja occupante ne peut pas remplir la salle une seconde fois
+    // — la ligne `participant` a pu naitre par un autre chemin depuis. Dans ce
+    // cas l'acceptation ne fait entrer personne et ne doit rien refuser.
+    const occupants = occupantsContingent(
+      demande.meeting.idOrganiser,
+      demande.meeting.participants,
+    );
+    if (!occupants.has(demande.inviteId)) {
+      const plafond = await plafondReunion(
+        demande.meeting.idOrganiser,
+        demande.meeting.type_media,
+      );
+      if (occupants.size + 1 > plafond) {
+        return refusContingentPlein({
+          typeMedia: demande.meeting.type_media,
+          plafond,
+          actuel: occupants.size,
+          demandes: 1,
+        });
+      }
+    }
+
     // L'ajout et la décision dans la MÊME transaction : une demande marquée
     // acceptée alors que la ligne `participant` manquerait laisserait la
     // personne hors de la réunion sans que rien ne le signale, et la contrainte

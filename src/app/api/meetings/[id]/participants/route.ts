@@ -6,6 +6,11 @@ import { addMeetingParticipantsSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { notifieInvitationReunion } from "@/lib/push";
+import {
+  occupantsContingent,
+  plafondReunion,
+  refusContingentPlein,
+} from "@/lib/plafond-reunion";
 
 // POST /api/meetings/:id/participants — ajoute des participants à une réunion.
 //
@@ -65,7 +70,38 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     .map((u) => u.id)
     .filter((uid) => uid !== meeting.idOrganiser && !dejaLa.has(uid));
 
+  // PLAFOND. Verifie sur `aAjouter` et non sur `publicNumbers` : ceux qui sont
+  // deja la ont ete ecartes juste au-dessus SANS ERREUR, et les recompter ici
+  // refuserait un geste qui ne fait entrer personne de plus.
+  //
+  // L'organisateur est dans les occupants meme s'il n'a pas encore de ligne
+  // `participant` — voir `occupantsContingent`. C'est ce qui rend le compte
+  // juste plutot que faux d'une unite.
+  //
+  // ⚠️ Deux ajouts VRAIMENT simultanes peuvent encore franchir cette porte
+  // ensemble : rien ne verrouille la reunion entre le comptage et l'insertion.
+  // On ne le corrige pas ici, et c'est un choix : le seul verrou honnete serait
+  // une transaction serialisable posee sur chaque ajout, pour un debordement de
+  // une ou deux places qui sera de toute facon arrete a l'entree de la salle,
+  // ou le comptage, lui, est indivisible.
   if (aAjouter.length > 0) {
+    const plafond = await plafondReunion(
+      meeting.idOrganiser,
+      meeting.type_media,
+    );
+    const occupants = occupantsContingent(
+      meeting.idOrganiser,
+      meeting.participants,
+    );
+    if (occupants.size + aAjouter.length > plafond) {
+      return refusContingentPlein({
+        typeMedia: meeting.type_media,
+        plafond,
+        actuel: occupants.size,
+        demandes: aAjouter.length,
+      });
+    }
+
     await prisma.meetingParticipant.createMany({
       data: aAjouter.map((uid) => ({
         idMeeting: id,

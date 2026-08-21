@@ -2442,6 +2442,110 @@ function meetingParticipants(meetingId) {
   return room ? [...room.keys()] : [];
 }
 
+// ---------------------------------------------------------------------------
+// PLAFOND DE PARTICIPANTS
+// ---------------------------------------------------------------------------
+//
+// POURQUOI UN PLAFOND. Les reunions sont un MAILLAGE : aucun serveur ne melange
+// les flux, chaque participant ouvre une connexion vers CHACUN des autres et
+// encode son flux autant de fois. Le cout ne pese donc pas ici — ce process ne
+// voit passer que de la signalisation — mais sur la machine de chaque
+// participant. Ce n'est pas une regle commerciale qu'on pourrait assouplir
+// « pour cette fois » : au-dela, ce sont les telephones des gens qui lachent.
+//
+// ⚠️ MIROIR DE src/lib/limites-reunion.ts, ET IL FAUT SAVOIR POURQUOI.
+// `npm run ws` lance `node ws-server.mjs` : du node nu, sans TypeScript ni
+// bundler. Ce process ne peut pas importer un `.ts`. Les autres regles
+// partagees avec l'API ont ete publiees en `.mjs` pour cette exacte raison —
+// call-labels.mjs, display-name.mjs, ivr.mjs — et c'est ce qu'il faudra faire
+// de celle-ci.
+//
+// En attendant, la resolution est redite. Ne PAS la redire aurait coute bien
+// plus cher : le plafond serait fige aux defauts dans le seul endroit qui le
+// fait vraiment respecter, et un superuser qui l'aurait releve verrait sa
+// reunion refuser du monde sans qu'aucun ecran ne puisse le lui expliquer.
+//
+// LE JOUR OU `limites-reunion` existe en `.mjs` : supprimer ce bloc et
+// l'importer. D'ici la, les deux bougent ensemble.
+const LIMITE_AUDIO_DEFAUT = 9;
+const LIMITE_VIDEO_DEFAUT = 6;
+const PLAFOND_MIN = 2;
+const PLAFOND_MAX_AUDIO = 20;
+const PLAFOND_MAX_VIDEO = 12;
+
+/// Le meme code que rendent les routes HTTP. Le texte du serveur n'est jamais
+/// traduit et l'application parle neuf langues : c'est ce code, et les chiffres
+/// qui l'accompagnent, que le client traduit.
+const CODE_SALLE_PLEINE = "MEETING_FULL";
+
+function bornePlafond(valeur, maximum, defaut) {
+  if (typeof valeur !== "number" || !Number.isFinite(valeur)) return defaut;
+  const entier = Math.trunc(valeur);
+  if (entier < PLAFOND_MIN) return PLAFOND_MIN;
+  if (entier > maximum) return maximum;
+  return entier;
+}
+
+/**
+ * Plafond applicable a UNE reunion : plafond de l'entreprise de l'organisateur,
+ * sinon reglage global, sinon defaut du code.
+ *
+ * LES LIMITES SUIVENT L'ORGANISATEUR, jamais celui qui pousse la porte. Sinon
+ * la meme salle accepterait un septieme participant venu d'une entreprise
+ * genereuse et le refuserait a son voisin une seconde plus tard.
+ *
+ * LE TYPE EST RELU A CHAQUE ENTREE, jamais retenu : une reunion passee de
+ * l'audio a la video resserre son plafond sans qu'on ait a y penser.
+ *
+ * Une lecture par entree dans une salle : c'est une requete indexee, negligeable
+ * a cote d'une negociation WebRTC. Aucun cache, deliberement — un plafond
+ * baisse doit mordre tout de suite.
+ */
+async function plafondReunion(idOrganiser, typeMedia) {
+  const video = typeMedia === 2;
+  try {
+    const lignes = await prisma.limiteReunion.findMany({
+      where: {
+        OR: [
+          { idCompany: null },
+          { company: { Users: { some: { id: idOrganiser } } } },
+        ],
+      },
+      select: { idCompany: true, maxAudio: true, maxVideo: true },
+    });
+    // Le plus precis l'emporte : entreprise, puis global.
+    const retenue =
+      lignes.find((l) => l.idCompany !== null) ??
+      lignes.find((l) => l.idCompany === null);
+    if (retenue) {
+      return video
+        ? bornePlafond(retenue.maxVideo, PLAFOND_MAX_VIDEO, LIMITE_VIDEO_DEFAUT)
+        : bornePlafond(retenue.maxAudio, PLAFOND_MAX_AUDIO, LIMITE_AUDIO_DEFAUT);
+    }
+  } catch (e) {
+    // Table absente (migration pas encore passee) ou base indisponible une
+    // seconde. Refuser toutes les entrees serait pire que le mal ; n'en refuser
+    // aucune reviendrait a supprimer le plafond au moment precis ou plus rien
+    // ne va. On retombe sur la limite physique, et on le dit.
+    console.error(
+      "[ws] plafonds de reunion illisibles, defauts appliques:",
+      e?.message ?? e,
+    );
+  }
+  return video ? LIMITE_VIDEO_DEFAUT : LIMITE_AUDIO_DEFAUT;
+}
+
+/// Meme phrase que celle des routes HTTP (`messageSallePleine`). Avec accents :
+/// c'est un texte montre a l'utilisateur, pas un commentaire.
+function messageSallePleine(typeMedia, limite) {
+  const media = typeMedia === 2 ? "vidéo" : "audio";
+  return (
+    `Cette réunion ${media} est limitée à ${limite} participants, ` +
+    `organisateur compris. Chaque participant envoie son flux à tous les ` +
+    `autres : au-delà, la qualité s'effondre pour tout le monde.`
+  );
+}
+
 function sendToMeeting(meetingId, payload, excludeUserId) {
   const room = meetingRooms.get(meetingId);
   if (!room) return;
@@ -2458,7 +2562,7 @@ async function handleMeetingJoin(ws, msg) {
 
   const meeting = await prisma.meeting.findUnique({
     where: { idMeeting: meetingId },
-    select: { idMeeting: true, isEnd: true, idOrganiser: true },
+    select: { idMeeting: true, isEnd: true, idOrganiser: true, type_media: true },
   });
   if (!meeting) {
     ws.send(JSON.stringify({ type: "error", message: "Réunion introuvable", meetingId }));
@@ -2472,23 +2576,93 @@ async function handleMeetingJoin(ws, msg) {
   const participant = await prisma.meetingParticipant.findUnique({
     where: { idMeeting_IDparticipant: { idMeeting: meetingId, IDparticipant: ws.userId } },
   });
-  if (participant) {
-    await prisma.meetingParticipant.update({
-      where: { ID: participant.ID },
-      data: { status: 1, connecte: 1, start_time: new Date() },
-    });
-  } else {
-    if (meeting.idOrganiser !== ws.userId) {
-      ws.send(JSON.stringify({ type: "error", message: "Vous n'êtes pas invité", meetingId }));
-      return;
-    }
-    await prisma.meetingParticipant.create({
-      data: { idMeeting: meetingId, IDparticipant: ws.userId, status: 1, connecte: 1, start_time: new Date() },
-    });
+  // L'AUTORISATION AVANT LE PLAFOND : repondre « c'est plein » a quelqu'un qui
+  // n'est pas invite lui apprendrait combien de monde se trouve dans une
+  // reunion dont il n'a pas a connaitre l'existence.
+  if (!participant && meeting.idOrganiser !== ws.userId) {
+    ws.send(JSON.stringify({ type: "error", message: "Vous n'êtes pas invité", meetingId }));
+    return;
   }
 
-  if (!meetingRooms.has(meetingId)) meetingRooms.set(meetingId, new Map());
+  const plafond = await plafondReunion(meeting.idOrganiser, meeting.type_media);
+
+  // -------------------------------------------------------------------------
+  // LA BARRIERE. Ce qui suit est INDIVISIBLE : pas un seul `await` entre le
+  // comptage et l'inscription.
+  //
+  // C'est tout le piege de ce handler. Le code d'origine traversait trois
+  // requetes — la reunion, la ligne participant, son ecriture — avant d'inscrire
+  // la socket dans la salle. Compter avant ces requetes aurait laisse passer
+  // deux arrivees simultanees : chacune aurait vu cinq presents sur six, et la
+  // salle en aurait fini avec sept. Node n'execute qu'une chose a la fois, mais
+  // il rend la main a CHAQUE `await` — c'est la, et seulement la, que l'autre
+  // arrivee se glisse.
+  //
+  // La place est donc RESERVEE AVANT d'ecrire en base, et non apres : on prend
+  // la ressource rare d'abord, on fait le travail ensuite. Si l'ecriture echoue,
+  // la reservation est rendue plus bas.
+  //
+  // ON COMPTE LES SOCKETS DE LA SALLE, pas `connecte` en base. `connecte` ne
+  // retombe que sur un depart delibere : une machine qui meurt sans prevenir y
+  // garde sa place pour toujours, et quelques plantages suffiraient a fermer une
+  // reunion vide. Cette Map-ci se vide toute seule a la fermeture de la socket
+  // (voir le `ws.on("close")`), et elle EST le maillage — c'est exactement ce
+  // que le plafond veut borner.
+  //
+  // L'ORGANISATEUR N'EST PAS AU-DESSUS : aucune exception ici. Il est dans la
+  // Map comme les autres, donc compte comme les autres.
+  //
+  // Celui qui est DEJA dans la salle n'est jamais refuse : une reconnexion, ou
+  // un second appareil du meme compte, remplace son entree sans rien ajouter au
+  // maillage. Le refuser mettrait dehors quelqu'un qui n'etait pas parti.
+  const salle = meetingRooms.get(meetingId);
+  const dejaDansLaSalle = salle !== undefined && salle.has(ws.userId);
+  const presents = salle ? salle.size : 0;
+  if (!dejaDansLaSalle && presents >= plafond) {
+    ws.send(JSON.stringify({
+      type: "error",
+      code: CODE_SALLE_PLEINE,
+      message: messageSallePleine(meeting.type_media, plafond),
+      meetingId,
+      plafond,
+      actuel: presents,
+      typeMedia: meeting.type_media,
+    }));
+    return;
+  }
+  // La Map de salle n'est creee qu'une fois la place accordee : un refus ne doit
+  // pas laisser derriere lui une salle vide que plus rien ne nettoiera.
+  if (!salle) meetingRooms.set(meetingId, new Map());
   meetingRooms.get(meetingId).set(ws.userId, ws);
+  // ------------------------------- fin du bloc indivisible -----------------
+
+  try {
+    if (participant) {
+      await prisma.meetingParticipant.update({
+        where: { ID: participant.ID },
+        data: { status: 1, connecte: 1, start_time: new Date() },
+      });
+    } else {
+      await prisma.meetingParticipant.create({
+        data: { idMeeting: meetingId, IDparticipant: ws.userId, status: 1, connecte: 1, start_time: new Date() },
+      });
+    }
+  } catch (e) {
+    // La place reservee doit etre RENDUE : la garder tiendrait un siege pour
+    // quelqu'un qui n'est jamais entre, et le plafond se refermerait sur une
+    // salle qui n'est pas pleine.
+    //
+    // Seulement s'il ne l'occupait pas deja : sinon on mettrait dehors, pour
+    // une ecriture ratee, quelqu'un dont la participation etait acquise.
+    if (!dejaDansLaSalle) {
+      const rendue = meetingRooms.get(meetingId);
+      if (rendue) {
+        rendue.delete(ws.userId);
+        if (rendue.size === 0) meetingRooms.delete(meetingId);
+      }
+    }
+    throw e;
+  }
 
   const user = await prisma.user.findUnique({ where: { id: ws.userId }, select: { pseudo: true, publicNumber: true } });
   const displayName = user?.pseudo ?? user?.publicNumber ?? "Participant";
@@ -3118,6 +3292,26 @@ wss.on("connection", (ws, req) => {
         arretePartageEcran(meetingId, userId);
         room.delete(userId);
         if (room.size === 0) meetingRooms.delete(meetingId);
+        // LA PLACE DOIT SE LIBERER EN BASE AUSSI, et pas seulement dans la Map.
+        //
+        // La socket partait bien de la salle, mais `connecte` restait a 1 : seuls
+        // un depart annonce, un refus ou la fin de reunion le remettaient a zero.
+        // Or c'est cette colonne que compte la route HTTP d'entree pour appliquer
+        // le plafond. Une batterie qui meurt, un tunnel, un onglet tue gardaient
+        // donc un siege POUR TOUJOURS — et le suivant se voyait refuser l'entree
+        // d'une salle qui avait de la place. Aucun balayage n'y remediait.
+        //
+        // La duree n'est PAS recalculee ici : une coupure n'est pas un depart
+        // voulu, et le participant qui revient dans la minute ne doit pas voir sa
+        // participation coupee en deux.
+        prisma.meetingParticipant
+          .updateMany({
+            where: { idMeeting: meetingId, IDparticipant: userId, connecte: 1 },
+            data: { connecte: 0 },
+          })
+          .catch((e) =>
+            console.error("[meetings] liberation du siege a la deconnexion:", e?.message ?? e),
+          );
         sendToMeeting(meetingId, {
           type: "meeting_user_left",
           meetingId,

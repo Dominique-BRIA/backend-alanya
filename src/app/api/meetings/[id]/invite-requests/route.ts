@@ -6,6 +6,11 @@ import { createInviteRequestSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { notifieDemandeReunion } from "@/lib/push";
+import {
+  occupantsContingent,
+  plafondReunion,
+  refusContingentPlein,
+} from "@/lib/plafond-reunion";
 
 /**
  * GET /api/meetings/:id/invite-requests — demandes d'ajout d'une réunion.
@@ -116,6 +121,37 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       409,
       "ALREADY_IN",
     );
+  }
+
+  // PLAFOND, AVANT TOUT AJOUT ET AVANT MEME D'ENREGISTRER LA DEMANDE.
+  //
+  // Deux des chemins qui suivent font ENTRER quelqu'un sans repasser par
+  // l'organisateur — l'invitation automatique, et l'organisateur parti. Ce sont
+  // des portes d'ajout a part entiere, faciles a oublier parce qu'elles vivent
+  // dans une route qui s'appelle « demande ». Les manquer laisserait le plafond
+  // se contourner par la porte la plus frequentee de toutes.
+  //
+  // La demande elle-meme est refusee aussi, et c'est voulu : une proposition
+  // que l'organisateur ne pourrait pas accepter ne lui vaudrait qu'une
+  // notification et un refus a taper, et laisserait celui qui propose attendre
+  // une reponse qui ne pouvait pas etre oui. Autant le lui dire maintenant,
+  // avec le chiffre.
+  //
+  // La position compte : ICI, avant la reouverture d'une demande refusee plus
+  // bas. Refuser apres cette reouverture laisserait la ligne modifiee derriere
+  // une reponse d'erreur.
+  const plafond = await plafondReunion(meeting.idOrganiser, meeting.type_media);
+  const occupants = occupantsContingent(
+    meeting.idOrganiser,
+    meeting.participants,
+  );
+  if (occupants.size + 1 > plafond) {
+    return refusContingentPlein({
+      typeMedia: meeting.type_media,
+      plafond,
+      actuel: occupants.size,
+      demandes: 1,
+    });
   }
 
   if (meeting.invitationAuto === 1) {

@@ -1135,6 +1135,71 @@ model MeetingParticipant {
 }
 
 // ---------------------------------------------------------------------------
+// LIMITE_REUNION — plafond de participants, par portee
+// ---------------------------------------------------------------------------
+
+/// Plafond de participants d'une reunion : combien de personnes peuvent tenir
+/// dans une meme salle, en audio et en video.
+///
+/// CE N'EST PAS UNE REGLE COMMERCIALE. Les reunions sont en MAILLAGE : chaque
+/// participant ouvre une connexion vers chacun des autres et encode son flux
+/// autant de fois qu'il a d'interlocuteurs. Le cout par machine croit donc
+/// lineairement avec l'assemblee, pour chacun. Au-dela du plafond, ce ne sont
+/// pas les serveurs qui saturent — ils ne voient rien passer — mais les
+/// telephones et les ordinateurs des participants. Le plafond est une borne
+/// PHYSIQUE ; les valeurs raisonnables sont 9 en audio et 6 en video, et c'est
+/// ce que porte la ligne globale posee par la migration.
+///
+/// PORTEE. `idCompany` NUL = la ligne GLOBALE, qui vaut pour toute
+/// l'application ; renseigne = le plafond propre a une entreprise, qui prime
+/// sur la globale pour ses utilisateurs. Deux niveaux suffisent : il n'existe
+/// aucun echelon entre l'entreprise et l'application.
+///
+/// UNICITE DE LA PORTEE — deux verites pour une meme portee rendraient le
+/// plafond indeterminable. `@unique` sur `idCompany` regle le cas des
+/// entreprises. Il NE REGLE PAS celui de la ligne globale : PostgreSQL
+/// considere deux NULL comme distincts et accepterait donc autant de lignes
+/// globales qu'on en insere. La garantie manquante est posee a la main dans la
+/// migration, par un index unique PARTIEL sur `WHERE "idcompany" IS NULL`, que
+/// le langage de schema Prisma ne sait pas exprimer.
+/// ⚠️ Cet index n'etant pas declare ici, un `prisma migrate dev` ou un
+/// `db push` le verra comme une derive et voudra le supprimer. Il doit etre
+/// repose s'il disparait.
+///
+/// TRACE. `modifiePar` et `updatedAt` disent QUI a change le plafond et QUAND.
+/// Sans eux, on decouvre en production une salle qui refuse du monde a 4 sans
+/// pouvoir remonter a la decision. `modifiePar` est du TEXTE LIBRE et non une
+/// cle etrangere vers `adminroot` : il n'existe aujourd'hui aucune session de
+/// superuser dans ce depot (voir `src/lib/limites-reunion.ts`), l'auteur n'est
+/// donc pas authentifie mais DECLARE par l'appelant. Une cle etrangere
+/// affirmerait une certitude que nous n'avons pas.
+///
+/// Ligne unique par entreprise, sans historique : c'est l'ETAT du plafond, pas
+/// son journal. Le jour ou il faudra l'historique, il ira dans une table a
+/// part plutot que de dedoubler la verite dans celle-ci.
+model LimiteReunion {
+  idLimite Int @id @default(autoincrement()) @map("idlimite")
+
+  /// NUL = portee globale. Cascade : une entreprise supprimee emporte son
+  /// plafond, qui n'a plus personne a borner ; ses utilisateurs, eux, sont
+  /// detaches (`users.idcompany` passe a NULL) et retombent sur la globale.
+  idCompany Int?     @unique @map("idcompany")
+  company   Company? @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
+
+  /// Participants maximum, ORGANISATEUR COMPRIS — c'est le nombre de personnes
+  /// dans la salle, pas le nombre d'invites.
+  maxAudio Int @default(9) @map("max_audio") @db.SmallInt
+  maxVideo Int @default(6) @map("max_video") @db.SmallInt
+
+  /// Auteur DECLARE du dernier changement (voir plus haut : non authentifie).
+  modifiePar String?  @map("modifie_par") @db.VarChar(120)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("limite_reunion")
+}
+
+// ---------------------------------------------------------------------------
 // BLOCKED (utilisateurs bloqués — indépendant de Contact.isBlocked)
 // ---------------------------------------------------------------------------
 
@@ -1470,6 +1535,11 @@ model Company {
   Centers    Center[]
   Vocaux     Vocal[]
   Musiques   CenterMusic[]
+
+  /// Plafond de participants propre a cette entreprise, s'il a ete pose. AU
+  /// PLUS UN : c'est `LimiteReunion.idCompany` qui est unique. Absent = les
+  /// utilisateurs de l'entreprise suivent le plafond global.
+  limiteReunion LimiteReunion?
 
   /// Existait en base sans etre declare ici : supprime par un `db push` le
   /// 06/08/2026. Le re-declarer empeche Prisma de vouloir le retirer.

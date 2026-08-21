@@ -7,6 +7,10 @@ import { randomUUID } from "crypto";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { notifieInvitationReunion } from "@/lib/push";
+import {
+  plafondReunion,
+  refusCreationTropGrande,
+} from "@/lib/plafond-reunion";
 
 // GET /api/meetings — liste les meetings de l'utilisateur (organisés ou participés).
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -79,6 +83,32 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     participantIds = users.map((u) => u.id);
     // Exclure l'organisateur s'il est dans la liste
     participantIds = participantIds.filter((id) => id !== userId);
+  }
+
+  // PLAFOND, DES LA CREATION — c'est explicitement le premier endroit ou il
+  // doit mordre. Laisser naitre une reunion trop grande ne repousserait le
+  // probleme que de quelques secondes : elle ne se reduit pas toute seule, et
+  // chacun de ses invites decouvrirait le refus a la porte, un par un.
+  //
+  // L'ORGANISATEUR COMPTE. Il occupe une place dans le maillage comme les
+  // autres, d'ou le `+ 1` : six invites plus lui font sept connexions par
+  // machine, pas six. Sans ce `+ 1` le plafond serait faux d'une unite.
+  //
+  // Les limites sont celles du CREATEUR parce qu'il est l'organisateur : la
+  // reunion sera la sienne, et c'est son entreprise qui en fixe le cadre.
+  //
+  // Le comptage se fait sur `participantIds` APRES resolution des numeros et
+  // apres retrait de l'organisateur : compter les numeros bruts refuserait une
+  // creation ou l'organisateur s'est mis dans sa propre liste, alors qu'elle ne
+  // fait entrer personne de plus.
+  const plafond = await plafondReunion(userId, body.type_media);
+  const demandes = participantIds.length + 1;
+  if (demandes > plafond) {
+    return refusCreationTropGrande({
+      typeMedia: body.type_media,
+      plafond,
+      demandes,
+    });
   }
 
   const room = body.room ?? `room-${randomUUID().slice(0, 8)}`;
