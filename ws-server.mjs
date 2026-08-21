@@ -2809,6 +2809,90 @@ function arretePartageEcran(meetingId, userId) {
   });
 }
 
+/**
+ * L'organisateur demande a un participant de couper son micro ou sa camera.
+ *
+ * ON NE COUPE PAS UN FLUX A DISTANCE. La piste appartient a l'APPAREIL du
+ * participant : rien ici, ni dans WebRTC, ne peut l'eteindre depuis l'exterieur.
+ * Ce verbe DEMANDE, et l'application du destinataire obeit. C'est donc un
+ * message de protocole et non une commande, et le comportement final tient a ce
+ * que le client en fait.
+ *
+ * COUPE, MAIS NE VERROUILLE PAS. Le participant peut se rallumer aussitot,
+ * comme dans Zoom, Meet et Teams. Couper sert a faire taire un micro oublie,
+ * pas a bailloner quelqu'un. Un verrou permanent demanderait un etat persistant
+ * en base, donc une migration, pour un cas bien plus rare : il pourra s'ajouter
+ * plus tard sans rien changer a ce verbe.
+ *
+ * ⚠️ L'AUTORISATION SE VERIFIE ICI, PAS CHEZ LE CLIENT. Si le bouton grise cote
+ * client suffisait, n'importe quel participant forgerait la trame et ferait
+ * taire toute la salle. Le serveur relit donc l'organisateur en base a chaque
+ * coupure.
+ *
+ * SILENCE POUR QUI N'A PAS LE DROIT : ni relais, ni message d'erreur — a la
+ * difference de `meeting_extend`, qui refuse a voix haute. Une erreur explicite
+ * apprendrait a celui qui sonde qu'il a vise juste, et lui dirait au passage de
+ * quelles reunions il est organisateur. Le refus se lit ici a l'absence d'effet.
+ *
+ * DIFFUSE A TOUTE LA SALLE et pas au seul destinataire : les autres doivent
+ * pouvoir afficher QUI a ete coupe et PAR QUI, sinon un micro s'eteint sans que
+ * personne comprenne pourquoi. L'organisateur compris, comme pour la main levee
+ * et le partage : sa propre action s'affiche sur la reponse du serveur et non
+ * sur sa seule foi.
+ *
+ * RIEN N'EST ECRIT EN BASE, deliberement : une coupure est un message, pas un
+ * etat. Consequence assumee, la meme que pour les mains levees : qui arrive
+ * apres coup ne sait pas qu'un micro a ete coupe. Il le verra simplement
+ * eteint, ce qui est vrai.
+ */
+async function handleMeetingMute(ws, msg) {
+  const { meetingId, toUserId } = msg;
+  const media = msg.media === "audio" || msg.media === "video" ? msg.media : null;
+  if (!meetingId || !toUserId || !media) return;
+
+  // On ne se coupe pas soi-meme par ce chemin : l'organisateur a ses propres
+  // boutons, qui agissent sur ses pistes sans passer par le serveur.
+  if (toUserId === ws.userId) return;
+
+  // ⚠️ LA GARDE DE SALLE PASSE AVANT LE PREMIER `await`, comme dans la main
+  // levee. Les deux presences sont lues sur la meme carte en memoire dans le
+  // meme tour de boucle : aucune arrivee ni aucun depart ne peut se glisser
+  // entre elles. Interroger la base d'abord laisserait au contraire la salle
+  // changer sous nos pieds pendant l'attente — `meeting_join` traverse trois
+  // `await` avant d'inscrire sa socket.
+  const room = meetingRooms.get(meetingId);
+  if (!room || !room.has(ws.userId)) return;
+
+  // Le destinataire doit etre PRESENT et pas seulement invite : couper quelqu'un
+  // qui n'est pas entre annoncerait a la salle une coupure que personne ne
+  // verrait s'appliquer.
+  if (!room.has(toUserId)) return;
+
+  // On ne relit QUE l'organisateur, sans `isEnd` : la presence dans la salle
+  // fait deja foi. Une reunion marquee terminee pendant qu'on se dit au revoir
+  // laisserait sinon un micro ouvert que plus personne ne pourrait couper.
+  const meeting = await prisma.meeting.findUnique({
+    where: { idMeeting: meetingId },
+    select: { idOrganiser: true },
+  });
+  if (!meeting || meeting.idOrganiser !== ws.userId) return;
+
+  // Relecture de la salle APRES l'attente : la garde d'en haut porte sur un etat
+  // qui date d'avant la requete. Entre-temps l'un des deux a pu partir, ou la
+  // salle se vider entierement. Sans cela on annoncerait la coupure d'un absent,
+  // au nom d'un absent.
+  const salle = meetingRooms.get(meetingId);
+  if (!salle || !salle.has(ws.userId) || !salle.has(toUserId)) return;
+
+  sendToMeeting(meetingId, {
+    type: "meeting_mute",
+    meetingId,
+    fromUserId: ws.userId,
+    toUserId,
+    media,
+  });
+}
+
 /// Combien de temps avant le début d'une réunion part le rappel.
 const RAPPEL_REUNION_AVANT_MS = 5 * 60 * 1000;
 
@@ -3004,6 +3088,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "meeting_message") await handleMeetingMessage(ws, msg);
       else if (msg.type === "meeting_hand") await handleMeetingHand(ws, msg);
       else if (msg.type === "meeting_screen") await handleMeetingScreen(ws, msg);
+      else if (msg.type === "meeting_mute") await handleMeetingMute(ws, msg);
     } catch (e) {
       console.error("[ws] erreur de traitement:", e);
       ws.send(JSON.stringify({ type: "error", message: "Erreur serveur", tempId: msg?.tempId }));
