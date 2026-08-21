@@ -129,22 +129,38 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const existante = await prisma.meetingInviteRequest.findUnique({
     where: { idMeeting_inviteId: { idMeeting: id, inviteId: invite.id } },
   });
-  if (existante) {
-    if (existante.statut === 2) {
-      // Refus DÉFINITIF, et il l'est pour tout le monde : sans cela, un
-      // participant éconduit n'aurait qu'à faire redemander par un collègue.
-      return fail(
-        "L'organisateur a déjà refusé d'ajouter cette personne",
-        409,
-        "ALREADY_REFUSED",
-      );
-    }
+  if (existante && existante.statut !== 2) {
     return fail(
       "Une demande concernant cette personne est déjà en attente",
       409,
       "ALREADY_PENDING",
     );
   }
+
+  // UN REFUS N'EST PLUS DÉFINITIF : on peut redemander.
+  //
+  // La règle d'avant fermait la porte pour toujours, au motif qu'un participant
+  // éconduit n'aurait sinon qu'à faire redemander par un collègue. C'était
+  // défendable, mais ça rendait un refus irrattrapable : l'organisateur qui se
+  // trompe de personne, ou qui refuse parce que la réunion n'en est pas encore
+  // là, ne pouvait plus revenir dessus — et personne d'autre non plus.
+  //
+  // La demande repart donc à zéro : nouvel auteur, nouvelle date, décision
+  // effacée. L'organisateur reçoit un nouveau message et tranche à nouveau,
+  // autant de fois qu'il le faut. Le garde-fou contre l'insistance n'est plus la
+  // base mais lui : il peut refuser sans fin, et chaque refus lui coûte un clic
+  // quand redemander en coûte un aussi.
+  //
+  // La ligne est RÉUTILISÉE et non recréée : la contrainte d'unicité
+  // (idMeeting, invite) l'exige, et la recréer supposerait de l'effacer d'abord,
+  // donc de perdre l'historique de la première demande sans rien gagner.
+  const demandeRouverte = existante
+    ? await prisma.meetingInviteRequest.update({
+        where: { id: existante.id },
+        data: { demandeurId: userId, statut: 0, decidedAt: null, createdAt: new Date() },
+        include: { demandeur: true, invite: true },
+      })
+    : null;
 
   // ORGANISATEUR ABSENT : le participant ajoute directement.
   //
@@ -180,10 +196,12 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     );
   }
 
-  const demande = await prisma.meetingInviteRequest.create({
-    data: { idMeeting: id, demandeurId: userId, inviteId: invite.id },
-    include: { demandeur: true, invite: true },
-  });
+  const demande =
+    demandeRouverte ??
+    (await prisma.meetingInviteRequest.create({
+      data: { idMeeting: id, demandeurId: userId, inviteId: invite.id },
+      include: { demandeur: true, invite: true },
+    }));
 
   // Seul l'organisateur est prévenu.
   notifieDemandeReunion({
