@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { urlPubliqueEnregistrement } from "@/lib/url-publique";
 
 /**
  * Mélange les deux pistes d'un enregistrement d'appel en un seul fichier.
@@ -175,9 +176,26 @@ export async function melangerEnregistrement(idRecording: string): Promise<void>
       select: { id: true },
     });
 
+    /*
+     * L'URL PUBLIQUE EST POSÉE ICI, DANS LA MÊME REQUÊTE QUE `statut = 2`.
+     *
+     * 🔴 C'est ce qui en fait une garantie et pas une promesse : une adresse
+     * présente dans `url_audio` est une adresse qui RÉPOND, puisqu'elle n'est
+     * écrite qu'avec le statut qui la rend jouable. La poser à la création
+     * aurait donné à la plateforme une adresse en 404 pendant tout le mélange,
+     * et un échec de mélange l'y aurait laissée pour toujours.
+     *
+     * Écrite en base et non calculée à la lecture, pour la même raison que pour
+     * une plainte : la plateforme lit la table directement et n'a pas à
+     * connaître notre schéma d'URL. Voir `src/lib/url-publique.ts`.
+     */
     await prisma.callRecording.update({
       where: { idRecording },
-      data: { mediaMixId: media.id, statut: 2 },
+      data: {
+        mediaMixId: media.id,
+        statut: 2,
+        urlAudio: urlPubliqueEnregistrement(idRecording),
+      },
     });
     console.log(`[melange] enregistrement ${idRecording} melange (${melange.length} octets)`);
   } catch (e) {

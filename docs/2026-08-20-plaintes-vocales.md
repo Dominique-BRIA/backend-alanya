@@ -186,6 +186,7 @@ le modifie après la création.
 | `duree_ms` | `integer` | non | Durée de l'appel |
 | `statut` | `smallint` | non | `0` à mélanger · `1` en cours · `2` **prêt** · `3` échec |
 | `cle_envoi` | `varchar(64)` | non | Clé d'idempotence, unique |
+| `url_audio` | `varchar(500)` | **oui** | **Adresse absolue du mélange, à écouter directement** |
 | `created_at` | `timestamptz` | non | |
 
 **Pourquoi trois fichiers.** Le composant WebRTC du mobile ne sait enregistrer
@@ -197,9 +198,48 @@ serveur les mélange avec `ffmpeg`. Le fichier à écouter est **`media_mix_id`*
 > conservées **exprès** : elles permettent de refaire le mélange, elles ne sont
 > pas destinées à l'écoute — chacune ne contient qu'une seule voix.
 
-Il n'y a **pas encore d'URL publique** pour ces fichiers, contrairement aux
-plaintes. Dites-nous si vous en avez besoin : c'est la même mécanique, une
-heure de travail.
+**`url_audio` : l'adresse à ouvrir.** Depuis le 21/08/2026, un enregistrement
+mélangé porte une **adresse absolue, prête à l'emploi et lisible sans
+authentification** — exactement comme une plainte. Rien à intégrer chez vous.
+
+```sql
+SELECT cr."idRecording",
+       cr."created_at",
+       cr."duree_ms",
+       cr."url_audio",           -- ← à ouvrir ou à mettre dans un <audio src="…">
+       agent."alanyaPhone"  AS numero_agent,
+       client."alanyaPhone" AS numero_client
+FROM call_recording cr
+LEFT JOIN users agent  ON agent."alanyaID"  = cr."agent_alanyaID"
+LEFT JOIN users client ON client."alanyaID" = cr."client_alanyaID"
+WHERE cr."idCompany" = $1
+  AND cr."statut" = 2
+ORDER BY cr."created_at" DESC;
+```
+
+L'adresse a la forme :
+
+```text
+https://alanyavox.com/api/public/enregistrements/<idRecording>/audio
+```
+
+Servie avec le bon type MIME, en `inline`, et avec
+`Access-Control-Allow-Origin: *`.
+
+> ✅ **`url_audio` non nulle ⇒ écoutable.** Elle est écrite par la **même**
+> requête que `statut = 2` : vous n'avez pas à tester les deux. Tant que le
+> mélange n'a pas abouti, la colonne est nulle et il n'y a rien à écouter.
+
+> ⚠️ **CETTE URL N'EST PAS UN CONTRÔLE D'ACCÈS, et l'enjeu dépasse celui d'une
+> plainte.** Une plainte est dictée par son auteur ; ici c'est une
+> **conversation entière, à deux voix**, dont le correspondant n'a pas été
+> averti. Quiconque connaît l'adresse l'écoute — sa seule protection est d'être
+> **indevinable** (elle porte l'UUID de l'enregistrement). Ne la publiez pas, ne
+> la mettez pas dans une page indexable, et ne la transmettez qu'à des personnes
+> autorisées à entendre l'appel.
+
+Les **pistes brutes n'ont pas d'adresse publique**, et n'en auront pas : chacune
+ne contient qu'une seule voix.
 
 ---
 
@@ -228,8 +268,8 @@ POST /api/complaints
 
 ## 5. Ce qui n'est pas fait
 
-- **Aucune URL publique pour les enregistrements d'appels** (§3.3). Les plaintes
-  en ont une, pas eux.
+- ~~Aucune URL publique pour les enregistrements d'appels~~ — **livrée le
+  21/08/2026**, voir §3.3.
 - **Aucune purge automatique.** Les fichiers audio s'accumulent, et un
   enregistrement d'appel en garde **trois** — les deux pistes brutes plus le
   mélange. À prévoir dès que le volume sera connu ; c'est la question 3 ci-dessous.
@@ -249,7 +289,9 @@ POST /api/complaints
 3. **Combien de temps conserver les audios ?** La réponse conditionne la purge,
    qui n'existe pas. Un enregistrement d'appel occupe **trois fichiers**, et le
    volume grandira bien plus vite que celui des plaintes.
-4. **Voulez-vous une URL publique pour les enregistrements d'appels**, comme
-   celle des plaintes ? Nous ne l'avons pas ouverte d'office : une conversation
-   entière derrière une adresse non authentifiée nous a paru mériter votre
-   accord explicite.
+4. ~~Voulez-vous une URL publique pour les enregistrements d'appels ?~~
+   **Tranchée le 21/08/2026 : oui, elle est ouverte** (§3.3). Nous la
+   redisons ici parce qu'elle vous engage : une conversation entière est
+   désormais joignable par une adresse non authentifiée. Si vous préférez
+   qu'elle passe par un jeton, ou qu'elle expire, dites-le — le changement est
+   de notre côté et ne casse pas votre lecture de la table.

@@ -1967,6 +1967,19 @@ model CallRecording {
   /// 0 à mélanger · 1 en cours · 2 mélangé · 3 mélange impossible.
   statut          Int      @default(0) @db.SmallInt
   cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  /// URL ABSOLUE de l'enregistrement MÉLANGÉ, lisible SANS jeton — la plateforme
+  /// de la collègue lit cette table directement et n'a pas notre mécanisme
+  /// d'authentification. Décision du user du 21/08/2026, en réponse à la
+  /// question laissée ouverte dans la note d'équipe du 20/08.
+  ///
+  /// 🔴 POSÉE PAR LA MÊME REQUÊTE QUE `statut = 2` : une adresse présente ici
+  /// est donc une adresse qui répond. Nulle tant que le mélange n'a pas abouti.
+  ///
+  /// ⚠️ **CE N'EST PAS UN CONTRÔLE D'ACCÈS**, et l'enjeu dépasse celui d'une
+  /// plainte : c'est une CONVERSATION ENTIÈRE, à deux voix, dont le
+  /// correspondant n'a jamais été averti. Quiconque connaît l'URL l'écoute ;
+  /// elle est seulement indevinable (elle porte l'UUID de l'enregistrement).
+  urlAudio        String?  @map("url_audio") @db.VarChar(500)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   company     Company    @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)

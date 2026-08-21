@@ -4,18 +4,15 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createComplaintSchema } from "@/lib/validation";
 import { estDoublonUnique } from "@/lib/contact-lists";
-
-/**
- * L'adresse publique de l'audio d'une plainte.
- *
- * ⚠️ `PUBLIC_BASE_URL` et non une valeur en dur : c'est déjà la variable qui
- * sert aux sons du standard (`urlPublique` dans `ivr.mjs`), et un second endroit
- * où écrire le domaine finirait par diverger du premier.
+/*
+ * ⚠️ L'adresse publique était bâtie ICI, en copie locale de `PUBLIC_BASE_URL`.
+ * Elle a déménagé dans `src/lib/url-publique.ts` le 21/08/2026, quand les
+ * enregistrements d'appel en ont eu besoin à leur tour : le commentaire qu'elle
+ * portait disait déjà qu'« un second endroit où écrire le domaine finirait par
+ * diverger du premier ». La valeur produite est identique — même variable, même
+ * repli — donc les lignes déjà en base restent exactes.
  */
-function urlPubliquePlainte(id: string): string {
-  const base = (process.env.PUBLIC_BASE_URL ?? "https://alanyavox.com").replace(/\/+$/, "");
-  return `${base}/api/public/plaintes/${id}/audio`;
-}
+import { urlPubliquePlainte } from "@/lib/url-publique";
 
 /**
  * POST /api/complaints — dépose la plainte vocale dictée sur la touche 0 d'un

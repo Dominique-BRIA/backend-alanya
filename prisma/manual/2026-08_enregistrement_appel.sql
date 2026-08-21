@@ -94,3 +94,28 @@ CREATE INDEX IF NOT EXISTS call_recording_company_idx
 CREATE INDEX IF NOT EXISTS call_recording_a_melanger_idx
   ON call_recording ("created_at")
   WHERE "statut" = 0;
+
+-- ── L'URL ABSOLUE du mélange, lisible sans jeton ────────────────────────────
+--
+-- Décision du user (21/08/2026), en réponse à la question n° 4 de la note
+-- d'équipe du 20/08, qui la laissait explicitement ouverte. Même modèle que
+-- `voice_complaint.url_audio` : la plateforme lit la table DIRECTEMENT, comme
+-- elle le fait déjà pour `center_music` et `center_audio`, et y trouve une
+-- adresse prête à l'emploi plutôt que d'intégrer notre mécanisme de jetons.
+--
+-- 🔴 ELLE NE PORTE QUE LE MÉLANGE, et elle est posée par la MÊME requête que
+-- `statut = 2` : une adresse présente est donc une adresse qui répond. Les deux
+-- pistes brutes n'ont pas d'URL publique et ne doivent pas en avoir — chacune ne
+-- contient qu'UNE voix, elles ne sont conservées que pour refaire le mélange.
+--
+-- ⚠️ **CETTE URL N'EST PAS UN CONTRÔLE D'ACCÈS**, et l'enjeu est plus grand que
+-- pour une plainte : c'est une CONVERSATION ENTIÈRE, à deux voix, dont le
+-- correspondant n'a jamais été averti qu'elle était enregistrée. Quiconque la
+-- connaît l'écoute. Elle est rendue INDEVINABLE — elle porte l'UUID de
+-- l'enregistrement, tiré au hasard — ce qui reste de l'obscurité, pas une
+-- autorisation.
+ALTER TABLE call_recording
+  ADD COLUMN IF NOT EXISTS url_audio varchar(500);
+
+COMMENT ON COLUMN call_recording.url_audio IS
+  'URL absolue du melange, lisible SANS jeton. Ecrite avec statut=2 : presente => jouable.';
