@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@/lib/prisma';
 import { ok, fail, handleError } from '@/lib/http';
 import { routeV1, type CleAuthentifiee } from '@/lib/developer/authentifier';
-import { CODE } from '@/lib/developer/api-contract';
+import { CODE, statutPublic } from '@/lib/developer/api-contract';
 import { notifierStatutMessage } from '@/lib/developer/webhook';
 import { findOrCreateDirectConversation } from '@/modules/messaging/access';
 import { creerMessage } from '@/modules/messaging/envoi';
@@ -142,12 +142,22 @@ async function envoyer(req: NextRequest, cle: CleAuthentifiee): Promise<Response
     // Ignorer si Push n'est pas configuré.
   }
 
-  void notifierStatutMessage(cle.developerId, message.id, 'ENVOYE', destinataire.publicNumber);
+  /*
+   * ⚠️ Le statut est LU sur la ligne créée, pas écrit en dur.
+   *
+   * Les deux valeurs partaient en littéral `'ENVOYE'` — la réponse et le
+   * webhook auraient continué d'annoncer « envoyé » le jour où `creerMessage`
+   * poserait autre chose. `statutPublic` traduit `Message.status`, qui reste en
+   * anglais en base, et la traduction n'a lieu qu'ici, à la frontière.
+   */
+  const statut = statutPublic(message.status);
+
+  void notifierStatutMessage(cle.developerId, message.id, statut, destinataire.publicNumber);
 
   return ok(
     {
       id: message.id,
-      statut: 'ENVOYE',
+      statut,
       destinataire: destinataire.publicNumber,
       conversationId: conversation.id,
       type: message.type,
