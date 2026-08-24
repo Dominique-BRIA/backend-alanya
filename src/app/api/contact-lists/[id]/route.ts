@@ -94,6 +94,22 @@ export const PUT = withAuth(async (req: NextRequest, userId: string, ctx) => {
   }
 });
 
+// PATCH /api/contact-lists/:id — MÊME handler que PUT.
+//
+// 🐛 « impossible de modifier une liste après sa création, erreur 405 »
+// (signalé le 24/08/2026). Le client web appelle PUT, le client mobile appelle
+// PATCH (`contact_lists_repository.dart`) — et Next.js répond 405 à tout verbe
+// sans export du même nom. La modification d'une liste était donc cassée sur
+// mobile depuis le premier jour, sans qu'aucun journal serveur ne s'en plaigne :
+// un 405 est produit par le routeur, avant le code.
+//
+// Le verbe accepté est ÉLARGI plutôt que le client corrigé, pour deux raisons.
+// D'abord la sémantique est déjà celle de PATCH — « les champs absents restent
+// inchangés », dit le contrat trois lignes plus haut : c'est PUT qui était le
+// verbe approximatif. Ensuite un correctif client demanderait un nouvel APK,
+// alors que celui-ci répare aussi les versions DÉJÀ installées.
+export const PATCH = PUT;
+
 // DELETE /api/contact-lists/:id — supprime une liste et ses appartenances.
 export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const { id } = await ctx.params;
