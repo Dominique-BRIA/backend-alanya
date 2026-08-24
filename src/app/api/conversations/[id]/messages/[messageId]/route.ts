@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
+import { rafraichirApercuApresEdition } from "@/lib/apercu-conversation.mjs";
 
 // PATCH /api/conversations/:convId/messages/:messageId — modifier un message.
 // Repli REST (la diffusion temps réel est gérée par le serveur WS). Seul
@@ -31,7 +32,24 @@ export const PATCH = withAuth(
       where: { id: messageId },
       data: { content: content.trim(), editedAt: new Date() },
     });
-    return ok({ id: updated.id, content: updated.content, editedAt: updated.editedAt });
+
+    // Même règle que sur le chemin WebSocket, et surtout le même code : la liste
+    // des conversations lit un libellé dénormalisé, qu'une modification doit
+    // réécrire quand elle porte sur le dernier message. Deux chemins d'édition,
+    // une seule règle — les laisser diverger rendrait le défaut intermittent,
+    // selon que le WebSocket est debout ou non.
+    const lastMessage = await rafraichirApercuApresEdition(
+      prisma,
+      message,
+      content.trim(),
+    );
+
+    return ok({
+      id: updated.id,
+      content: updated.content,
+      editedAt: updated.editedAt,
+      lastMessage,
+    });
   },
 );
 

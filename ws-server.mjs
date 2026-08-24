@@ -23,6 +23,7 @@ import {
   apercuStructure,
   apercuMessage,
 } from "./src/lib/message-payload.mjs";
+import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
 import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
@@ -1171,6 +1172,10 @@ async function handleEditMessage(ws, msg) {
     data: { content, editedAt },
   });
 
+  // Si c'était le dernier message, la LISTE des conversations doit suivre — elle
+  // lit un libellé dénormalisé, pas le message. Voir `apercu-conversation.mjs`.
+  const apercu = await rafraichirApercuApresEdition(prisma, message, content);
+
   const recipients = await participantsOf(message.convId);
   for (const uid of recipients) {
     sendTo(uid, {
@@ -1179,6 +1184,10 @@ async function handleEditMessage(ws, msg) {
       messageId,
       content,
       editedAt,
+      // `null` quand le message modifié n'est PAS le dernier : le client sait
+      // alors qu'il n'a rien à changer dans sa liste, au lieu d'avoir à
+      // redemander la conversation pour le découvrir.
+      lastMessage: apercu,
     });
   }
 }
