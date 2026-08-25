@@ -7,46 +7,80 @@ import { emailSchema } from "@/lib/validation";
 import { generateOtpCode, hashOtp } from "@/lib/otp";
 import { sendOtpEmail } from "@/lib/mailer";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
+import { verifyPassword } from "@/lib/password";
 import { z } from "zod";
 
-const schema = z.object({ email: emailSchema });
+const schema = z.object({
+  email: emailSchema,
+  /**
+   * 🔴 LE MOT DE PASSE COURANT EST EXIGÉ, pour ajouter comme pour remplacer.
+   *
+   * L'adresse EST un moyen de reprendre le compte. Sans ce contrôle, quiconque
+   * emprunte une session ouverte — un téléphone déverrouillé posé sur une table,
+   * un navigateur laissé connecté — y inscrit sa propre adresse, puis reprend le
+   * compte tranquillement plus tard par « mot de passe oublié ». Le vol ne
+   * demanderait ni le mot de passe, ni de rester connecté.
+   *
+   * Exigé sur les DEUX cas et pas seulement sur le remplacement : la menace est
+   * la même, et une seule règle vaut mieux que deux dont on finirait par se
+   * demander laquelle s'applique.
+   */
+  password: z.string().min(1, "Mot de passe requis"),
+});
 
 /**
- * POST /api/account/email — DEMANDER l'ajout d'une adresse à un compte qui n'en
- * a pas. Envoie le code ; c'est `/api/account/email/verify` qui pose l'adresse.
+ * POST /api/account/email — DEMANDER l'ajout OU LE REMPLACEMENT de l'adresse.
+ * Envoie le code ; c'est `/api/account/email/verify` qui pose l'adresse.
  *
- * Pourquoi cette route existe : l'identifiant de récupération n'est montré
- * qu'une fois, et un utilisateur qui craint de l'avoir mal noté n'avait aucun
- * second recours. Ajouter une adresse après coup lui en donne un — le même que
- * celui des comptes ouverts avec une adresse.
+ * Deux besoins, un seul parcours :
+ *
+ *   - **AJOUTER** — l'identifiant de récupération n'est montré qu'une fois, et
+ *     qui craint de l'avoir mal noté n'avait aucun second recours ;
+ *   - **REMPLACER** (demandé le 25/08/2026) — on perd l'accès à une boîte, on
+ *     en ouvre une autre, et le compte doit pouvoir suivre. Sans cela, l'adresse
+ *     de reprise devient un piège : elle désigne une boîte que son titulaire ne
+ *     relève plus.
  *
  * ⚠️ EN DEUX TEMPS, comme l'inscription, et pour la même raison : poser
  * l'adresse dès la demande ferait d'une simple faute de frappe une adresse
- * définitive et non vérifiée sur le compte. Rien n'est écrit tant que le code
- * n'est pas revenu.
+ * définitive sur le compte — et, dans le cas du remplacement, ferait PERDRE
+ * l'ancienne au passage. Rien n'est écrit tant que le code n'est pas revenu.
+ *
+ * ⚠️ LE CODE PART SUR LA NOUVELLE ADRESSE, jamais sur l'ancienne : c'est la
+ * nouvelle qu'il s'agit de prouver joignable, et l'ancienne est justement celle
+ * que l'utilisateur ne relève plus.
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const rl = rateLimit(`add-email:${clientIp(req)}`, 5, 60_000);
   if (!rl.allowed) return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
 
-  const { email } = schema.parse(await req.json());
+  const { email, password } = schema.parse(await req.json());
 
   const moi = await prisma.user.findUnique({
     where: { id: userId },
-    select: { email: true },
+    select: { email: true, passwordHash: true },
   });
   if (!moi) return fail("Utilisateur introuvable", 404, "NOT_FOUND");
+
   /*
-   * ⚠️ ON N'AJOUTE QUE SUR UN COMPTE SANS ADRESSE, on ne REMPLACE pas.
+   * Le mot de passe courant, AVANT tout le reste.
    *
-   * Changer l'adresse d'un compte qui en a déjà une est une autre opération,
-   * et une bien plus dangereuse : quiconque emprunte une session ouverte
-   * détournerait le moyen de reprise vers sa propre boîte, et le titulaire
-   * perdrait son compte sans rien voir. Si le besoin vient, il devra exiger le
-   * mot de passe courant ET prévenir l'ancienne adresse.
+   * ⚠️ Un compte sans `passwordHash` est une inscription jamais terminée : il
+   * n'y a rien à comparer, et laisser passer reviendrait à ne pas contrôler du
+   * tout. On refuse.
    */
-  if (moi.email !== null) {
-    return fail("Ce compte a déjà une adresse", 409, "EMAIL_ALREADY_SET");
+  if (!moi.passwordHash) {
+    return fail("Mot de passe incorrect", 403, "BAD_PASSWORD");
+  }
+  if (!(await verifyPassword(password, moi.passwordHash))) {
+    return fail("Mot de passe incorrect", 403, "BAD_PASSWORD");
+  }
+
+  // Remplacer une adresse par elle-même n'a pas de sens, et ferait envoyer un
+  // code pour rien. Le dire vaut mieux que de laisser l'utilisateur relever sa
+  // boîte pour confirmer ce qui est déjà vrai.
+  if (moi.email === email) {
+    return fail("Cette adresse est déjà celle du compte", 409, "EMAIL_UNCHANGED");
   }
 
   // L'adresse ne doit pas déjà servir à un autre compte : la colonne est
