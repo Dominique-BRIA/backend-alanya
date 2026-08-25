@@ -89,14 +89,44 @@ const ALLOWED_MIME = new Set([
   "application/octet-stream",
 ]);
 
+/**
+ * Le TYPE seul, sans ses paramètres — « audio/webm;codecs=opus » → « audio/webm ».
+ *
+ * 🐛 DEUXIÈME OCCURRENCE DU MÊME DÉFAUT, et c'est ce qui justifie de le traiter
+ * ici plutôt que chez l'appelant.
+ *
+ *   - 20/08/2026 : l'enregistrement d'appel du web échouait en 415 (Firefox,
+ *     4 essais). Corrigé côté CLIENT (`enregistrement-appel.ts`), qui n'envoie
+ *     plus que le conteneur.
+ *   - 25/08/2026 : la PLAINTE VOCALE du web échoue pareil — « ce type de
+ *     fichier n'est pas pris en compte ». Le second enregistreur du même dépôt
+ *     n'avait pas reçu le correctif du premier.
+ *
+ * Corriger le client une fois de plus laisserait le troisième enregistreur
+ * tomber dans le même trou. Un paramètre de type de média est PRÉVU par la
+ * norme (RFC 9110 §8.3) : c'est la liste blanche qui avait tort de comparer la
+ * chaîne entière, pas les navigateurs de l'émettre.
+ *
+ * ⚠️ Le mobile n'a jamais été touché : il produit « audio/mp4 » ou
+ * « audio/aac », sans paramètre — d'où « sur le mobile ça passe bien ».
+ */
+function typeSansParametre(mime: string): string {
+  return mime.split(";")[0].trim().toLowerCase();
+}
+
 export function isAllowedMime(mime: string): boolean {
   // Accepte aussi tout texte (text/*) et le générique ci-dessus.
-  return ALLOWED_MIME.has(mime) || mime.startsWith("text/");
+  const type = typeSansParametre(mime);
+  return ALLOWED_MIME.has(type) || type.startsWith("text/");
 }
 
 function extensionFor(filename: string, mime: string): string {
   const ext = path.extname(filename);
   if (ext) return ext;
+  // Même normalisation que la liste blanche : sans elle, un fichier sans
+  // extension nommé par un navigateur repartait sans extension du tout, la
+  // table ci-dessous ne connaissant pas les types paramétrés.
+  mime = typeSansParametre(mime);
   const map: Record<string, string> = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
