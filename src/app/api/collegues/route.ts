@@ -6,6 +6,7 @@ import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import {
   TYPE_COMPTE_AGENT,
+  chercherCollegues,
   membresDuService,
   servicesDeLEntreprise,
 } from "@/lib/collegues";
@@ -50,6 +51,19 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   }
 
   const service = req.nextUrl.searchParams.get("service");
+  const requete = req.nextUrl.searchParams.get("q");
+
+  /*
+   * ── Recherche globale ────────────────────────────────────────────────
+   *
+   * Prioritaire sur les deux autres niveaux : elle traverse les services au
+   * lieu de s'y ranger, et c'est ce qui lui permet de trouver un agent qu'AUCUN
+   * service ne porte — cas réel en production.
+   */
+  if (requete !== null && requete.trim() !== "") {
+    const trouves = await chercherCollegues(moi.idCompany, requete, userId);
+    return ok({ recherche: requete, collegues: trouves.map(serialiseCollegue) });
+  }
 
   // ── Niveau 1 : les services ────────────────────────────────────────────
   if (service === null) {
@@ -60,17 +74,33 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   // ── Niveau 2 : les collègues d'un service ──────────────────────────────
   const membres = await membresDuService(moi.idCompany, service, userId);
 
-  return ok({
-    service,
-    collegues: membres.map((m) => ({
-      id: m.id,
-      publicNumber: m.publicNumber,
-      // Le nom tel que les trois clients l'affichent partout ailleurs — même
-      // règle de repli que dans les conversations et les appels.
-      nom: nomAffichage(m),
-      avatarUrl: avatarPublicUrl(m.avatarUrl ?? null),
-      isOnline: m.isOnline,
-      lastSeen: m.lastSeen ?? null,
-    })),
-  });
+  return ok({ service, collegues: membres.map(serialiseCollegue) });
 });
+
+/**
+ * La forme d'un collègue, IDENTIQUE pour la recherche et pour un service.
+ *
+ * ⚠️ Une seule fonction pour les deux : deux sérialisations écrites séparément
+ * finiraient par ne plus rendre les mêmes champs, et l'écran afficherait un
+ * collègue complet ou amoindri selon le chemin par lequel on l'a trouvé.
+ */
+function serialiseCollegue(m: {
+  id: string;
+  publicNumber: string;
+  nom: string | null;
+  pseudo: string | null;
+  avatarUrl: string | null;
+  isOnline: number;
+  lastSeen: Date | null;
+}) {
+  return {
+    id: m.id,
+    publicNumber: m.publicNumber,
+    // Le nom tel que les trois clients l'affichent partout ailleurs — même
+    // règle de repli que dans les conversations et les appels.
+    nom: nomAffichage(m),
+    avatarUrl: avatarPublicUrl(m.avatarUrl ?? null),
+    isOnline: m.isOnline,
+    lastSeen: m.lastSeen ?? null,
+  };
+}

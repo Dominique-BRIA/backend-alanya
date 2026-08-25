@@ -135,3 +135,59 @@ export async function membresDuService(
 
   return membres;
 }
+
+/**
+ * TOUS les collègues de l'entreprise dont le nom ou le numéro correspond.
+ *
+ * 🔴 CETTE RECHERCHE NE PASSE PAS PAR LES SERVICES, ET C'EST TOUT SON INTÉRÊT.
+ *
+ * Un agent peut n'être rattaché à AUCUNE ligne `center` — c'est le cas de
+ * `10000999` en production au 25/08/2026. La navigation service → collègues ne
+ * peut donc pas l'atteindre : il existe, il est dans l'entreprise, et il est
+ * introuvable. Chercher directement dans les agents de l'entreprise le rattrape.
+ *
+ * ⚠️ Bornée à MON entreprise. Un annuaire d'entreprise n'est pas un annuaire
+ * mondial : sans cette borne, la recherche deviendrait un moyen d'énumérer les
+ * comptes de toute la plateforme.
+ */
+export async function chercherCollegues(
+  idCompany: number,
+  requete: string,
+  moiId: string,
+) {
+  const q = requete.trim();
+  if (q === "") return [];
+
+  /*
+   * Le numéro est cherché sur ses CHIFFRES SEULS : il est affiché formaté
+   * (« 10 00 00 01 ») dans toute l'application, et c'est sous cette forme que
+   * l'utilisateur le recopie. Chercher la chaîne brute ne trouverait rien.
+   */
+  const chiffres = q.replace(/\D/g, "");
+
+  return prisma.user.findMany({
+    where: {
+      idCompany,
+      typeCompte: TYPE_COMPTE_AGENT,
+      id: { not: moiId },
+      OR: [
+        { nom: { contains: q, mode: "insensitive" } },
+        { pseudo: { contains: q, mode: "insensitive" } },
+        ...(chiffres !== "" ? [{ publicNumber: { contains: chiffres } }] : []),
+      ],
+    },
+    select: {
+      id: true,
+      publicNumber: true,
+      nom: true,
+      pseudo: true,
+      avatarUrl: true,
+      isOnline: true,
+      lastSeen: true,
+    },
+    // Un annuaire d'entreprise reste petit ; la borne protège du cas où il ne
+    // le serait plus, sans jamais gêner l'usage normal.
+    take: 50,
+    orderBy: { nom: "asc" },
+  });
+}
