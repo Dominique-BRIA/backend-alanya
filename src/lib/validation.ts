@@ -176,6 +176,16 @@ export const createConversationSchema = z.object({
 });
 
 export const sendMessageSchema = z.object({
+  /**
+   * ⚠️ 8000 N'EST PLUS LA LIMITE RÉELLE — c'est un garde-fou d'entrée.
+   *
+   * `message.content` est un VARCHAR(500) depuis le 25/08/2026, et c'est
+   * `creerMessage` qui ramène le texte à cette longueur. Le plafond n'est
+   * volontairement PAS descendu à 500 ici : le refuser à l'entrée renverrait
+   * une 422 à qui écrit un long message, alors que la décision prise est de le
+   * COUPER. Ce `max` ne sert donc plus qu'à écarter une charge absurde avant
+   * qu'elle ne traverse la pile.
+   */
   content: z.string().trim().min(1).max(8000).optional(),
   type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO", "CONTACT", "LOCATION"]).default("TEXT"),
   mediaId: z.string().uuid().optional(),

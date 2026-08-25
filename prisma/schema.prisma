@@ -791,7 +791,17 @@ model Message {
   senderId   String            @map("senderID") @db.Uuid
   conv       Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
   sender     User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-  content    String? // texte (null pour médias purs)
+  /// Texte du message, `null` pour un média sans légende.
+  ///
+  /// 🔴 VARCHAR(500) DEPUIS LE 25/08/2026, plus `TEXT`
+  /// (`prisma/manual/2026-08_message_content_varchar500.sql`).
+  ///
+  /// ⚠️ PostgreSQL REFUSE une valeur plus longue (erreur 22001), il ne la coupe
+  /// pas. Toute écriture doit donc passer par `tronqueContenu` de
+  /// `src/lib/message-payload.mjs` — c'est elle qui coupe le texte et qui
+  /// REFUSE une charge CONTACT/LOCATION trop longue, dont le JSON ne survivrait
+  /// pas à une coupe.
+  content    String?           @db.VarChar(500)
   /// Appareil qui a envoyé le message, quand le client l'a indiqué.
   ///
   /// `senderId` dit quel COMPTE a écrit ; cette colonne dit lequel de ses

@@ -193,6 +193,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     if (envoi.motif === "MEDIA_ETRANGER") {
       return fail("Média inconnu ou non possédé", 403, "MEDIA_FORBIDDEN");
     }
+    // Seule une charge CONTACT/LOCATION peut arriver ici : le texte ordinaire
+    // est coupé silencieusement, jamais refusé.
+    if (envoi.motif === "CONTENU_TROP_LONG") {
+      return fail("Charge trop longue (500 caractères maximum)", 422, "CONTENT_TOO_LONG");
+    }
     return fail("Message non distribuable", 403, "BLOCKED");
   }
 

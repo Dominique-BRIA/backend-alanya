@@ -35,6 +35,14 @@ export async function deposerMessageSysteme(
   code: CodeSysteme,
   parametres: Record<string, string>,
 ): Promise<void> {
+  // ⚠️ NE PAS FAIRE PASSER CETTE CHARGE PAR `tronqueContenu` : elle est du JSON,
+  // mais `SYSTEM` n'est pas un type structuré au sens de `message-payload.mjs`,
+  // si bien que la fonction la COUPERAIT au lieu de la refuser — et un avis
+  // système coupé n'est plus lisible par aucun client.
+  //
+  // Elle tient sans contrainte dans le VARCHAR(500) de la colonne : les trois
+  // codes ne portent que des pseudos, plafonnés à 50 caractères chacun et deux
+  // au maximum par avis, soit ~120 caractères en pratique.
   const charge = JSON.stringify({ code, ...parametres });
 
   await prisma.message.create({

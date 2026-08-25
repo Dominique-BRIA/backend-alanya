@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { apercuMessage } from "@/lib/message-payload.mjs";
+import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 
 /**
  * LE CŒUR D'ENVOI D'UN MESSAGE — partagé par la route de conversation et par
@@ -37,7 +37,7 @@ export type TypeMessage =
 
 export type ResultatEnvoi =
   | { ok: true; message: Awaited<ReturnType<typeof creerLigneMessage>> }
-  | { ok: false; motif: "BLOQUE" | "MEDIA_ETRANGER" };
+  | { ok: false; motif: "BLOQUE" | "MEDIA_ETRANGER" | "CONTENU_TROP_LONG" };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
 function creerLigneMessage(data: Parameters<typeof prisma.message.create>[0]["data"]) {
@@ -61,7 +61,23 @@ export async function creerMessage(params: {
   replyToId?: string;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
-  const content = params.content ?? null;
+
+  /*
+   * ⚠️ RAMENÉ À LA LONGUEUR DE LA COLONNE AVANT TOUT LE RESTE.
+   *
+   * `message.content` est un VARCHAR(500) depuis le 25/08/2026 : PostgreSQL
+   * REFUSE une valeur plus longue (erreur 22001), il ne la coupe pas. Un texte
+   * de 600 caractères serait donc devenu une erreur 500 en bout de course,
+   * après le contrôle de blocage, la vérification des médias et la lecture du
+   * TTL — trois requêtes pour rien, et un message perdu.
+   *
+   * La coupe se fait ICI et non dans les schémas zod des appelants : c'est le
+   * seul endroit que traversent les trois portes HTTP (conversation, API v1,
+   * média v1). Le poser dans les schémas aurait laissé la troisième dehors.
+   */
+  const longueur = tronqueContenu(type, params.content ?? null);
+  if (longueur.refuse) return { ok: false, motif: "CONTENU_TROP_LONG" };
+  const content = longueur.contenu;
 
   /*
    * Blocage. On répond par un refus, jamais par un faux succès : mentir à

@@ -219,6 +219,56 @@ export function apercuMessage(type, content, nomFichier = null) {
   }
 }
 
+/**
+ * Longueur maximale de `message.content`, en caractères.
+ *
+ * 🔴 C'EST UNE CONTRAINTE DE BASE, pas une préférence : depuis le 25/08/2026 la
+ * colonne est un `VARCHAR(500)` et non plus un `TEXT`
+ * (`prisma/manual/2026-08_message_content_varchar500.sql`).
+ *
+ * ⚠️ POSTGRESQL REFUSE, IL NE COUPE PAS. Une valeur de 501 caractères ne rentre
+ * pas « tronquée » : l'INSERT échoue avec l'erreur 22001, et le message est
+ * perdu au lieu d'être raccourci. C'est toute la raison d'être de
+ * [tronqueContenu] — sans elle, passer la colonne en VARCHAR aurait transformé
+ * chaque message long en échec d'envoi.
+ */
+export const LONGUEUR_MAX_CONTENU = 500;
+
+/**
+ * Ramène `content` à ce que la colonne accepte, AVANT toute écriture.
+ *
+ * Deux comportements, et la différence n'est pas cosmétique :
+ *
+ * - **Texte et légendes** : coupés à [LONGUEUR_MAX_CONTENU]. On perd la fin
+ *   d'un message très long, ce qui est le compromis accepté ; on ne perd jamais
+ *   le message.
+ *
+ * - **CONTACT et LOCATION** : JAMAIS coupés, REFUSÉS quand ils dépassent. Leur
+ *   `content` est du JSON (voir l'en-tête de ce fichier) : le couper produit une
+ *   chaîne que `JSON.parse` rejette, donc une ligne que plus AUCUN client ne
+ *   sait afficher — ni aujourd'hui ni jamais, l'information étant détruite en
+ *   base. Un refus est visible tout de suite par l'expéditeur ; une charge
+ *   mutilée ne se découvre que chez le destinataire, longtemps après. C'est le
+ *   même raisonnement que le refus d'une charge invalide dans `chargeValide`.
+ *
+ * @param {string} type
+ * @param {string|null|undefined} content
+ * @returns {{contenu: string|null, refuse: boolean}} `refuse` vaut vrai
+ *   uniquement pour une charge structurée trop longue — l'appelant doit alors
+ *   répondre une erreur et ne rien écrire.
+ */
+export function tronqueContenu(type, content) {
+  if (typeof content !== "string") return { contenu: null, refuse: false };
+
+  if (TYPES_STRUCTURES.has(type)) {
+    return content.length > LONGUEUR_MAX_CONTENU
+      ? { contenu: null, refuse: true }
+      : { contenu: content, refuse: false };
+  }
+
+  return { contenu: content.slice(0, LONGUEUR_MAX_CONTENU), refuse: false };
+}
+
 /* --------------------------------------------------------------------------
  * Contrôles exécutables : `node src/lib/message-payload.mjs`
  *
@@ -298,6 +348,39 @@ if (process.argv[1] && process.argv[1].endsWith("message-payload.mjs")) {
   // Les deux types structurés continuent de passer par apercuStructure.
   verifie("contact → délégué à apercuStructure", apercuMessage("CONTACT", contactSimple), "👤 Jean Dupont");
   verifie("position → déléguée à apercuStructure", apercuMessage("LOCATION", position), "📍 Position partagée");
+
+  // --- tronqueContenu : la colonne est passée en VARCHAR(500) --------------
+  //
+  // Le cas qui compte est le 501ᵉ caractère : c'est lui qui faisait échouer
+  // l'INSERT en 22001 au lieu de raccourcir. Les bornes sont donc contrôlées
+  // une par une, et non « en gros ».
+  const court = "a".repeat(LONGUEUR_MAX_CONTENU);
+  const long = "a".repeat(LONGUEUR_MAX_CONTENU + 1);
+  verifie("texte de 500 → intact", tronqueContenu("TEXT", court).contenu.length, LONGUEUR_MAX_CONTENU);
+  verifie("texte de 501 → coupé à 500", tronqueContenu("TEXT", long).contenu.length, LONGUEUR_MAX_CONTENU);
+  verifie("texte trop long → jamais refusé", tronqueContenu("TEXT", long).refuse, false);
+  verifie("légende de média → coupée comme le texte", tronqueContenu("IMAGE", long).contenu.length, LONGUEUR_MAX_CONTENU);
+  verifie("content absent → null, sans refus", tronqueContenu("TEXT", null), { contenu: null, refuse: false });
+  // Une charge structurée qui tient est rendue TELLE QUELLE : la couper, même
+  // d'un caractère, la rendrait illisible pour toujours.
+  verifie("contact qui tient → intact", tronqueContenu("CONTACT", contactSimple).contenu, contactSimple);
+  verifie("contact qui tient → non refusé", tronqueContenu("CONTACT", contactSimple).refuse, false);
+  verifie("position qui tient → intacte", tronqueContenu("LOCATION", position).contenu, position);
+  // Et celle qui ne tient pas est REFUSÉE, jamais mutilée.
+  const contactEnorme = JSON.stringify({
+    v: 1,
+    contacts: Array.from({ length: 10 }, (_, i) => ({
+      name: `Contact numero ${i}`,
+      phones: ["+237691234567", "+237699887766"],
+      avatarUrl: `https://alanyavox.com/api/media/${"0".repeat(40)}${i}`,
+    })),
+  });
+  verifie("charge structurée trop longue → refusée", tronqueContenu("CONTACT", contactEnorme).refuse, true);
+  verifie("charge structurée trop longue → rien à écrire", tronqueContenu("CONTACT", contactEnorme).contenu, null);
+  // Le témoin doit rester un cas RÉEL : si ce contrôle casse, c'est que la
+  // charge fabriquée ci-dessus est passée sous la limite, pas que le code a
+  // changé.
+  verifie("le témoin dépasse bien 500", contactEnorme.length > LONGUEUR_MAX_CONTENU, true);
 
   console.log(echecs === 0 ? "\nTous les contrôles passent." : `\n${echecs} contrôle(s) en échec.`);
   process.exitCode = echecs === 0 ? 0 : 1;

@@ -193,6 +193,21 @@ async function envoyer(req: NextRequest, cle: CleAuthentifiee): Promise<Response
       );
     }
     /*
+     * Charge CONTACT / LOCATION au-delà de 500 caractères. Le texte ordinaire,
+     * lui, est COUPÉ sans erreur : seule une charge JSON est refusée, parce que
+     * la couper la rendrait illisible pour toujours (voir `tronqueContenu`).
+     *
+     * L'appelant doit pouvoir corriger — envoyer moins de contacts d'un coup —
+     * donc le motif est explicite plutôt que confondu avec un blocage.
+     */
+    if (envoi.motif === 'CONTENU_TROP_LONG') {
+      return fail(
+        'Charge trop longue : un message CONTACT ou LOCATION ne peut pas dépasser 500 caractères.',
+        422,
+        CODE.REQUETE_INVALIDE,
+      );
+    }
+    /*
      * 🔴 CONTRÔLE QUE L'API N'AVAIT PAS. Le client le fait, le WebSocket le
      * fait, la route HTTP de conversation le fait — l'API était la seule porte
      * par laquelle on pouvait écrire à quelqu'un qui vous a bloqué.

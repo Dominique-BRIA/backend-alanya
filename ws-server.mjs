@@ -22,6 +22,8 @@ import {
   chargeValide,
   apercuStructure,
   apercuMessage,
+  tronqueContenu,
+  LONGUEUR_MAX_CONTENU,
 } from "./src/lib/message-payload.mjs";
 import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
 import {
@@ -709,7 +711,14 @@ async function handleConversationLock(ws, msg) {
 
 async function handleSend(ws, msg) {
   // MODIFICATION : ajoute mediaIds pour multi-médias
-  const { convId, content, tempId, mediaId, mediaIds } = msg;
+  const { convId, tempId, mediaId, mediaIds } = msg;
+  // `let` et non `const` : le contenu est RAMENÉ à la longueur de la colonne
+  // plus bas, et c'est la valeur raccourcie qui doit servir partout ensuite —
+  // l'écho à l'expéditeur, l'aperçu de la conversation, la notification push.
+  // La laisser `const` aurait obligé à trimballer deux variables, et il aurait
+  // suffi d'en oublier une pour que l'expéditeur voie un texte que la base ne
+  // contient pas.
+  let content = msg.content;
   /**
    * Appareil emetteur, quand le client l'indique.
    *
@@ -745,6 +754,24 @@ async function handleSend(ws, msg) {
     ws.send(JSON.stringify({ type: "error", message: "Charge de message invalide", tempId }));
     return;
   }
+
+  /**
+   * `message.content` est un VARCHAR(500) depuis le 25/08/2026, et PostgreSQL
+   * REFUSE une valeur trop longue au lieu de la couper (erreur 22001).
+   *
+   * Ce chemin-ci n'a JAMAIS eu de plafond — le schéma zod des routes HTTP ne le
+   * traverse pas. C'est ce qui explique le message de 14 866 caractères trouvé
+   * en base de dev : sans cette coupe, il partait tel quel vers l'INSERT et
+   * chaque message un peu long serait devenu un échec d'envoi silencieux.
+   */
+  const longueur = tronqueContenu(type, content ?? null);
+  if (longueur.refuse) {
+    // Charge CONTACT/LOCATION trop longue : la couper détruirait son JSON. On
+    // refuse, l'expéditeur le voit tout de suite.
+    ws.send(JSON.stringify({ type: "error", message: "Charge de message trop longue", tempId }));
+    return;
+  }
+  content = longueur.contenu;
   if (type !== "TEXT" && !structure && uniqueMediaIds.length === 0) return;
   if (type === "TEXT" && uniqueMediaIds.length === 0 && (!content || !content.trim())) return;
 
@@ -1152,7 +1179,13 @@ async function handleRecording(ws, msg) {
 // Diffuse { type:"message_edited", convId, messageId, content, editedAt } à tous.
 async function handleEditMessage(ws, msg) {
   const { messageId } = msg;
-  const content = typeof msg.content === "string" ? msg.content.trim() : "";
+  // Coupé à la longueur de la colonne, comme à l'envoi : sans cela, allonger un
+  // message au-delà de 500 caractères ferait échouer l'UPDATE en 22001, et la
+  // modification serait perdue sans que rien ne le dise. Seul du TEXTE est
+  // modifiable (contrôlé plus bas), il n'y a donc pas de charge JSON à ménager.
+  const content = typeof msg.content === "string"
+    ? msg.content.trim().slice(0, LONGUEUR_MAX_CONTENU)
+    : "";
   if (!messageId || !content) return;
 
   const message = await prisma.message.findUnique({ where: { id: messageId } });

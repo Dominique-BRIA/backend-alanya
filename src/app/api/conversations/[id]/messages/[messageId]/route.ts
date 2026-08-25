@@ -4,6 +4,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
 import { rafraichirApercuApresEdition } from "@/lib/apercu-conversation.mjs";
+import { LONGUEUR_MAX_CONTENU } from "@/lib/message-payload.mjs";
 
 // PATCH /api/conversations/:convId/messages/:messageId — modifier un message.
 // Repli REST (la diffusion temps réel est gérée par le serveur WS). Seul
@@ -13,10 +14,15 @@ export const PATCH = withAuth(
     const { id: convId, messageId } = await ctx.params;
     await assertParticipant(convId, userId);
 
-    const { content } = await req.json();
-    if (typeof content !== "string" || !content.trim()) {
+    const { content: contenuBrut } = await req.json();
+    if (typeof contenuBrut !== "string" || !contenuBrut.trim()) {
       return fail("Contenu vide", 400, "EMPTY");
     }
+    // Coupé à la longueur de la colonne, comme sur le chemin WebSocket : seul du
+    // TEXTE est modifiable (contrôlé plus bas), il n'y a aucune charge JSON à
+    // ménager ici. Sans cette coupe, allonger un message au-delà de 500
+    // caractères ferait échouer l'UPDATE en 22001.
+    const content = contenuBrut.trim().slice(0, LONGUEUR_MAX_CONTENU);
 
     const message = await prisma.message.findUnique({ where: { id: messageId } });
     if (!message) return fail("Message introuvable", 404, "NOT_FOUND");
@@ -30,7 +36,7 @@ export const PATCH = withAuth(
 
     const updated = await prisma.message.update({
       where: { id: messageId },
-      data: { content: content.trim(), editedAt: new Date() },
+      data: { content, editedAt: new Date() },
     });
 
     // Même règle que sur le chemin WebSocket, et surtout le même code : la liste
@@ -41,7 +47,7 @@ export const PATCH = withAuth(
     const lastMessage = await rafraichirApercuApresEdition(
       prisma,
       message,
-      content.trim(),
+      content,
     );
 
     return ok({
