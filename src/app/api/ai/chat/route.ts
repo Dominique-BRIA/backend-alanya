@@ -3,7 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { aiChatSchema } from "@/lib/validation";
-import { generateReply, type GeminiTurn } from "@/lib/gemini";
+import {
+  generateReply,
+  MESSAGE_INDISPONIBLE,
+  type TourAssistant,
+} from "@/lib/assistant";
 
 interface AiMsg {
   role: string;
@@ -39,7 +43,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
 
   // Construit l'historique (limité aux 20 derniers tours pour le contexte).
   const previous = previousMessages.slice(-20);
-  const history: GeminiTurn[] = [
+  const history: TourAssistant[] = [
     ...previous.map((m) => ({
       role: m.role === "USER" ? ("user" as const) : ("model" as const),
       text: m.content,
@@ -47,12 +51,23 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     { role: "user", text: message },
   ];
 
-  // Appelle Gemini (ou repli démo).
+  /*
+   * 🔴 L'ÉCHEC NE DIT RIEN DE PLUS QUE « JE NE PEUX PAS RÉPONDRE ».
+   *
+   * Cette ligne recopiait le message de l'exception dans la bulle — et ce
+   * message portait la réponse brute du fournisseur. Le 25/08/2026, un refus a
+   * ainsi affiché à l'utilisateur le nom du service, son code d'erreur et son
+   * motif, puis l'a ENREGISTRÉ EN BASE : la fuite restait dans la conversation
+   * après le rétablissement.
+   *
+   * Le détail est déjà journalisé par `generateReply`, avec plus de contexte que
+   * ce qu'une exception peut porter. Rien à en tirer de plus ici.
+   */
   let reply: string;
   try {
     reply = await generateReply(history);
-  } catch (e) {
-    reply = `⚠️ L'assistant est momentanément indisponible. (${(e as Error).message})`;
+  } catch {
+    reply = MESSAGE_INDISPONIBLE;
   }
 
   const saved = await prisma.aiMessage.create({

@@ -64,11 +64,22 @@ export const env = {
     },
   },
 
-  gemini: {
-    apiKey: optional("GEMINI_API_KEY"),
-    // gemini-1.5-flash et gemini-2.0-flash ont été retirés ; on cible un modèle
-    // stable et actuel (surchargeable via GEMINI_MODEL, ex. gemini-3.5-flash).
-    model: optional("GEMINI_MODEL", "gemini-2.5-flash"),
+  /// L'assistant intégré. Voir `src/lib/assistant.ts`, seul fichier qui sait
+  /// quel service répond réellement.
+  ///
+  /// ⚠️ DEUX NOMS ACCEPTÉS POUR CHAQUE VALEUR, et l'ancien vient en second.
+  /// Les `.env` déjà en place — production comprise — portent les noms de
+  /// l'époque où le fournisseur était nommé partout. Les renommer d'autorité
+  /// aurait vidé la clé au premier déploiement, et l'assistant serait tombé en
+  /// « indisponible » sans que rien ne l'explique. Le jour où les `.env` sont
+  /// migrés, la seconde forme peut disparaître.
+  assistant: {
+    apiKey: optional("ASSISTANT_API_KEY") || optional("GEMINI_API_KEY"),
+    // Modèle courant, surchargeable sans redéploiement.
+    model:
+      optional("ASSISTANT_MODEL") ||
+      optional("GEMINI_MODEL") ||
+      "gemini-2.5-flash",
   },
 
   media: {
