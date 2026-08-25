@@ -26,7 +26,29 @@ model User {
   // Les noms de champ Prisma restent inchangés → code applicatif et contrat API intacts ;
   // seuls les noms de colonnes Postgres changent via @map (UUID conservés).
   id            String   @id @default(uuid()) @map("alanyaID") @db.Uuid
-  email         String   @unique @db.VarChar(100)
+  /// NULLABLE depuis le 25/08/2026 : l'adresse est devenue FACULTATIVE à
+  /// l'inscription. Elle ne sert qu'à reprendre le compte ; sans elle, c'est
+  /// [idRecuperation] qui joue ce rôle.
+  ///
+  /// ⚠️ L'unicité est conservée et reste correcte : PostgreSQL considère deux
+  /// NULL comme distincts, autant de comptes sans adresse peuvent donc
+  /// coexister. C'est le comportement par défaut, pas un réglage — ne pas
+  /// ajouter `NULLS NOT DISTINCT`, qui interdirait le deuxième compte sans
+  /// adresse.
+  email         String?  @unique @db.VarChar(100)
+  /// Identifiant de reprise du compte, pour qui s'inscrit SANS adresse.
+  ///
+  /// 🔴 C'EST UN SECRET : le présenter suffit à réinitialiser le mot de passe
+  /// (`POST /api/auth/reset-password`). Il est tiré au sort, montré une seule
+  /// fois à l'inscription, et les tentatives sont plafonnées.
+  ///
+  /// `null` pour tout compte ouvert AVEC une adresse — celle-ci suffit alors à
+  /// la reprise, et émettre un second secret n'ajouterait qu'une chose à
+  /// perdre. Null aussi pour les comptes antérieurs au 25/08/2026.
+  ///
+  /// Forme : 10 symboles de l'alphabet de Crockford, majuscules, sans
+  /// séparateur — voir `src/lib/id-recuperation.ts`, qui la tient.
+  idRecuperation String? @unique @map("idRecuperation") @db.VarChar(10)
   passwordHash  String?  @map("password") @db.VarChar(255)
   /// VarChar(20) depuis le 30/07/2026, pour suivre le référentiel équipe.
   /// L'unicité est CONSERVÉE, contrairement à leur fichier : sans elle, deux

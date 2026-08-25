@@ -17,8 +17,20 @@ export const emailSchema = z
   .email("Email invalide")
   .max(100, "Email trop long (100 caractères maximum)");
 
+/**
+ * L'adresse est FACULTATIVE depuis le 25/08/2026.
+ *
+ * Absente, l'inscription saute entièrement l'étape du code de confirmation : il
+ * n'y a rien à confirmer, et le compte est ouvert immédiatement avec un
+ * identifiant de récupération. Voir `POST /api/auth/register`.
+ *
+ * ⚠️ `.optional()` ET NON une chaîne vide acceptée : un client qui envoie
+ * `email: ""` doit recevoir une erreur de validation, pas se retrouver
+ * silencieusement inscrit sans adresse. Ne pas fournir le champ est une
+ * intention ; l'envoyer vide est une erreur de formulaire.
+ */
 export const registerSchema = z.object({
-  email: emailSchema,
+  email: emailSchema.optional(),
 });
 
 export const verifySchema = z.object({

@@ -33,7 +33,14 @@ export async function POST(req: NextRequest) {
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user || !user.emailVerified) return fail("Compte non vérifié par OTP", 400, "NOT_VERIFIED");
+    // ⚠️ L'ADRESSE EST EXIGÉE ICI, contrairement à `/api/auth/setup` : cette
+    // route n'existe qu'au bout du parcours OTP, et elle se sert de l'adresse
+    // comme graine de l'avatar. Depuis que `email` est nullable (25/08/2026),
+    // le contrôle le dit au lieu de le supposer — un compte ouvert SANS adresse
+    // a `emailVerified = false` et n'arrivait donc déjà jamais jusqu'ici.
+    if (!user || !user.email || !user.emailVerified) {
+      return fail("Compte non vérifié par OTP", 400, "NOT_VERIFIED");
+    }
 
     const passwordHash = await hashPassword(password);
 

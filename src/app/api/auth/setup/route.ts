@@ -29,7 +29,24 @@ export async function POST(req: NextRequest) {
       setupSchema.parse(await req.json());
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user || !user.emailVerified) return fail("Compte non vérifié", 400, "NOT_VERIFIED");
+    if (!user) return fail("Compte non vérifié", 400, "NOT_VERIFIED");
+    /*
+     * ⚠️ LE CONTRÔLE PORTE SUR L'ADRESSE, PLUS SUR LE SEUL DRAPEAU.
+     *
+     * Il lisait `!user.emailVerified`. Depuis que l'adresse est facultative
+     * (25/08/2026), un compte ouvert sans adresse a `emailVerified = false`
+     * pour de bon — il n'y a rien à vérifier — et cette garde l'aurait bloqué
+     * juste avant le choix de son mot de passe, avec « Compte non vérifié »
+     * pour toute explication.
+     *
+     * La règle réelle n'a pas changé : une adresse déclarée doit avoir été
+     * confirmée. Sans adresse, il n'y a pas d'affirmation à prouver, et c'est
+     * le `setupToken` — signé par nous, à l'instant, pour ce compte — qui fait
+     * seul autorité.
+     */
+    if (user.email !== null && !user.emailVerified) {
+      return fail("Compte non vérifié", 400, "NOT_VERIFIED");
+    }
     if (user.passwordHash) return fail("Compte déjà configuré", 409, "ALREADY_SETUP");
 
     if (idPays != null) {
