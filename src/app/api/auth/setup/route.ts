@@ -7,6 +7,7 @@ import { hashPassword } from "@/lib/password";
 import { verifyAccessToken } from "@/lib/jwt";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { recordAccess } from "@/lib/user-access";
+import { normaliserTelephone } from "@/lib/telephone.mjs";
 
 // POST /api/auth/setup
 // Étape finale d'inscription : choix du pseudo + mot de passe + pays.
@@ -49,10 +50,36 @@ export async function POST(req: NextRequest) {
     }
     if (user.passwordHash) return fail("Compte déjà configuré", 409, "ALREADY_SETUP");
 
+    /*
+     * Le pays doit EXISTER dans la table de référence — ce contrôle était déjà
+     * là et il est bon. Ce qui manquait, c'est que les clients envoient le BON
+     * identifiant : chacun portait sa propre liste codée en dur, et le mobile
+     * disait « 1 = Cameroun » quand la table dit « 1 = Afrique du Sud ». Le
+     * contrôle passait donc sans rien détecter — l'identifiant existait, il
+     * désignait simplement un autre pays. Les deux clients lisent désormais
+     * `GET /api/pays`, devenue publique pour cette raison.
+     */
+    let prefixePays = "";
     if (idPays != null) {
       const pays = await prisma.pays.findUnique({ where: { idPays } });
       if (!pays) return fail("Pays introuvable", 404, "PAYS_NOT_FOUND");
+      prefixePays = pays.prefix;
     }
+
+    /*
+     * 🔴 LE NUMÉRO EST NORMALISÉ ICI, ET C'EST LE SERVEUR QUI FAIT FOI.
+     *
+     * `users.mobile` est UNIQUE. Deux formes du même numéro — « 657308298 » et
+     * « +237657308299 », les deux constatées en production le 25/08/2026 — ne
+     * se ressemblent pas pour PostgreSQL : la même personne peut s'inscrire
+     * deux fois, et la recherche par numéro n'en trouve qu'une.
+     *
+     * Les clients formatent aussi, pour l'affichage ; mais laisser la forme
+     * stockée dépendre d'eux reviendrait à avoir autant de conventions que de
+     * clients. La règle vit dans `src/lib/telephone.mjs`, seul endroit que les
+     * trois traversent.
+     */
+    const mobileNormalise = mobile ? normaliserTelephone(mobile, prefixePays) : null;
 
     const passwordHash = await hashPassword(password);
 
@@ -63,7 +90,7 @@ export async function POST(req: NextRequest) {
         passwordHash,
         pseudo,
         nom: nom ?? null,
-        mobile: mobile ?? null,
+        mobile: mobileNormalise,
         idPays: idPays ?? null,
         typeCompte: 0,
       },
@@ -82,7 +109,7 @@ export async function POST(req: NextRequest) {
           // Le client affiche ce champ comme nom — voir `nomAffichage`.
           pseudo: nomAffichage({ nom, pseudo, publicNumber: user.publicNumber }),
           nom: nom ?? null,
-          mobile: mobile ?? null,
+          mobile: mobileNormalise,
           idPays: idPays ?? null,
           typeCompte: 0,
         },
