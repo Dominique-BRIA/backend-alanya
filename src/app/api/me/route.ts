@@ -20,6 +20,20 @@ export async function GET(req: NextRequest) {
     return ok({
       id: user.id,
       email: user.email,
+      /**
+       * Le compte porte-t-il un identifiant de récupération ?
+       *
+       * 🔴 UN BOOLÉEN, JAMAIS L'IDENTIFIANT LUI-MÊME. Ce profil est chargé à
+       * chaque ouverture de l'application, journalisé par les proxys et gardé
+       * en cache par les clients : y mettre le secret le sèmerait dans dix
+       * endroits qui n'ont aucune raison de le connaître. Il ne se demande
+       * qu'explicitement, à `GET /api/account/recovery-id`.
+       *
+       * Savoir qu'il EXISTE suffit à l'écran des réglages pour décider
+       * d'afficher l'entrée « Voir mon identifiant » ou, à l'inverse,
+       * « Ajouter une adresse ».
+       */
+      aIdRecuperation: user.idRecuperation !== null,
       publicNumber: user.publicNumber,
       pseudo: nomAffichage(user),
       avatarUrl: avatarPublicUrl(user.avatarUrl ?? null),
