@@ -1,3 +1,4 @@
+import http from "node:http";
 // Le cote API du PONT INTERNE : d'ici, une route REST peut prevenir une salle
 // de reunion ouverte.
 //
@@ -19,17 +20,83 @@
 // On journalise, on rend `false`, on continue. Un pont casse degrade
 // l'affichage ; il ne doit pas casser l'action.
 
-/// Ou joindre l'ecouteur interne. Reglable pour le jour ou le port par defaut
-/// entre en conflit, mais l'ecouteur d'en face ne repond que sur la boucle
-/// locale : le pointer ailleurs ne suffirait pas a franchir une machine.
-const URL_PONT = (process.env.WS_INTERNAL_URL ?? "http://127.0.0.1:3002").replace(
-  /\/+$/,
-  "",
-);
+/// PAR DEFAUT, UNE SOCKET DE FICHIER — rien a configurer, rien a faire fuiter.
+///
+/// Les deux processus vivent sur la meme machine : ils se parlent par un
+/// fichier, et ce sont les permissions du systeme qui autorisent. Aucun port
+/// n'est ouvert, aucun secret n'existe, donc aucun secret ne peut manquer ni
+/// fuiter.
+const SOCKET_PONT = process.env.WS_INTERNAL_SOCKET ?? "";
 
-/// Secret partage avec `ws-server.mjs`. Sans lui l'ecouteur d'en face ne demarre
-/// meme pas : inutile d'essayer de le joindre.
+/// LE RESEAU, quand l'API et le serveur temps reel vivent sur deux machines.
+///
+/// La bascule ne se DEVINE pas — ce processus ne peut pas savoir ou tourne
+/// l'autre. C'est la configuration qui la declare : poser cette URL, c'est dire
+/// « l'ecouteur est ailleurs ». Le secret devient alors obligatoire des deux
+/// cotes, et l'ecouteur d'en face refuse de demarrer sans lui.
+const URL_PONT = (process.env.WS_INTERNAL_URL ?? "").replace(/\/+$/, "");
 const SECRET_PONT = process.env.WS_INTERNAL_SECRET ?? "";
+const PAR_RESEAU = URL_PONT !== "";
+
+/// Le chemin de la socket, quand on n'est pas en reseau. Le meme defaut que
+/// `ws-server.mjs`, et pour la meme raison : que le cas courant ne demande
+/// AUCUNE variable.
+/** Ce que les deux transports rendent en commun. */
+interface ReponsePont {
+  ok: boolean;
+  status: number;
+}
+
+/** Par la socket de fichier — le cas courant, sans configuration ni secret. */
+function viaSocket(corps: string): Promise<ReponsePont> {
+  return new Promise((resoudre, rejeter) => {
+    const requete = http.request(
+      {
+        socketPath: cheminSocket(),
+        path: CHEMIN_PONT,
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(corps),
+        },
+        timeout: DELAI_MS,
+      },
+      (rep) => {
+        // Le corps est consomme meme si l'on n'en fait rien : une reponse
+        // laissee en suspens garde sa connexion ouverte.
+        rep.resume();
+        rep.on("end", () =>
+          resoudre({ ok: (rep.statusCode ?? 0) < 400, status: rep.statusCode ?? 0 }),
+        );
+      },
+    );
+    requete.on("timeout", () => requete.destroy(new Error("delai depasse")));
+    requete.on("error", rejeter);
+    requete.end(corps);
+  });
+}
+
+/** Par le reseau — deux machines, et le secret devient obligatoire. */
+async function viaReseau(corps: string): Promise<ReponsePont> {
+  const rep = await fetch(`${URL_PONT}${CHEMIN_PONT}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      [ENTETE_PONT]: SECRET_PONT,
+    },
+    body: corps,
+    signal: AbortSignal.timeout(DELAI_MS),
+    // Next.js instrumente `fetch` : une diffusion rejouee depuis un cache
+    // n'aurait aucun sens.
+    cache: "no-store",
+  });
+  await rep.text().catch(() => "");
+  return { ok: rep.ok, status: rep.status };
+}
+
+function cheminSocket(): string {
+  return SOCKET_PONT || `${process.cwd()}/.ws-interne.sock`;
+}
 
 const CHEMIN_PONT = "/interne/salle/diffuser";
 const ENTETE_PONT = "x-alanya-interne";
@@ -112,22 +179,14 @@ export async function previensLaSalle(params: {
   }
 
   try {
-    const reponse = await fetch(`${URL_PONT}${CHEMIN_PONT}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        [ENTETE_PONT]: SECRET_PONT,
-      },
-      body: JSON.stringify({ salle: meetingId, type, donnees, exclure }),
-      signal: AbortSignal.timeout(DELAI_MS),
-      // Next.js instrumente `fetch` : on lui dit explicitement de ne rien
-      // retenir. Un appel de diffusion rejoue depuis un cache n'aurait aucun
-      // sens.
-      cache: "no-store",
-    });
-    // Le corps est consomme meme quand on n'en fait rien : une reponse laissee
-    // en suspens garde sa connexion ouverte cote agent HTTP.
-    await reponse.text().catch(() => "");
+    const corps = JSON.stringify({ salle: meetingId, type, donnees, exclure });
+    const reponse = PAR_RESEAU
+      ? await viaReseau(corps)
+      : // `fetch` ne sait PAS joindre une socket de fichier : il refuse le
+        // schema `unix:` par « unknown scheme » — verifie a l'execution, la
+        // forme `unix:/chemin:/route` est une convention de curl, pas de Node.
+        // `http.request` avec `socketPath`, lui, le fait nativement.
+        await viaSocket(corps);
     if (!reponse.ok) {
       console.error(
         `[salle] pont temps reel : HTTP ${reponse.status} pour ${type} (reunion ${meetingId})`,

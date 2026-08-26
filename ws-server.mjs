@@ -9,6 +9,8 @@ import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { parse } from "node:url";
 import http from "node:http";
+import path from "node:path";
+import fs from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled, pushMeetingReminder } from "./push.mjs";
 // Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
@@ -3872,19 +3874,47 @@ async function envoieRappelsReunion() {
 // exclusions : il accepte un VERBE et une salle, et relaie. C'est ce qui lui
 // permettra de servir l'exclusion et le changement de role sans etre retouche.
 
-/// Port de l'ecouteur interne. Distinct du port WebSocket : deux serveurs, deux
-/// ports.
-const PONT_PORT = Number(process.env.WS_INTERNAL_PORT ?? 3002);
-const PONT_HOTE = "127.0.0.1";
+/// Le pont ne passe PAS par le reseau : il passe par un FICHIER DE SOCKET.
+///
+/// La premiere version ouvrait un port sur la boucle locale, protege par un
+/// secret partage. Ca marchait, mais ca se payait deux fois : une variable
+/// d'environnement de plus a poser — donc a oublier, et le pont ne demarrait
+/// pas — et un mot de passe de plus a ne pas laisser fuiter.
+///
+/// Une socket de fichier supprime les deux. Ce sont les PERMISSIONS DU SYSTEME
+/// DE FICHIERS qui autorisent, et elles sont posees par le systeme, pas par
+/// nous : seuls les processus tournant sous le meme utilisateur peuvent
+/// l'ouvrir. C'est une frontiere plus solide qu'un secret, justement parce
+/// qu'un secret partage ne protege pas de ce qui tourne DEJA sur la machine.
+///
+/// Et il n'y a plus AUCUN port ouvert : l'erreur de configuration qui exposerait
+/// le pont au reseau devient impossible a commettre.
+///
+/// LA LIMITE, a connaitre : l'API et ce serveur doivent vivre sur la MEME
+/// machine. C'est le cas aujourd'hui. Le jour ou on les separera, il faudra
+/// revenir a un port et a un secret — et ce commentaire dira pourquoi.
+const PONT_SOCKET =
+  process.env.WS_INTERNAL_SOCKET ?? path.join(process.cwd(), ".ws-interne.sock");
 
-/// Secret partage avec l'API. MEME SUR LA BOUCLE LOCALE : sans lui, n'importe
-/// quel processus de la machine — un script, une dependance, un utilisateur
-/// connecte en SSH — pourrait diffuser ce qu'il veut dans n'importe quelle
-/// salle. « C'est du localhost » n'est pas une frontiere de confiance.
+/// DEUX MACHINES : on repasse au reseau, et alors le secret redevient
+/// obligatoire.
+///
+/// Une socket de fichier ne traverse pas le reseau. Le jour ou l'API et ce
+/// serveur vivront sur deux machines, il faudra un port — et la, plus rien ne
+/// distingue un appelant legitime d'un autre : le secret redevient la seule
+/// frontiere.
+///
+/// La DETECTION, c'est la configuration elle-meme : personne ne peut deviner
+/// depuis ce processus si l'API tourne ailleurs. Poser WS_INTERNAL_PORT, c'est
+/// declarer qu'on veut le reseau. Rien a poser dans le cas courant.
+const PONT_PORT = process.env.WS_INTERNAL_PORT ? Number(process.env.WS_INTERNAL_PORT) : null;
+/// Vide quand on ecoute sur toutes les interfaces — ce que le deploiement a deux
+/// machines suppose, et qui exige donc le secret.
+const PONT_HOTE = process.env.WS_INTERNAL_HOST ?? "127.0.0.1";
 const PONT_SECRET = process.env.WS_INTERNAL_SECRET ?? "";
-
-/// En-tete qui porte le secret.
 const PONT_ENTETE = "x-alanya-interne";
+/// Vrai quand on doit ecouter sur le reseau plutot que sur la socket de fichier.
+const PONT_PAR_RESEAU = PONT_PORT !== null;
 
 /// Le seul chemin servi. Tout le reste rend 404.
 const PONT_CHEMIN = "/interne/salle/diffuser";
@@ -3969,9 +3999,15 @@ async function pontTraite(req, res) {
     pontRepond(res, 404, { erreur: "NOT_FOUND" });
     return;
   }
-  // Le secret AVANT de lire le corps : un appelant non authentifie ne doit pas
-  // pouvoir nous faire mettre 64 Ko en memoire.
-  if (!pontSecretValide(req.headers[PONT_ENTETE])) {
+  // SUR LA SOCKET DE FICHIER, rien a verifier : l'atteindre suppose deja de
+  // pouvoir ouvrir son fichier, ce que le systeme n'autorise qu'au
+  // proprietaire. Le controle a eu lieu avant nous, et il est plus solide
+  // qu'une comparaison de chaines.
+  //
+  // SUR LE RESEAU, il n'y a plus rien de tel : le secret est verifie AVANT de
+  // lire le corps, pour qu'un inconnu ne puisse pas nous faire mettre 64 Ko en
+  // memoire.
+  if (PONT_PAR_RESEAU && !pontSecretValide(req.headers[PONT_ENTETE])) {
     console.warn("[pont] requete interne refusee : secret invalide ou absent");
     pontRepond(res, 401, { erreur: "UNAUTHORIZED" });
     return;
@@ -4029,32 +4065,73 @@ const pont = http.createServer((req, res) => {
 // port de pont deja pris ferait perdre les rafraichissements de salle ; sortir
 // ferait perdre TOUTE la messagerie temps reel. On crie, et on continue.
 pont.on("error", (err) => {
-  if (err?.code === "EADDRINUSE") {
-    console.error(
-      `[pont] Le port ${PONT_PORT} est deja utilise : l'ecouteur interne ne sert pas. ` +
-        "Les salles ouvertes ne verront pas les changements faits depuis l'API.",
-    );
-  } else {
-    console.error("[pont] ecouteur interne en erreur:", err?.message ?? err);
-  }
+  console.error("[pont] ecouteur interne en erreur:", err?.message ?? err);
 });
 
-// SANS SECRET, RIEN NE S'OUVRE. Ce point d'entree ne doit jamais exister « par
-// defaut » : un pont non protege est pire que pas de pont. Le dire fort au
-// demarrage est la seule chance qu'une absence de configuration se remarque
-// avant qu'un utilisateur ne signale un ecran qui ne bouge pas.
-if (PONT_SECRET) {
-  pont.listen(PONT_PORT, PONT_HOTE, () => {
-    console.log(
-      `[pont] Ecouteur interne a l'ecoute sur http://${PONT_HOTE}:${PONT_PORT}${PONT_CHEMIN} (boucle locale uniquement)`,
+// DEUX FACONS D'ECOUTER, ET UNE SEULE REGLE QUI COMPTE.
+//
+// Par defaut : une socket de FICHIER, sans rien a configurer. Ce sont les
+// permissions du systeme qui autorisent, et aucun port n'est ouvert.
+//
+// Sur le RESEAU, quand on a declare un port parce que l'API vit ailleurs : le
+// secret devient OBLIGATOIRE. Un port ouvert sans secret laisserait n'importe
+// qui diffuser dans n'importe quelle salle — et ce serait d'autant plus grave
+// que ce cas-la est justement celui ou la machine n'est plus seule.
+//
+// C'EST LA FAILLE A NE PAS LAISSER PASSER : poser le port en oubliant le secret
+// ne doit pas donner un pont ouvert, mais un pont FERME et un message qui le
+// dit. On ne demarre jamais « au mieux » sur une question de securite.
+if (PONT_PAR_RESEAU) {
+  if (!PONT_SECRET) {
+    console.error(
+      `[pont] WS_INTERNAL_PORT=${PONT_PORT} est pose mais WS_INTERNAL_SECRET manque : ` +
+        "l'ecouteur interne NE DEMARRE PAS. Un pont reseau sans secret serait ouvert a " +
+        "quiconque atteint ce port. Posez le secret, ou retirez le port pour revenir a la " +
+        "socket de fichier, qui ne demande aucune configuration.",
     );
-  });
+  } else {
+    pont.listen(PONT_PORT, PONT_HOTE, () => {
+      console.log(
+        `[pont] Ecouteur interne a l'ecoute sur http://${PONT_HOTE}:${PONT_PORT}${PONT_CHEMIN} (reseau, secret exige)`,
+      );
+    });
+  }
 } else {
-  console.warn(
-    "[pont] WS_INTERNAL_SECRET manquant : l'ecouteur interne NE DEMARRE PAS. " +
-      "Les changements faits depuis l'API (ajout de participants, exclusion, role) " +
-      "n'atteindront pas les salles deja ouvertes tant qu'il n'est pas configure.",
-  );
+  // Une socket de fichier survit au processus qui l'a creee : apres un arret
+  // brutal, le fichier reste et `listen` echouerait sur EADDRINUSE — un pont
+  // mort a chaque redemarrage, pour un fichier que plus personne n'ecoute.
+  try {
+    fs.unlinkSync(PONT_SOCKET);
+  } catch {
+    // Le fichier n'existait pas : cas normal d'un premier demarrage.
+  }
+
+  pont.listen(PONT_SOCKET, () => {
+    // 0600 : lisible et inscriptible par le seul proprietaire. C'est CETTE ligne
+    // qui remplace le secret partage — un autre utilisateur de la machine ne
+    // peut pas ouvrir la socket, la ou il aurait pu deviner ou lire un mot de
+    // passe.
+    try {
+      fs.chmodSync(PONT_SOCKET, 0o600);
+    } catch (err) {
+      console.error("[pont] permissions de la socket non posees:", err?.message ?? err);
+    }
+    console.log(`[pont] Ecouteur interne a l'ecoute sur ${PONT_SOCKET} (socket de fichier)`);
+  });
+
+  // Retiree a l'arret propre : laisser un fichier mort derriere soi obligerait
+  // le demarrage suivant a le nettoyer, et brouillerait le diagnostic de qui
+  // regarde le dossier.
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      try {
+        fs.unlinkSync(PONT_SOCKET);
+      } catch {
+        // Deja parti, ou jamais cree : rien a faire.
+      }
+      process.exit(0);
+    });
+  }
 }
 
 const wss = new WebSocketServer({ port: PORT });
