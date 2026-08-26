@@ -127,7 +127,21 @@ const selectionEntreprise = {
 export interface ServiceTouche {
   /** Le numéro de touche à composer dans le menu. */
   touche: number;
-  nom: string;
+
+  /**
+   * Le nom du service, ou `null` quand il n'est PAS renseigné.
+   *
+   * 🔴 `null` ET NON UN LIBELLÉ DE REPLI. Le serveur ne fabrique pas de nom :
+   * c'est le client qui affichera « Sans nom », dans la langue de
+   * l'utilisateur — l'application en parle neuf, et un repli écrit ici serait
+   * du français servi à tout le monde.
+   *
+   * ⚠️ Ne pas y mettre « Touche N » non plus : ça RESSEMBLE à un nom de
+   * service, et l'appelant croirait lire un intitulé réel. Le numéro de touche
+   * voyage déjà dans [touche] — le client l'affiche à part, ce qui garde le
+   * geste actionnable sans inventer d'intitulé.
+   */
+  nom: string | null;
 }
 
 export interface CentreEntreprise {
@@ -175,33 +189,19 @@ export async function centresDeLEntreprise(idCompany: number): Promise<CentreEnt
           .filter((t) => t.center_alanyaID === compte.id)
           .map((t) => ({
             touche: t.menuNro,
-            /*
-             * ⚠️ REPLI SUR « Touche N », ET NON SUR LE NOM DU CENTRE VOCAL.
-             *
-             * La règle posée le 18/08/2026 pour un `titre` vide est bien le nom
-             * du centre — mais elle vaut pour l'ÉCRAN D'APPEL, où il s'agit de
-             * dire à l'appelant sur quoi il vient de tomber, et où une seule
-             * ligne est montrée à la fois.
-             *
-             * Ici, la fiche liste les SIX touches SOUS le nom du centre, qui
-             * sert déjà de titre. Y appliquer la même règle afficherait six fois
-             * « Serveur vocal orange Telecom » — un menu qui ne distingue plus
-             * rien. Le numéro de touche, lui, reste actionnable : c'est ce que
-             * l'appelant devra composer.
-             *
-             * Les six touches de la production ont un `titre` VIDE au
-             * 25/08/2026 ; ce repli n'est donc pas un cas de bord, c'est ce qui
-             * s'affiche aujourd'hui.
-             */
-            nom: (t.titre ?? "").trim() || `Touche ${t.menuNro}`,
+            // Vide en base → `null`. Les six touches vocales de la production
+            // sont dans ce cas au 25/08/2026 : ce n'est pas un cas de bord,
+            // c'est ce que l'écran affichera.
+            nom: (t.titre ?? "").trim() || null,
           }))
       : touchesAppel
           .filter((t) => t.center_alanyaID === compte.id)
           .map((t) => ({
             touche: t.menuNro ?? 0,
             // `nom_service` est le nom À MONTRER à l'appelant ; `libelle` est le
-            // nom interne de la ligne et ne sert que de repli.
-            nom: (t.nomService ?? "").trim() || (t.libelle ?? "").trim() || `Touche ${t.menuNro ?? 0}`,
+            // nom interne de la ligne et ne sert que de repli. Les deux vides →
+            // `null`, et c'est le client qui dira « Sans nom ».
+            nom: (t.nomService ?? "").trim() || (t.libelle ?? "").trim() || null,
           }));
 
     // Dédoublonné par touche : la plateforme de l'équipe peut poser plusieurs
