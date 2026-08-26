@@ -156,6 +156,16 @@ export const updateProfileSchema = z.object({
   pseudo: z.string().trim().min(2).max(50, "Pseudo trop long (50 caractères maximum)").optional(),
   avatarUrl: z.string().trim().max(2048).regex(/^(https?:\/\/[^\s]+|\/api\/media\/[a-zA-Z0-9-]+)$/, "avatarUrl invalide").nullable().optional(),
   statusMsg: z.string().trim().max(255).nullable().optional(),
+  /**
+   * Le pays du compte, depuis `GET /api/pays`.
+   *
+   * ⚠️ IL NE TOUCHE PAS AU NUMÉRO DÉJÀ ENREGISTRÉ. Un numéro appartient à
+   * l'opérateur qui l'a attribué, pas au pays où l'on vit : quelqu'un peut
+   * déménager en France en gardant sa ligne camerounaise. Renormaliser
+   * `users.mobile` sur le nouvel indicatif transformerait un numéro juste en
+   * numéro faux.
+   */
+  idPays: z.number().int().positive().nullable().optional(),
 });
 
 export const addContactSchema = z.object({

@@ -74,6 +74,27 @@ export function normaliserTelephone(saisie, prefixePays) {
   let n = chiffres(saisie);
   if (n === "") return "";
 
+  /*
+   * 🔴 UN « + » EN TÊTE DIT « CE NUMÉRO EST DÉJÀ COMPLET » — on n'y ajoute
+   * rien.
+   *
+   * Sans cette sortie, l'indicatif du compte était collé devant un numéro
+   * étranger : constaté le 26/08/2026 en changeant de numéro depuis un compte
+   * déclaré en France, « +221 34543678 » ressortait « +3322134543678 ». Le
+   * numéro devenait injoignable, et la colonne est UNIQUE — deux personnes
+   * pouvaient donc se retrouver avec des chaînes fausses et distinctes.
+   *
+   * Le cas est fréquent et légitime : on vit dans un pays et on garde une ligne
+   * d'un autre. C'est même la raison pour laquelle changer de pays ne touche
+   * pas au numéro.
+   *
+   * ⚠️ Le test porte sur la SAISIE BRUTE, pas sur `n` : `chiffres()` a déjà
+   * retiré le « + », et l'information serait perdue.
+   */
+  if (typeof saisie === "string" && saisie.trim().startsWith("+")) {
+    return `+${n}`;
+  }
+
   const indicatif = chiffres(prefixePays);
 
   // « 00 » international : la forme longue de « + ».
@@ -182,6 +203,33 @@ if (process.argv[1] && process.argv[1].endsWith("telephone.mjs")) {
     "indicatif redoublé : laissé tel quel, pas deviné",
     normaliserTelephone("+237237691234567", "+237"),
     "+237237691234567",
+  );
+
+  /*
+   * 🔴 LE CAS QUI A COÛTÉ UN NUMÉRO FAUX (26/08/2026).
+   *
+   * Un numéro ÉTRANGER, saisi avec son « + », sur un compte déclaré dans un
+   * AUTRE pays. Sans la sortie anticipée, l'indicatif du compte se collait
+   * devant : « +221… » sur un compte français donnait « +33221… », un numéro
+   * que personne ne peut appeler — et la colonne `users.mobile` est UNIQUE.
+   *
+   * Le cas est légitime et courant : on vit dans un pays, on garde une ligne
+   * d'un autre.
+   */
+  verifie(
+    "numéro étranger avec son +, compte dans un autre pays",
+    normaliserTelephone("+221 34543678", "+33"),
+    "+22134543678",
+  );
+  verifie(
+    "et l'inverse : ligne camerounaise, compte français",
+    normaliserTelephone("+237 6 91 23 45 67", "+33"),
+    "+237691234567",
+  );
+  verifie(
+    "sans « + », le numéro reste national : l'indicatif du compte s'applique",
+    normaliserTelephone("612345678", "+33"),
+    "+33612345678",
   );
   verifie("saisie vide", normaliserTelephone("", "+237"), "");
   verifie("que des séparateurs", normaliserTelephone("  -- ", "+237"), "");
