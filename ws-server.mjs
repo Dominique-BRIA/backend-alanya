@@ -8,6 +8,8 @@ import { WebSocketServer } from "ws";
 import { PrismaClient } from "@prisma/client";
 import jwt from "jsonwebtoken";
 import { parse } from "node:url";
+import http from "node:http";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled, pushMeetingReminder } from "./push.mjs";
 // Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
 // raison du JavaScript plutôt que du TypeScript.
@@ -3218,14 +3220,26 @@ function messageSallePleine(typeMedia, limite) {
   );
 }
 
+/// Diffuse dans une salle. Rend le NOMBRE de sockets effectivement servies.
+///
+/// Ce compte n'interesse aucun des appelants historiques — ils l'ignorent — mais
+/// il est la seule reponse honnete que le pont interne puisse rendre a l'API :
+/// « personne n'ecoutait » et « la salle a recu » ne se distinguent pas
+/// autrement, et c'est exactement ce qu'on veut lire dans un journal quand un
+/// ecran ne se rafraichit pas.
 function sendToMeeting(meetingId, payload, excludeUserId) {
   const room = meetingRooms.get(meetingId);
-  if (!room) return;
+  if (!room) return 0;
   const data = JSON.stringify(payload);
+  let servies = 0;
   for (const [uid, ws] of room) {
     if (uid === excludeUserId) continue;
-    if (ws.readyState === ws.OPEN) ws.send(data);
+    if (ws.readyState === ws.OPEN) {
+      ws.send(data);
+      servies += 1;
+    }
   }
+  return servies;
 }
 
 async function handleMeetingJoin(ws, msg) {
@@ -3826,6 +3840,223 @@ async function envoieRappelsReunion() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// PONT INTERNE — comment l'API HTTP atteint une salle ouverte
+// ---------------------------------------------------------------------------
+//
+// LE MANQUE QU'IL COMBLE. L'API Next.js et ce serveur sont DEUX PROCESSUS
+// SEPARES. Une route REST qui modifie une reunion — ajouter quelqu'un,
+// l'exclure, changer un role — ecrit en base et n'a AUCUN moyen de le dire aux
+// sockets ouvertes : elles vivent ici, et ici seulement. Les gens deja dans la
+// salle ne voyaient donc bouger ni le compteur ni la liste, et devaient sortir
+// et revenir. Le seul pont qui existait, la notification poussee, vise des
+// APPAREILS par leur jeton — pas une salle : elle reveille les nouveaux ajoutes
+// et personne d'autre.
+//
+// UN SECOND ECOUTEUR, PAS UNE REFONTE. `new WebSocketServer({ port })` cree son
+// propre serveur HTTP et n'expose aucune route. Le restructurer pour y greffer
+// un chemin toucherait le demarrage d'un process critique, qui n'a aucune raison
+// de changer. On ouvre donc un ecouteur SEPARE, sur son propre port ; le serveur
+// WebSocket, lui, demarre exactement comme avant.
+//
+// 127.0.0.1 ET SEULEMENT LA. L'hote est passe explicitement a `listen`. Sans
+// lui, Node ecoute sur TOUTES les interfaces et ce point d'entree — qui diffuse
+// dans n'importe quelle salle — devient joignable depuis le reseau.
+//
+// CONSEQUENCE DE DEPLOIEMENT, a savoir avant de scinder les machines : l'API et
+// ce process doivent tourner sur le MEME hote. Le jour ou ils se separent, ce
+// n'est pas l'hote d'ecoute qu'il faut elargir, c'est un reseau prive qu'il faut
+// poser entre les deux.
+//
+// GENERAL PAR CONSTRUCTION. Le pont ne connait ni participants, ni roles, ni
+// exclusions : il accepte un VERBE et une salle, et relaie. C'est ce qui lui
+// permettra de servir l'exclusion et le changement de role sans etre retouche.
+
+/// Port de l'ecouteur interne. Distinct du port WebSocket : deux serveurs, deux
+/// ports.
+const PONT_PORT = Number(process.env.WS_INTERNAL_PORT ?? 3002);
+const PONT_HOTE = "127.0.0.1";
+
+/// Secret partage avec l'API. MEME SUR LA BOUCLE LOCALE : sans lui, n'importe
+/// quel processus de la machine — un script, une dependance, un utilisateur
+/// connecte en SSH — pourrait diffuser ce qu'il veut dans n'importe quelle
+/// salle. « C'est du localhost » n'est pas une frontiere de confiance.
+const PONT_SECRET = process.env.WS_INTERNAL_SECRET ?? "";
+
+/// En-tete qui porte le secret.
+const PONT_ENTETE = "x-alanya-interne";
+
+/// Le seul chemin servi. Tout le reste rend 404.
+const PONT_CHEMIN = "/interne/salle/diffuser";
+
+/// Plafond du corps. Le pont ne transporte que des codes et quelques
+/// identifiants : au-dela, c'est une erreur ou un abus, et lire sans borne
+/// laisserait un seul appelant gonfler la memoire du process.
+const PONT_CORPS_MAX = 64 * 1024;
+
+/// Les verbes admis. Restreindre au vocabulaire des salles empeche ce point
+/// d'entree de devenir un injecteur de messages quelconques — il ne doit pas
+/// pouvoir emettre un `ready` ou un `error` que les clients traitent a part.
+/// Reste ouvert a tout `meeting_*` a venir : rien a modifier ici pour
+/// l'exclusion ou le changement de role.
+const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
+
+/// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
+/// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines
+/// brutes avec `===` laisserait fuir le secret caractere par caractere.
+function pontSecretValide(fourni) {
+  if (typeof fourni !== "string" || fourni.length === 0) return false;
+  const propose = createHash("sha256").update(fourni).digest();
+  const attendu = createHash("sha256").update(PONT_SECRET).digest();
+  return timingSafeEqual(propose, attendu);
+}
+
+function pontRepond(res, code, corps) {
+  // Un appelant qui a coupe laisse une reponse morte : ecrire dedans leverait
+  // une erreur pour rien.
+  if (res.destroyed || res.writableEnded) return;
+  const data = JSON.stringify(corps);
+  res.writeHead(code, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(data),
+  });
+  res.end(data);
+}
+
+/// Lit le corps en refusant de depasser `PONT_CORPS_MAX`.
+///
+/// Au-dela, on rejette MAIS ON CONTINUE DE LIRE SANS RIEN RETENIR : couper la
+/// requete ici empecherait de renvoyer le 413 a l'appelant, qui ne saurait pas
+/// pourquoi il a echoue. La memoire, elle, reste bornee — les morceaux
+/// suivants sont jetes au fil de l'eau, et la promesse deja rejetee ignore la
+/// suite.
+function pontLitLeCorps(req) {
+  return new Promise((resolve, reject) => {
+    const morceaux = [];
+    let taille = 0;
+    let depasse = false;
+    req.on("data", (morceau) => {
+      if (depasse) return;
+      taille += morceau.length;
+      if (taille > PONT_CORPS_MAX) {
+        depasse = true;
+        morceaux.length = 0;
+        reject(new Error("CORPS_TROP_GROS"));
+        return;
+      }
+      morceaux.push(morceau);
+    });
+    req.on("end", () => resolve(Buffer.concat(morceaux).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * Diffuse un verbe dans une salle, a la demande de l'API.
+ *
+ * Corps attendu :
+ *   { salle: <idMeeting>, type: "meeting_*", donnees?: {...}, exclure?: <userId> }
+ *
+ * `donnees` est etale AVANT `type` et `meetingId` : l'appelant ne peut donc pas
+ * ecraser l'un ni l'autre en glissant une cle du meme nom.
+ *
+ * AUCUN TEXTE AFFICHABLE n'est fabrique ici, et il ne faut pas commencer : ce
+ * qui traverse est un CODE, que le client traduit dans sa langue.
+ */
+async function pontTraite(req, res) {
+  const chemin = (req.url ?? "").split("?")[0];
+  if (req.method !== "POST" || chemin !== PONT_CHEMIN) {
+    pontRepond(res, 404, { erreur: "NOT_FOUND" });
+    return;
+  }
+  // Le secret AVANT de lire le corps : un appelant non authentifie ne doit pas
+  // pouvoir nous faire mettre 64 Ko en memoire.
+  if (!pontSecretValide(req.headers[PONT_ENTETE])) {
+    console.warn("[pont] requete interne refusee : secret invalide ou absent");
+    pontRepond(res, 401, { erreur: "UNAUTHORIZED" });
+    return;
+  }
+
+  let corps;
+  try {
+    corps = JSON.parse(await pontLitLeCorps(req));
+  } catch (e) {
+    if (e?.message === "CORPS_TROP_GROS") {
+      pontRepond(res, 413, { erreur: "BODY_TOO_LARGE" });
+    } else {
+      pontRepond(res, 400, { erreur: "BAD_JSON" });
+    }
+    return;
+  }
+
+  // Les cles de `meetingRooms` sont les nombres recus des clients WebSocket :
+  // une salle passee en chaine par l'API ne trouverait jamais sa Map.
+  const salle = Number(corps?.salle);
+  if (!Number.isInteger(salle) || salle <= 0) {
+    pontRepond(res, 400, { erreur: "BAD_ROOM" });
+    return;
+  }
+  const verbe = typeof corps?.type === "string" ? corps.type : "";
+  if (!PONT_VERBE.test(verbe)) {
+    pontRepond(res, 400, { erreur: "BAD_TYPE" });
+    return;
+  }
+  const donnees =
+    corps?.donnees && typeof corps.donnees === "object" && !Array.isArray(corps.donnees)
+      ? corps.donnees
+      : {};
+  const exclure = typeof corps?.exclure === "string" ? corps.exclure : undefined;
+
+  // Une salle vide n'est PAS une erreur : personne n'etait connecte, la
+  // modification en base reste valide, et l'API n'a rien a rattraper. Elle rend
+  // 0 et le dit dans sa reponse.
+  const servies = sendToMeeting(salle, { ...donnees, type: verbe, meetingId: salle }, exclure);
+  pontRepond(res, 200, { ok: true, servies });
+}
+
+const pont = http.createServer((req, res) => {
+  pontTraite(req, res).catch((e) => {
+    console.error("[pont] requete interne:", e?.message ?? e);
+    try {
+      pontRepond(res, 500, { erreur: "INTERNAL" });
+    } catch {
+      // En-tetes deja envoyes : plus rien a dire au client, la trace suffit.
+    }
+  });
+});
+
+// NE TUE PAS LE PROCESS, contrairement au serveur WebSocket juste dessous. Un
+// port de pont deja pris ferait perdre les rafraichissements de salle ; sortir
+// ferait perdre TOUTE la messagerie temps reel. On crie, et on continue.
+pont.on("error", (err) => {
+  if (err?.code === "EADDRINUSE") {
+    console.error(
+      `[pont] Le port ${PONT_PORT} est deja utilise : l'ecouteur interne ne sert pas. ` +
+        "Les salles ouvertes ne verront pas les changements faits depuis l'API.",
+    );
+  } else {
+    console.error("[pont] ecouteur interne en erreur:", err?.message ?? err);
+  }
+});
+
+// SANS SECRET, RIEN NE S'OUVRE. Ce point d'entree ne doit jamais exister « par
+// defaut » : un pont non protege est pire que pas de pont. Le dire fort au
+// demarrage est la seule chance qu'une absence de configuration se remarque
+// avant qu'un utilisateur ne signale un ecran qui ne bouge pas.
+if (PONT_SECRET) {
+  pont.listen(PONT_PORT, PONT_HOTE, () => {
+    console.log(
+      `[pont] Ecouteur interne a l'ecoute sur http://${PONT_HOTE}:${PONT_PORT}${PONT_CHEMIN} (boucle locale uniquement)`,
+    );
+  });
+} else {
+  console.warn(
+    "[pont] WS_INTERNAL_SECRET manquant : l'ecouteur interne NE DEMARRE PAS. " +
+      "Les changements faits depuis l'API (ajout de participants, exclusion, role) " +
+      "n'atteindront pas les salles deja ouvertes tant qu'il n'est pas configure.",
+  );
+}
+
 const wss = new WebSocketServer({ port: PORT });
 
 wss.on("error", (err) => {
@@ -4013,6 +4244,9 @@ wss.on("close", () => clearInterval(heartbeat));
 
 process.on("SIGINT", async () => {
   clearInterval(heartbeat);
+  // Ferme le pont avant la base : une requete interne en vol ecrirait sinon sur
+  // une socket dont le process s'en va.
+  pont.close();
   await prisma.$disconnect();
   process.exit(0);
 });

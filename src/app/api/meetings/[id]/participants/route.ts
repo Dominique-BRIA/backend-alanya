@@ -6,6 +6,7 @@ import { addMeetingParticipantsSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { notifieInvitationReunion } from "@/lib/push";
+import { previensChangementParticipants } from "@/lib/salle-temps-reel";
 import {
   occupantsContingent,
   plafondReunion,
@@ -131,6 +132,34 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     );
   }
 
+  // ET PRÉVENIR CEUX QUI SONT DÉJÀ DANS LA SALLE.
+  //
+  // Les notifications ci-dessus visent des APPAREILS par leur jeton : elles
+  // réveillent les nouveaux ajoutés, et personne d'autre. Les participants déjà
+  // en réunion ne voyaient bouger ni le compteur ni la liste, et devaient
+  // sortir puis revenir. Leurs sockets vivent dans l'autre process ; le pont
+  // interne est le seul chemin qui y mène depuis ici.
+  //
+  // APRÈS l'écriture en base, jamais avant : le message dit « relisez », et une
+  // relecture partie trop tôt rapporterait l'ancienne liste.
+  //
+  // `previensChangementParticipants` NE LÈVE PAS. Serveur temps réel arrêté ou
+  // pont non configuré, les participants sont déjà enregistrés : l'ajout reste
+  // valide et la route répond son succès. On perd le rafraîchissement immédiat,
+  // rien d'autre — et le journal le dit.
+  //
+  // Rien n'est émis quand `aAjouter` est vide : le geste a abouti, mais la
+  // composition de la salle n'a pas changé, et renvoyer tout le monde relire
+  // une liste identique serait du bruit.
+  if (aAjouter.length > 0) {
+    await previensChangementParticipants({
+      meetingId: id,
+      motif: "PARTICIPANTS_ADDED",
+      parUserId: userId,
+      nombre: aAjouter.length,
+    });
+  }
+
   // La liste complète à jour, pour que le client n'ait pas à recharger.
   const participants = await prisma.meetingParticipant.findMany({
     where: { idMeeting: id },
@@ -168,11 +197,15 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
 // un exclu ne doit pas pouvoir rentrer par la porte du join, qui ne vérifie que
 // l'existence de la ligne.
 //
-// Le départ du salon temps réel n'est pas force ici : ce process n'a aucun
-// moyen de parler au serveur WebSocket, qui tourne à part. L'exclu garde donc
-// son flux jusqu'à ce qu'il quitte ou que la réunion se termine. C'est la
-// limite connue de l'architecture, et elle vaut d'être écrite plutôt que
-// découverte.
+// Le départ du salon temps réel n'est toujours pas forcé ici, et l'exclu garde
+// son flux jusqu'à ce qu'il quitte ou que la réunion se termine.
+//
+// ⚠️ CE N'EST PLUS UNE LIMITE D'ARCHITECTURE, c'est un chantier à faire. Le
+// pont interne (`@/lib/salle-temps-reel`) donne désormais à cette route un
+// chemin vers la salle — le POST juste au-dessus s'en sert. Il reste à décider
+// ce que le serveur temps réel fait d'une exclusion : prévenir la salle ne
+// suffit pas, il faut aussi fermer la place de l'exclu, ce qui touche
+// `meetingRooms` et non seulement la diffusion.
 export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const id = Number((await ctx.params).id);
   if (isNaN(id) || id <= 0) return fail("ID invalide", 400, "BAD_ID");
