@@ -39,6 +39,19 @@ export async function GET(req: NextRequest) {
       avatarUrl: avatarPublicUrl(user.avatarUrl ?? null),
       statusMsg: user.statusMsg ?? null,
       nom: user.nom ?? null,
+      /**
+       * Le numéro de LIGNE déclaré par l'utilisateur, en forme canonique.
+       *
+       * ⚠️ À NE PAS CONFONDRE AVEC `publicNumber`, l'Alanya ID : celui-là est
+       * l'identité du compte — ce que les contacts ont enregistré et ce qu'on
+       * compose — et il ne change jamais. `mobile` n'est qu'une information de
+       * contact, modifiable sous mot de passe
+       * (`POST /api/account/mobile`).
+       *
+       * Ajouté le 26/08/2026 pour que l'écran « Pays et téléphone » puisse
+       * afficher le numéro EN COURS plutôt que la dernière saisie.
+       */
+      mobile: user.mobile ?? null,
       idPays: user.idPays ?? null,
       typeCompte: user.typeCompte,
       isOnline: user.isOnline,
