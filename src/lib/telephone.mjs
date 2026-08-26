@@ -127,6 +127,27 @@ export function formaterTelephone(saisieOuCanonique, prefixePays, iso2 = null) {
   if (canonique === "") return "";
 
   const indicatif = chiffres(prefixePays);
+
+  /*
+   * 🔴 LE NUMÉRO NE PORTE PAS L'INDICATIF DEMANDÉ : on le rend tel quel.
+   *
+   * Le découpage ci-dessous suppose que `canonique` commence par `indicatif`
+   * pour savoir où finit l'indicatif et où commence le national. Quand ce n'est
+   * pas le cas — une ligne étrangère saisie avec son propre « + » — la
+   * soustraction de longueurs mange des chiffres et en réattribue d'autres :
+   * « +33612345678 » présenté avec « +237 » ressortait « +237 12 34 56 78 ».
+   * Ce n'était plus une mise en forme mais un AUTRE numéro.
+   *
+   * Constaté le 26/08/2026 en ajoutant le choix du pays de la ligne dans les
+   * réglages : changer ce sélecteur réécrivait le numéro déjà saisi.
+   *
+   * Sans l'indicatif du numéro, on ne sait pas où le couper — deviner serait
+   * refaire la même faute. La forme canonique, elle, est juste.
+   */
+  if (indicatif !== "" && !canonique.startsWith(`+${indicatif}`)) {
+    return canonique;
+  }
+
   const national = canonique.slice(1 + indicatif.length);
   if (national === "") return `+${indicatif}`;
 
@@ -246,6 +267,25 @@ if (process.argv[1] && process.argv[1].endsWith("telephone.mjs")) {
   verifie("iso2 absent → paires", formaterTelephone("771234567", "+221", null), "+221 7 71 23 45 67");
   verifie("plus long qu'annoncé : rien n'est coupé", formaterTelephone("41555526719", "+1", "US"), "+1 415 555 2671 9");
   verifie("vide reste vide", formaterTelephone("", "+237", "CM"), "");
+  // --- Un numéro qui porte DÉJÀ un autre indicatif -------------------------
+  //
+  // 🔴 Ces trois-là ont échoué avant le correctif du 26/08/2026 : le
+  // découpage réattribuait les chiffres et rendait un AUTRE numéro.
+  verifie(
+    "ligne française présentée avec l indicatif camerounais",
+    formaterTelephone("+33612345678", "+237", "CM"),
+    "+33612345678",
+  );
+  verifie(
+    "ligne sénégalaise présentée avec l indicatif français",
+    formaterTelephone("+221 34 543 678", "+33", "FR"),
+    "+22134543678",
+  );
+  verifie(
+    "aucun chiffre perdu : le formatage reste réversible",
+    normaliserTelephone(formaterTelephone("+33612345678", "+237", "CM"), "+237"),
+    "+33612345678",
+  );
 
   // --- La propriété qui compte : formater ne change JAMAIS ce qu'on stocke --
   const saisies = ["6 91 23 45 67", "0691234567", "+237691234567", "00237691234567"];

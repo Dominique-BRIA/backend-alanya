@@ -25,6 +25,21 @@ const schema = z.object({
    * exactement la même chaîne en base.
    */
   mobile: z.string().trim().min(1, "Numéro requis").max(30),
+  /**
+   * Le pays DE LA LIGNE, quand il diffère de celui du compte.
+   *
+   * 🔴 CE N'EST PAS LE PAYS DU COMPTE, et il n'y est jamais écrit.
+   *
+   * Les deux se confondent souvent, mais pas toujours : on vit dans un pays et
+   * on garde une ligne d'un autre. C'est même la raison pour laquelle changer
+   * de pays ne touche pas au numéro. Normaliser un numéro camerounais avec
+   * l'indicatif français d'un compte expatrié produisait « +33691234567 » — un
+   * numéro que personne ne peut appeler.
+   *
+   * Il ne sert QU'À la normalisation. Absent, on retombe sur le pays du compte,
+   * qui reste le cas le plus fréquent.
+   */
+  idPaysNumero: z.number().int().positive().optional(),
 });
 
 /**
@@ -45,7 +60,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const rl = rateLimit(`change-mobile:${clientIp(req)}`, 5, 60_000);
   if (!rl.allowed) return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
 
-  const { password, mobile } = schema.parse(await req.json());
+  const { password, mobile, idPaysNumero } = schema.parse(await req.json());
 
   const moi = await prisma.user.findUnique({
     where: { id: userId },
@@ -60,15 +75,27 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   }
 
   /*
-   * Normalisé avec l'indicatif du pays DÉCLARÉ sur le compte, exactement comme
-   * à l'inscription (`/api/auth/setup`).
+   * L'indicatif qui sert à normaliser : celui du pays DE LA LIGNE si le client
+   * l'a précisé, sinon celui du compte.
    *
-   * ⚠️ Si le compte n'a pas de pays, l'indicatif est vide : un numéro national
-   * ressortira sans indicatif. C'est assumé — mieux vaut enregistrer ce que la
-   * personne a tapé que lui coller un indicatif deviné. Les clients invitent à
-   * choisir le pays d'abord, c'est le champ juste au-dessus.
+   * 🔴 LE PAYS DE LA LIGNE N'EST JAMAIS ÉCRIT SUR LE COMPTE. Il ne traverse
+   * cette route que pour donner le bon indicatif ; `users.idPays` se change
+   * ailleurs, et changer de pays ne doit pas changer de numéro.
+   *
+   * ⚠️ Si le compte n'a pas de pays et que rien n'est précisé, l'indicatif est
+   * vide : un numéro national ressortira sans indicatif. C'est assumé — mieux
+   * vaut enregistrer ce que la personne a tapé que lui coller un indicatif
+   * deviné.
    */
-  const prefixe = moi.pays?.prefix ?? "";
+  let prefixe = moi.pays?.prefix ?? "";
+  if (idPaysNumero != null) {
+    const paysLigne = await prisma.pays.findUnique({
+      where: { idPays: idPaysNumero },
+      select: { prefix: true },
+    });
+    if (!paysLigne) return fail("Pays introuvable", 404, "PAYS_NOT_FOUND");
+    prefixe = paysLigne.prefix;
+  }
   const normalise = normaliserTelephone(mobile, prefixe);
   if (normalise === "") return fail("Numéro invalide", 400, "BAD_MOBILE");
 
