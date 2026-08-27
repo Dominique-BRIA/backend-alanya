@@ -243,39 +243,35 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       })
     : null;
 
-  // ORGANISATEUR ABSENT : le participant ajoute directement.
-  //
-  // Une demande n'a de sens que si quelqu'un peut la trancher. L'organisateur
-  // parti, elles s'empilaient sans destinataire et plus personne n'entrait
-  // dans une réunion pourtant en cours — un blocage d'autant plus penible que
-  // rien à l'écran n'en donnait la raison.
-  //
-  // « Absent » se lit sur `connecte`, pas sur la présence dans le salon
-  // WebSocket : la seconde bascule à chaque coupure réseau, et la règle
-  // changerait sous les pieds des participants au gré de la connexion de
-  // l'organisateur. `connecte` ne retombe que sur un départ délibéré ou la
-  // fermeture de la réunion.
-  //
-  // L'organisateur n'a pas forcément de ligne `participant` — il peut avoir
-  // convoqué sans jamais entrer. Dans ce cas il n'est pas dans la salle non
-  // plus, et la même règle s'applique.
-  const ligneOrganisateur = meeting.participants.find(
-    (p) => p.IDparticipant === meeting.idOrganiser,
-  );
-  const organisateurAbsent = !ligneOrganisateur || ligneOrganisateur.connecte !== 1;
-
-  if (organisateurAbsent) {
-    await prisma.meetingParticipant.create({
-      data: { idMeeting: id, IDparticipant: invite.id, status: 0 },
-    });
-    return ok(
-      {
-        ajouteDirectement: true,
-        invite: { id: invite.id },
-      },
-      201,
-    );
-  }
+  /* 🔴 LE CONTOURNEMENT « ORGANISATEUR ABSENT » A ÉTÉ RETIRÉ LE 27/08/2026.
+   *
+   * Un bloc ici ajoutait la personne DIRECTEMENT, sans créer de demande, dès
+   * que l'organisateur n'était pas marqué `connecte = 1`. Le user l'a constaté
+   * en testant : « lorsqu'un non-admin propose un membre, cette personne entre
+   * directement dans la réunion, or ce n'était pas ça ma règle de départ. »
+   *
+   * Vérifié dans les données avant de conclure : sur la réunion 53 (« Test
+   * proposition »), AUCUNE ligne dans `meeting_invite_request`, une ligne
+   * `participant` de plus, et l'organisateur à `connecte = 0`. C'est bien ce
+   * chemin qui a tiré, pas l'invitation automatique — `invitation_auto` vaut 0
+   * sur toutes les réunions.
+   *
+   * ⚠️ SA JUSTIFICATION ÉTAIT CONTREDITE PAR LE CODE. Elle disait choisir
+   * `connecte` plutôt que la présence dans le salon WebSocket parce que
+   * « `connecte` ne retombe que sur un départ délibéré ou la fermeture de la
+   * réunion ». C'est faux : `ws-server.mjs` le remet à 0 à la FERMETURE DE LA
+   * SOCKET. Une coupure réseau de l'organisateur ouvrait donc la porte, et la
+   * règle d'approbation sautait sans que personne ne puisse le savoir.
+   *
+   * Le problème qu'il visait est réel — l'organisateur qui ne vient jamais
+   * laisse les demandes sans personne pour les trancher. Mais la réponse ne
+   * peut pas être de supprimer l'approbation au premier doute : elle doit se
+   * fonder sur un fait durable (l'organisateur n'a JAMAIS rejoint, et la
+   * réunion dure depuis un moment), pas sur l'état d'une socket. À reprendre si
+   * le blocage se présente vraiment.
+   *
+   * NE PAS LE REMETTRE sans en reparler au user : c'est SA règle.
+   */
 
   const demande =
     demandeRouverte ??
