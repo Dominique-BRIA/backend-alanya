@@ -120,7 +120,14 @@ const DELAI_MS = 1500;
 export type MotifSalle =
   | "PARTICIPANTS_ADDED"
   | "PARTICIPANT_REMOVED"
-  | "ROLE_CHANGED";
+  | "ROLE_CHANGED"
+  /// Quelqu'un a ete PROPOSE a l'organisateur, qui n'a pas encore tranche.
+  | "INVITE_REQUESTED"
+  /// L'organisateur a tranche — accepte ou refuse. Le client relit, et la
+  /// demande disparait de sa liste dans les deux cas.
+  | "INVITE_DECIDED"
+  /// Le proposant a retire sa demande avant la decision.
+  | "INVITE_CANCELLED";
 
 /// Le verbe unique qui annonce qu'une composition de salle a change.
 ///
@@ -164,22 +171,54 @@ export async function previensLaSalle(params: {
   /// exclure un utilisateur exclut TOUS ses appareils, y compris ceux qui n'ont
   /// rien demande.
   exclure?: string;
+  /// Des gens a prevenir MEME S'ILS NE SONT PAS DANS LA SALLE.
+  ///
+  /// Le pont ne parlait qu'aux sockets inscrites dans la salle. L'organisateur
+  /// qui consulte la fiche de sa reunion sans y etre entre n'y est pas : il ne
+  /// voyait donc rien arriver et devait tirer pour rafraichir.
+  ///
+  /// Ceux qui sont deja dans la salle ne sont pas servis deux fois.
+  personnes?: string[];
 }): Promise<boolean> {
-  const { meetingId, type, donnees, exclure } = params;
+  const { meetingId, type, donnees, exclure, personnes } = params;
 
-  if (!SECRET_PONT) {
+  /*
+   * 🔴 LE SECRET N'EST EXIGE QU'EN RESEAU (corrige le 26/08/2026).
+   *
+   * Ce garde-fou sortait AVANT de choisir le transport, donc sans
+   * `WS_INTERNAL_SECRET` le pont refusait TOUJOURS — y compris par la socket de
+   * fichier, qui n'utilise aucun secret et qui est le cas courant. Le module
+   * annonce pourtant en tete que « le cas courant ne demande AUCUNE variable » :
+   * la garde n'avait pas suivi le passage a la socket par defaut.
+   *
+   * Consequence mesuree : le pont n'a jamais rien envoye, et les ecrans deja
+   * ouverts ne se rafraichissaient pas — le defaut meme qu'il devait corriger.
+   * L'ecouteur d'en face, lui, avait la bonne condition
+   * (`if (PONT_PAR_RESEAU && !pontSecretValide(...))`).
+   *
+   * ⚠️ EN RESEAU IL RESTE OBLIGATOIRE, et des deux cotes : la requete traverse
+   * alors une vraie interface, et l'ecouteur refuse de demarrer sans lui.
+   */
+  if (PAR_RESEAU && !SECRET_PONT) {
     if (!manqueDejaSignale) {
       manqueDejaSignale = true;
       console.warn(
-        "[salle] WS_INTERNAL_SECRET manquant : les salles ouvertes ne seront pas " +
-          "prevenues des changements faits depuis l'API. Les actions restent valides.",
+        "[salle] WS_INTERNAL_URL est pose mais WS_INTERNAL_SECRET manque : les " +
+          "salles ouvertes ne seront pas prevenues des changements faits depuis " +
+          "l'API. Les actions restent valides.",
       );
     }
     return false;
   }
 
   try {
-    const corps = JSON.stringify({ salle: meetingId, type, donnees, exclure });
+    const corps = JSON.stringify({
+      salle: meetingId,
+      type,
+      donnees,
+      exclure,
+      ...(personnes && personnes.length > 0 ? { personnes } : {}),
+    });
     const reponse = PAR_RESEAU
       ? await viaReseau(corps)
       : // `fetch` ne sait PAS joindre une socket de fichier : il refuse le
@@ -243,6 +282,9 @@ export async function previensChangementParticipants(params: {
   /// Combien de participants sont concernes. Un nombre, pas une liste : de quoi
   /// afficher un avis tout de suite, rien a fusionner.
   nombre?: number;
+  /// Ceux qui doivent savoir meme hors de la salle — typiquement l'organisateur
+  /// devant la fiche de sa reunion, et le proposant devant la sienne.
+  personnes?: string[];
 }): Promise<boolean> {
   return previensLaSalle({
     meetingId: params.meetingId,
@@ -252,5 +294,52 @@ export async function previensChangementParticipants(params: {
       parUserId: params.parUserId,
       ...(typeof params.nombre === "number" ? { nombre: params.nombre } : {}),
     },
+    personnes: params.personnes,
+  });
+}
+
+/**
+ * Annonce qu'une DEMANDE D'INVITATION a bouge : posee, tranchee, ou retiree.
+ *
+ * 🔴 CE N'EST PAS UNE DIFFUSION A LA SALLE, et c'est toute la difference avec
+ * la fonction du dessus. Une demande en attente ne regarde que DEUX personnes :
+ * l'organisateur, qui tranche, et le proposant, qui l'a faite. Les autres
+ * participants n'ont pas a savoir qui a ete propose, ni ce qui a ete refuse —
+ * c'est la regle que la route GET applique deja, et la diffuser a la salle la
+ * contredirait.
+ *
+ * ⚠️ La personne PROPOSEE n'est jamais dans la liste : tant que l'organisateur
+ * n'a pas accepte, elle n'existe pas pour cette reunion, et un refus doit lui
+ * rester invisible.
+ *
+ * On reutilise le meme verbe que la composition — `meeting_participants_changed`
+ * — parce que le client en fait la meme chose : il relit. Le motif dit lequel
+ * des trois cas, et un client qui ne connait pas encore ces motifs relira quand
+ * meme, ce qui est le bon comportement.
+ */
+export async function previensDemandeInvitation(params: {
+  meetingId: number;
+  motif: Extract<
+    MotifSalle,
+    "INVITE_REQUESTED" | "INVITE_DECIDED" | "INVITE_CANCELLED"
+  >;
+  /// Qui a provoque le changement : le proposant, ou l'organisateur.
+  parUserId: string;
+  /// L'organisateur et le proposant. Les doublons sont absorbes plus loin.
+  destinataires: string[];
+}): Promise<boolean> {
+  /*
+   * `exclure` N'EST PAS UTILISE ICI, volontairement.
+   *
+   * Celui qui agit a deja la reponse de la route — mais seulement sur
+   * L'APPAREIL d'ou il a agi. Exclure un utilisateur exclut TOUS ses appareils :
+   * son second telephone, resté ouvert sur la fiche, garderait une liste
+   * perimee. L'aller-retour de trop coute moins cher que cet ecran-la.
+   */
+  return previensLaSalle({
+    meetingId: params.meetingId,
+    type: VERBE_COMPOSITION,
+    donnees: { motif: params.motif, parUserId: params.parUserId },
+    personnes: params.destinataires,
   });
 }

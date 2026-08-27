@@ -211,16 +211,24 @@ async function deposerAvisDeBlocage(convId, bloqueurId, bloqueId) {
   });
   if (dernier?.content?.includes('"blocked_notice"')) return null;
 
+  // Meme regle que partout ailleurs : nom d'abord. Ces deux-la portaient le
+  // meme oubli que les reunions, et l'avis de blocage reste dans le fil.
   const [bloqueur, bloque] = await Promise.all([
-    prisma.user.findUnique({ where: { id: bloqueurId }, select: { pseudo: true, publicNumber: true } }),
-    prisma.user.findUnique({ where: { id: bloqueId }, select: { pseudo: true, publicNumber: true } }),
+    prisma.user.findUnique({
+      where: { id: bloqueurId },
+      select: { nom: true, pseudo: true, publicNumber: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: bloqueId },
+      select: { nom: true, pseudo: true, publicNumber: true },
+    }),
   ]);
 
   const charge = JSON.stringify({
     code: "blocked_notice",
     blockerId: bloqueurId,
-    blockerName: bloqueur?.pseudo ?? bloqueur?.publicNumber ?? "",
-    blockedName: bloque?.pseudo ?? bloque?.publicNumber ?? "",
+    blockerName: nomAffichage(bloqueur) ?? "",
+    blockedName: nomAffichage(bloque) ?? "",
   });
 
   const avis = await prisma.message.create({
@@ -2957,7 +2965,8 @@ async function handleCallInvite(ws, msg) {
     state: "inviting",
     from: ws.userId,
     userId: invitee.id,
-    displayName: invitee.pseudo ?? invitee.publicNumber ?? null,
+    // Meme oubli que dans les reunions : la regle du projet est nomAffichage.
+    displayName: nomAffichage(invitee) ?? null,
   };
   for (const uid of ids) sendTo(uid, payload);
   ws.send(JSON.stringify({ type: "call_invite_result", ok: true, userId: invitee.id, publicNumber }));
@@ -3352,8 +3361,18 @@ async function handleMeetingJoin(ws, msg) {
     throw e;
   }
 
-  const user = await prisma.user.findUnique({ where: { id: ws.userId }, select: { pseudo: true, publicNumber: true } });
-  const displayName = user?.pseudo ?? user?.publicNumber ?? "Participant";
+  // 🔴 nomAffichage, ET NON pseudo : c'est le nom que TOUTE LA SALLE voit.
+  //
+  // Ces trois lignes disaient `pseudo ?? publicNumber` et ne selectionnaient
+  // meme pas `nom`. La regle du projet est pourtant ecrite depuis longtemps
+  // dans display-name.mjs, et ce fichier l'applique deja neuf fois ailleurs :
+  // c'etait un oubli, pas un choix. Signale par le user le 26/08/2026 —
+  // en reunion, chacun voyait le pseudo des autres au lieu de leur nom.
+  const user = await prisma.user.findUnique({
+    where: { id: ws.userId },
+    select: { nom: true, pseudo: true, publicNumber: true },
+  });
+  const displayName = nomAffichage(user) ?? "Participant";
   const existing = meetingParticipants(meetingId);
 
   ws.send(JSON.stringify({
@@ -3550,16 +3569,17 @@ async function handleMeetingMessage(ws, msg) {
   const room = meetingRooms.get(meetingId);
   if (!room || !room.has(ws.userId)) return;
 
+  // Meme regle que pour l'entree en salle, et pour la meme raison.
   const user = await prisma.user.findUnique({
     where: { id: ws.userId },
-    select: { pseudo: true, publicNumber: true },
+    select: { nom: true, pseudo: true, publicNumber: true },
   });
 
   sendToMeeting(meetingId, {
     type: "meeting_message",
     meetingId,
     fromUserId: ws.userId,
-    displayName: user?.pseudo ?? user?.publicNumber ?? "Participant",
+    displayName: nomAffichage(user) ?? "Participant",
     text: texte,
     sentAt: new Date().toISOString(),
   });
@@ -3985,7 +4005,13 @@ function pontLitLeCorps(req) {
  * Diffuse un verbe dans une salle, a la demande de l'API.
  *
  * Corps attendu :
- *   { salle: <idMeeting>, type: "meeting_*", donnees?: {...}, exclure?: <userId> }
+ *   { salle: <idMeeting>, type: "meeting_*", donnees?: {...},
+ *     exclure?: <userId>, personnes?: [<userId>, ...] }
+ *
+ * `personnes` sert ceux qui doivent savoir SANS etre dans la salle — un
+ * organisateur qui lit la fiche de sa reunion sans y etre entre. Ils sont
+ * servis une seule fois : ceux qui sont deja dans la salle l'ont ete par la
+ * diffusion.
  *
  * `donnees` est etale AVANT `type` et `meetingId` : l'appelant ne peut donc pas
  * ecraser l'un ni l'autre en glissant une cle du meme nom.
@@ -4043,11 +4069,44 @@ async function pontTraite(req, res) {
       : {};
   const exclure = typeof corps?.exclure === "string" ? corps.exclure : undefined;
 
+  /*
+   * DES PERSONNES NOMMEES, EN PLUS DE LA SALLE (26/08/2026).
+   *
+   * Le pont ne savait parler qu'a une salle, donc qu'aux sockets qui y sont
+   * INSCRITES. Or l'organisateur qui consulte la fiche d'une reunion sans y
+   * etre entre n'est dans aucune salle : quand un participant proposait
+   * quelqu'un, il ne voyait rien arriver et devait tirer pour rafraichir.
+   *
+   * Viser des personnes couvre ce cas sans dupliquer le pont, et resservira a
+   * tout ce qui concerne quelqu'un en particulier plutot que l'assemblee.
+   *
+   * ⚠️ ELLES SONT SERVIES MEME SI ELLES SONT DEJA DANS LA SALLE — une seule
+   * fois. Sans ce dedoublonnage, l'organisateur present dans la reunion
+   * recevrait deux fois le meme avis et relirait deux fois.
+   */
+  const personnes = Array.isArray(corps?.personnes)
+    ? corps.personnes.filter((p) => typeof p === "string" && p !== "")
+    : [];
+
+  const message = { ...donnees, type: verbe, meetingId: salle };
+
   // Une salle vide n'est PAS une erreur : personne n'etait connecte, la
   // modification en base reste valide, et l'API n'a rien a rattraper. Elle rend
   // 0 et le dit dans sa reponse.
-  const servies = sendToMeeting(salle, { ...donnees, type: verbe, meetingId: salle }, exclure);
-  pontRepond(res, 200, { ok: true, servies });
+  const servies = sendToMeeting(salle, message, exclure);
+
+  let nommees = 0;
+  if (personnes.length > 0) {
+    const dansLaSalle = meetingRooms.get(salle);
+    for (const uid of new Set(personnes)) {
+      if (uid === exclure) continue;
+      // Deja servi par la diffusion de salle juste au-dessus.
+      if (dansLaSalle?.has(uid)) continue;
+      if (sendTo(uid, message)) nommees++;
+    }
+  }
+
+  pontRepond(res, 200, { ok: true, servies, nommees });
 }
 
 const pont = http.createServer((req, res) => {

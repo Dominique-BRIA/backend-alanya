@@ -7,6 +7,10 @@ import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { notifieDemandeReunion } from "@/lib/push";
 import {
+  previensChangementParticipants,
+  previensDemandeInvitation,
+} from "@/lib/salle-temps-reel";
+import {
   occupantsContingent,
   plafondReunion,
   refusContingentPlein,
@@ -15,9 +19,12 @@ import {
 /**
  * GET /api/meetings/:id/invite-requests — demandes d'ajout d'une réunion.
  *
- * Réservé à l'organisateur : c'est lui qui tranche, et lui seul a besoin de la
- * liste. Un participant n'a pas à savoir qui les autres ont proposé, ni ce qui
- * a été refusé.
+ * L'ORGANISATEUR VOIT TOUTES LES DEMANDES EN ATTENTE, chacun voit LES SIENNES.
+ *
+ * L'organisateur tranche, il lui faut donc la liste entière. Le proposant, lui,
+ * suit sa propre demande — sans rien apprendre de celles des autres : un
+ * participant n'a toujours pas à savoir qui les autres ont proposé, ni ce qui a
+ * été refusé.
  */
 export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const id = Number((await ctx.params).id);
@@ -28,9 +35,20 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     select: { idOrganiser: true },
   });
   if (!meeting) return fail("Réunion introuvable", 404, "NOT_FOUND");
-  if (meeting.idOrganiser !== userId) {
-    return fail("Accès refusé", 403, "FORBIDDEN");
-  }
+
+  /*
+   * 🔴 L'ORGANISATEUR VOIT TOUT, CHACUN VOIT LES SIENNES (26/08/2026).
+   *
+   * Cette route rendait 403 à qui n'était pas l'organisateur. Le user veut que
+   * le proposant suive sa propre demande dans la liste des membres — il faut
+   * donc l'ouvrir, mais SANS ouvrir la liste entière : un participant n'a
+   * toujours pas à savoir qui les autres ont proposé, ni ce qui a été refusé.
+   *
+   * ⚠️ LE FILTRE EST DANS LA REQUÊTE, pas après. Rendre toutes les lignes puis
+   * en cacher à l'affichage laisserait les autres demandes traverser le réseau
+   * — visibles de qui regarde la réponse brute.
+   */
+  const jeSuisOrganisateur = meeting.idOrganiser === userId;
 
   const demandes = await prisma.meetingInviteRequest.findMany({
     // EN ATTENTE SEULEMENT. La ligne decidee RESTE en base — c'est elle qui,
@@ -39,12 +57,20 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     // bandeau de l'organisateur au rechargement suivant, soit dix secondes plus
     // tard : il la refusait, elle disparaissait, elle revenait, indefiniment.
     // L'index (idMeeting, statut) existe deja pour ce filtre.
-    where: { idMeeting: id, statut: 0 },
+    where: {
+      idMeeting: id,
+      statut: 0,
+      ...(jeSuisOrganisateur ? {} : { demandeurId: userId }),
+    },
     orderBy: { createdAt: "asc" },
     include: { demandeur: true, invite: true },
   });
 
   return ok({
+    // Dit au client ce qu'il a le droit de PROPOSER comme geste : trancher, ou
+    // seulement retirer. Il le déduisait de sa copie de la réunion, qui n'est
+    // pas toujours chargée là où la liste s'affiche — la salle, notamment.
+    jeSuisOrganisateur,
     demandes: demandes.map((d) => ({
       id: d.id,
       statut: d.statut,
@@ -156,6 +182,25 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   if (meeting.invitationAuto === 1) {
     await prisma.meetingParticipant.create({ data: { idMeeting: id, IDparticipant: invite.id, status: 0 } });
+    /*
+     * ⚠️ CE CHEMIN AJOUTE UN PARTICIPANT POUR DE BON, et il n'annonçait rien.
+     *
+     * Il est facile à manquer parce qu'il vit dans une route qui s'appelle
+     * « demande » : quand l'invitation automatique est active, il n'y a pas de
+     * demande du tout, quelqu'un ENTRE. Sans cette annonce, la salle et la
+     * fiche de l'organisateur gardaient une liste à laquelle il manquait
+     * quelqu'un — exactement le défaut signalé, par une autre porte.
+     *
+     * Ici l'annonce va bien À LA SALLE : la personne est entrée, tout le monde
+     * la verra, il n'y a plus rien à cacher.
+     */
+    previensChangementParticipants({
+      meetingId: id,
+      motif: "PARTICIPANTS_ADDED",
+      parUserId: userId,
+      nombre: 1,
+      personnes: [meeting.idOrganiser, invite.id],
+    }).catch(() => {});
     return ok({ ajouteDirectement: true, invite: { id: invite.id } }, 201);
   }
 
@@ -238,6 +283,32 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       data: { idMeeting: id, demandeurId: userId, inviteId: invite.id },
       include: { demandeur: true, invite: true },
     }));
+
+  /*
+   * L'ÉCRAN DÉJÀ OUVERT SE MET À JOUR (26/08/2026, demande du user).
+   *
+   * La notification poussée juste dessous vise des APPAREILS par leur jeton :
+   * elle réveille un téléphone en veille, elle ne rafraîchit pas une fiche
+   * ouverte sous les yeux de quelqu'un. L'organisateur devait tirer pour voir
+   * apparaître la demande.
+   *
+   * ⚠️ APRÈS L'ÉCRITURE, jamais avant : l'annonce dit « votre copie est
+   * périmée, relisez ». Partie trop tôt, elle enverrait relire l'ancienne
+   * vérité.
+   *
+   * ⚠️ ELLE NE PART PAS À LA SALLE. Une demande en attente ne regarde que
+   * l'organisateur et le proposant — c'est déjà la règle du GET, et la diffuser
+   * à tout le monde la contredirait.
+   */
+  previensDemandeInvitation({
+    meetingId: id,
+    motif: "INVITE_REQUESTED",
+    parUserId: userId,
+    destinataires: [meeting.idOrganiser, userId],
+  }).catch(() => {
+    // `previensDemandeInvitation` ne lève pas ; ce `catch` est une ceinture.
+    // La demande est écrite et valide : un pont muet ne doit rien casser.
+  });
 
   // Seul l'organisateur est prévenu.
   notifieDemandeReunion({
