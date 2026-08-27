@@ -43,17 +43,72 @@ export interface ServiceCollegues {
 }
 
 /**
+ * Cette entreprise ouvre-t-elle le répertoire à TOUS ses services ?
+ *
+ * 🔴 `company.collegue` — 0 = son propre service seulement, 1 = tous les
+ * services de l'entreprise. Demandé par le user le 27/08/2026.
+ *
+ * ⚠️ VRAI PAR DÉFAUT, et par deux chemins : la colonne vaut 1 par défaut, et
+ * une entreprise introuvable rend `true` ici. C'est le comportement d'avant ce
+ * champ. Choisir l'inverse — fermer au moindre doute — aurait l'air prudent,
+ * mais couperait la vue de tout le monde sur une simple lecture ratée, et
+ * personne ne saurait pourquoi le répertoire s'est vidé.
+ */
+export async function tousLesServicesVisibles(idCompany: number): Promise<boolean> {
+  const c = await prisma.company.findUnique({
+    where: { idCompany },
+    select: { collegue: true },
+  });
+  return (c?.collegue ?? 1) === 1;
+}
+
+/**
+ * Les services auxquels J'APPARTIENS, en clés normalisées.
+ *
+ * ⚠️ UN AGENT PEUT N'EN AVOIR AUCUN — `10000999` est dans ce cas en production.
+ * L'ensemble est alors vide, et le répertoire restreint ne montrera rien : c'est
+ * la conséquence exacte du réglage, et la corriger ici en ouvrant tout
+ * reviendrait à ignorer le réglage précisément pour ceux qu'il vise.
+ *
+ * ⚠️ CLÉS NORMALISÉES, comme partout dans ce fichier : la casse des libellés
+ * varie déjà en base (« Assistance technique » et « Assistance Technique »).
+ */
+async function mesServices(
+  idCompany: number,
+  moiId: string,
+): Promise<Set<string>> {
+  const lignes = await prisma.center.findMany({
+    where: { idCompany, users_alanyaID: moiId, nomService: { not: null } },
+    select: { nomService: true },
+  });
+  return new Set(
+    lignes
+      .map((l) => (l.nomService ?? "").trim().toLocaleLowerCase("fr"))
+      .filter((n) => n !== ""),
+  );
+}
+
+/**
  * Les services de l'entreprise, avec leur effectif.
  *
  * ⚠️ UN SERVICE SANS COLLÈGUE EST RENDU QUAND MÊME, avec un effectif à zéro.
  * Le masquer ferait disparaître un service pourtant configuré, sans que rien
  * ne l'explique — et laisserait croire à une panne à celui qui sait qu'il
  * existe. Zéro est une information ; l'absence n'en est pas une.
+ *
+ * ⚠️ CELA NE VAUT QUE POUR LES SERVICES QU'ON A LE DROIT DE VOIR. Quand
+ * `company.collegue` vaut 0, les autres ne sont pas rendus à zéro : ils ne sont
+ * pas rendus du tout. Un service listé vide dirait son existence, et le réglage
+ * demande précisément de la taire.
  */
 export async function servicesDeLEntreprise(
   idCompany: number,
   moiId: string,
 ): Promise<ServiceCollegues[]> {
+  // Le réglage de l'entreprise, et mes propres services quand il resserre.
+  const ouvert = await tousLesServicesVisibles(idCompany);
+  const miens = ouvert ? null : await mesServices(idCompany, moiId);
+
   const lignes = await prisma.center.findMany({
     where: { idCompany, nomService: { not: null } },
     select: { nomService: true, users_alanyaID: true },
@@ -80,6 +135,9 @@ export async function servicesDeLEntreprise(
     const nom = (l.nomService ?? "").trim();
     if (nom === "") continue;
     const cle = nom.toLocaleLowerCase("fr");
+    // Répertoire resserré : les services dont je ne fais pas partie n'existent
+    // pas pour moi — ils ne sont pas rendus vides, ils ne sont pas rendus.
+    if (miens !== null && !miens.has(cle)) continue;
     const entree = parCle.get(cle) ?? { nom, membres: new Set<string>() };
     // MOI EXCLU : « collègues » désigne les autres. Se voir dans sa propre
     // liste, avec un bouton pour s'appeler soi-même, n'a pas de sens.
@@ -106,6 +164,21 @@ export async function membresDuService(
   nomService: string,
   moiId: string,
 ) {
+  /*
+   * 🔴 LE RÉGLAGE EST REVÉRIFIÉ ICI, et pas seulement à la liste des services.
+   *
+   * Le client demande un service PAR SON NOM. Ne filtrer que la liste
+   * laisserait quiconque connaît le nom d'un autre service — il suffit de
+   * l'avoir vu avant que le réglage ne change — en lire les membres en
+   * appelant directement la route. Une porte fermée sur l'écran mais ouverte
+   * sur le réseau n'est pas fermée.
+   */
+  const ouvert = await tousLesServicesVisibles(idCompany);
+  if (!ouvert) {
+    const miens = await mesServices(idCompany, moiId);
+    if (!miens.has(nomService.trim().toLocaleLowerCase("fr"))) return [];
+  }
+
   const lignes = await prisma.center.findMany({
     where: { idCompany, nomService: { equals: nomService, mode: "insensitive" } },
     select: { users_alanyaID: true },
@@ -191,11 +264,48 @@ export async function chercherCollegues(
    */
   const chiffres = q.replace(/\D/g, "");
 
+  /*
+   * 🔴 LA RECHERCHE OBÉIT AU RÉGLAGE, ET C'EST LE POINT LE PLUS FACILE À RATER.
+   *
+   * Cette fonction ne passe VOLONTAIREMENT pas par les services — c'est écrit
+   * en toutes lettres au-dessus, et c'est ce qui rattrape l'agent rattaché à
+   * aucune ligne `center`. Mais quand l'entreprise resserre au service, ce
+   * contournement devient une porte dérobée : chercher « a » listerait tous les
+   * agents de la société, service par service, exactement ce que le réglage
+   * interdit.
+   *
+   * On borne donc aux personnes de MES services. L'agent sans service ne trouve
+   * alors plus personne — c'est la conséquence du réglage, assumée : son
+   * entreprise a choisi que le répertoire s'arrête au service, et il n'en a pas.
+   */
+  const ouvert = await tousLesServicesVisibles(idCompany);
+  let idsAutorises: string[] | null = null;
+  if (!ouvert) {
+    const miens = await mesServices(idCompany, moiId);
+    if (miens.size === 0) return [];
+    const lignes = await prisma.center.findMany({
+      where: { idCompany, nomService: { not: null } },
+      select: { nomService: true, users_alanyaID: true },
+    });
+    idsAutorises = [
+      ...new Set(
+        lignes
+          .filter(
+            (l) =>
+              !!l.users_alanyaID &&
+              miens.has((l.nomService ?? "").trim().toLocaleLowerCase("fr")),
+          )
+          .map((l) => l.users_alanyaID as string),
+      ),
+    ];
+    if (idsAutorises.length === 0) return [];
+  }
+
   return prisma.user.findMany({
     where: {
       idCompany,
       typeCompte: TYPE_COMPTE_AGENT,
-      id: { not: moiId },
+      id: idsAutorises === null ? { not: moiId } : { in: idsAutorises, not: moiId },
       OR: [
         { nom: { contains: q, mode: "insensitive" } },
         { pseudo: { contains: q, mode: "insensitive" } },

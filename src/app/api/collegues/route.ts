@@ -9,6 +9,7 @@ import {
   chercherCollegues,
   membresDuService,
   servicesDeLEntreprise,
+  tousLesServicesVisibles,
 } from "@/lib/collegues";
 
 /**
@@ -68,7 +69,23 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   // ── Niveau 1 : les services ────────────────────────────────────────────
   if (service === null) {
     const services = await servicesDeLEntreprise(moi.idCompany, userId);
-    return ok({ services });
+    /*
+     * `porteeRestreinte` EXISTE POUR QUE LE MESSAGE DE LISTE VIDE SOIT VRAI.
+     *
+     * Le client affichait « Aucun service n'est configuré pour ton entreprise »
+     * dès que la liste revenait vide. Depuis que `company.collegue` peut
+     * resserrer le répertoire au propre service de l'agent (27/08/2026), ce
+     * texte peut être FAUX : des services existent, l'entreprise a simplement
+     * choisi de n'en montrer qu'un, et celui-ci n'a personne — ou l'agent n'est
+     * rattaché à aucun.
+     *
+     * Le serveur est le seul à connaître la raison. La taire enverrait
+     * l'utilisateur signaler une panne de configuration qui n'existe pas.
+     */
+    return ok({
+      services,
+      porteeRestreinte: !(await tousLesServicesVisibles(moi.idCompany)),
+    });
   }
 
   // ── Niveau 2 : les collègues d'un service ──────────────────────────────

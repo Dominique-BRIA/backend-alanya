@@ -1597,6 +1597,21 @@ model Company {
   maxAgents          Int?      @default(20) @map("maxagents")
   maxAgentsPerCenter Int?      @default(5) @map("maxagentspercenter")
 
+  /// Portée de l'onglet « Collègues », entreprise par entreprise.
+  ///
+  /// 🔴 0 = un agent ne voit que SON PROPRE SERVICE ; 1 = il voit tous les
+  /// services de SON ENTREPRISE. Demandé par le user le 27/08/2026, réglé
+  /// depuis la plateforme de l'équipe.
+  ///
+  /// ⚠️ DÉFAUT À 1 : c'est le comportement d'avant ce champ, et toute
+  /// entreprise déjà en base doit continuer de fonctionner à l'identique. Un
+  /// défaut à 0 aurait coupé la vue de chaque agent au premier déploiement.
+  ///
+  /// ⚠️ CE N'EST PAS LA BORNE PAR ENTREPRISE. Celle-là est ailleurs, et elle a
+  /// toujours existé : le répertoire n'a jamais montré une autre société. Ce
+  /// réglage ne fait que resserrer au service.
+  collegue           Int       @default(1) @db.SmallInt
+
   /// Adresses des services propres à l'entreprise. Les trois colonnes
   /// existaient DÉJÀ en base, en VARCHAR(50), sans figurer dans ce schéma —
   /// elles étaient donc invisibles du code. Élargies à 255 par la migration :
