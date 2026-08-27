@@ -92,6 +92,7 @@ function serialiseCollegue(m: {
   avatarUrl: string | null;
   isOnline: number;
   lastSeen: Date | null;
+  Fonctions?: { agence: { libelle: string } | null }[];
 }) {
   return {
     id: m.id,
@@ -102,5 +103,18 @@ function serialiseCollegue(m: {
     avatarUrl: avatarPublicUrl(m.avatarUrl ?? null),
     isOnline: m.isOnline,
     lastSeen: m.lastSeen ?? null,
+    /*
+     * L'AGENCE, ou `null` — jamais une chaîne vide ni un tiret.
+     *
+     * Un agent sans fonction rattachée n'a pas d'agence, et c'est un cas RÉEL :
+     * `10000999` est dans ce cas en production. `null` laisse le client ne rien
+     * afficher du tout ; un « — » lui ferait dessiner une ligne vide sous le
+     * numéro, qui se lit comme une donnée manquante plutôt que comme une
+     * information qui n'existe pas.
+     *
+     * La requête a déjà borné à mon entreprise et pris la première fonction :
+     * ici on ne fait que déplier.
+     */
+    agence: m.Fonctions?.[0]?.agence?.libelle ?? null,
   };
 }

@@ -130,6 +130,32 @@ export async function membresDuService(
       avatarUrl: true,
       isOnline: true,
       lastSeen: true,
+      /*
+       * L'AGENCE DE L'AGENT, demandee par le user le 26/08/2026 pour s'afficher
+       * sous son Alanya ID.
+       *
+       * 🔴 ELLE PASSE PAR `fonction`, PAS PAR UNE COLONNE DE `users`. Un
+       * utilisateur n'a pas d'agence en propre : c'est sa FONCTION qui en
+       * designe une. Mesure en production le 27/08/2026 : 4 agents sur 5 ont
+       * exactement une fonction avec agence, le cinquieme n'en a aucune — la
+       * liaison est donc reelle et alimentee, contrairement a
+       * `center.idservice` (voir la note en tete de fichier).
+       *
+       * ⚠️ BORNEE A MON ENTREPRISE, et ce n'est pas de la ceinture inutile :
+       * DEUX agences portent le libelle « Agence Bafoussam » en production, une
+       * par entreprise. Sans cette borne, un rattachement errone ferait
+       * afficher, sous le nom d'un collegue, l'agence d'une autre societe.
+       *
+       * ⚠️ `take: 1` : le schema autorise plusieurs fonctions par personne. Le
+       * user demande UNE agence sous le numero ; le tri par identifiant rend ce
+       * choix STABLE plutot qu'arbitraire — la meme agence a chaque lecture.
+       */
+      Fonctions: {
+        where: { idAgence: { not: null }, agence: { idCompany } },
+        orderBy: { idFonction: "asc" },
+        take: 1,
+        select: { agence: { select: { libelle: true } } },
+      },
     },
   });
 
@@ -184,6 +210,32 @@ export async function chercherCollegues(
       avatarUrl: true,
       isOnline: true,
       lastSeen: true,
+      /*
+       * L'AGENCE DE L'AGENT, demandee par le user le 26/08/2026 pour s'afficher
+       * sous son Alanya ID.
+       *
+       * 🔴 ELLE PASSE PAR `fonction`, PAS PAR UNE COLONNE DE `users`. Un
+       * utilisateur n'a pas d'agence en propre : c'est sa FONCTION qui en
+       * designe une. Mesure en production le 27/08/2026 : 4 agents sur 5 ont
+       * exactement une fonction avec agence, le cinquieme n'en a aucune — la
+       * liaison est donc reelle et alimentee, contrairement a
+       * `center.idservice` (voir la note en tete de fichier).
+       *
+       * ⚠️ BORNEE A MON ENTREPRISE, et ce n'est pas de la ceinture inutile :
+       * DEUX agences portent le libelle « Agence Bafoussam » en production, une
+       * par entreprise. Sans cette borne, un rattachement errone ferait
+       * afficher, sous le nom d'un collegue, l'agence d'une autre societe.
+       *
+       * ⚠️ `take: 1` : le schema autorise plusieurs fonctions par personne. Le
+       * user demande UNE agence sous le numero ; le tri par identifiant rend ce
+       * choix STABLE plutot qu'arbitraire — la meme agence a chaque lecture.
+       */
+      Fonctions: {
+        where: { idAgence: { not: null }, agence: { idCompany } },
+        orderBy: { idFonction: "asc" },
+        take: 1,
+        select: { agence: { select: { libelle: true } } },
+      },
     },
     // Un annuaire d'entreprise reste petit ; la borne protège du cas où il ne
     // le serait plus, sans jamais gêner l'usage normal.
