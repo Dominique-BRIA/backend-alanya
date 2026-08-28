@@ -6,7 +6,7 @@ import { addMeetingParticipantsSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { notifieInvitationReunion } from "@/lib/push";
-import { previensChangementParticipants } from "@/lib/salle-temps-reel";
+import { previensChangementParticipants, previensLaSalle } from "@/lib/salle-temps-reel";
 import {
   occupantsContingent,
   plafondReunion,
@@ -256,6 +256,34 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
     data: { connecte: 0, duree },
   });
   await prisma.meetingParticipant.delete({ where: { ID: participant.ID } });
+
+  /*
+   * L'EXCLUSION S'ÉCRIVAIT EN BASE ET NE SE DISAIT À PERSONNE.
+   *
+   * Deux annonces, et elles ne font pas la même chose :
+   *
+   *  - `PARTICIPANT_REMOVED` fait relire la composition à toute la salle, et à
+   *    l'exclu lui-même via `personnes` — il n'est peut-être pas entré, mais sa
+   *    liste de réunions vient de perdre une ligne ;
+   *
+   *  - `meeting_kicked` s'adresse à l'exclu S'IL EST DANS LA SALLE. C'est la
+   *    pièce qui manquait vraiment : le maillage WebRTC vit entre les
+   *    navigateurs et ne consulte jamais la base. Sans elle, « X a été exclu »
+   *    s'affichait pendant que X continuait de parler et de filmer parmi des
+   *    gens qui le croyaient parti.
+   */
+  await previensChangementParticipants({
+    meetingId: id,
+    motif: "PARTICIPANT_REMOVED",
+    parUserId: userId,
+    nombre: 1,
+    personnes: [participantId],
+  });
+  await previensLaSalle({
+    meetingId: id,
+    type: "meeting_kicked",
+    donnees: { toUserId: participantId },
+  });
 
   return ok({ message: "Participant exclu", idMeeting: id, participantId });
 });

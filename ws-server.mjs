@@ -4106,6 +4106,52 @@ async function pontTraite(req, res) {
     }
   }
 
+  /*
+   * LA SALLE SE FERME AVEC LA REUNION.
+   *
+   * `meetingRooms` compte les places pour le plafond. Une reunion terminee dont
+   * la Map survit tient des sieges pour des gens qui n'y sont plus : la
+   * suivante se declarerait pleine sans que personne n'y soit. Le nettoyage est
+   * idempotent — `end` peut etre appele deux fois, la seconde ne trouve rien.
+   *
+   * APRES la diffusion, jamais avant : `sendToMeeting` lit cette meme Map, et
+   * la vider d'abord n'annoncerait la fin a personne.
+   */
+  /*
+   * L'EXCLU QUITTE LA SALLE POUR DE BON.
+   *
+   * Le message `meeting_kicked` fait raccrocher son client — mais un client
+   * peut ne pas obeir : onglet fige, reseau coupe au mauvais moment, version
+   * ancienne. Sa place resterait alors tenue au plafond, et les autres
+   * garderaient sa vignette. On le retire donc AUSSI cote serveur, et on
+   * annonce son depart comme pour n'importe quelle sortie.
+   *
+   * Idempotent : exclure deux fois ne trouve plus rien la seconde.
+   */
+  if (verbe === "meeting_kicked") {
+    const cible = String(donnees?.toUserId ?? "");
+    const salleK = meetingRooms.get(salle);
+    if (cible && salleK?.has(cible)) {
+      salleK.delete(cible);
+      if (salleK.size === 0) meetingRooms.delete(salle);
+      arretePartageEcran(salle, cible);
+      sendToMeeting(salle, { type: "meeting_user_left", meetingId: salle, userId: cible });
+    }
+  }
+
+  if (verbe === "meeting_ended") {
+    const close = meetingRooms.get(salle);
+    if (close) {
+      close.clear();
+      meetingRooms.delete(salle);
+    }
+    // `arretePartageEcran` vise UNE personne : l'appeler sans identifiant ne
+    // supprimait rien et sortait aussitot. La reunion etant close, c'est toute
+    // l'entree qui part — et sans annoncer chaque arret, puisqu'il n'y a plus
+    // personne dans la salle pour l'entendre.
+    partagesEcran.delete(salle);
+  }
+
   pontRepond(res, 200, { ok: true, servies, nommees });
 }
 

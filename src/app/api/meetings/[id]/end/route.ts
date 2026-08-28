@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { previensLaSalle } from "@/lib/salle-temps-reel";
 
 // POST /api/meetings/:id/end — termine la réunion (organisateur uniquement).
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -38,6 +39,20 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       });
     }
   }
+
+  /*
+   * TERMINER UNE RÉUNION LE DISAIT À LA BASE, PAS AUX GENS.
+   *
+   * `isEnd` passait à 1 et les participants étaient marqués déconnectés — mais
+   * aucun message ne partait. Ceux qui étaient DANS la salle continuaient de
+   * filmer et de s'entendre, sur une réunion officiellement close : le maillage
+   * WebRTC vit entre les navigateurs et ne consulte pas la base. Ils ne
+   * l'apprenaient qu'en quittant d'eux-mêmes.
+   *
+   * On ne passe PAS `exclure: userId` : l'organisateur peut avoir un second
+   * appareil encore en salle, et celui-là n'a rien demandé.
+   */
+  await previensLaSalle({ meetingId: id, type: "meeting_ended" });
 
   return ok({ message: "Réunion terminée", idMeeting: id });
 });
