@@ -133,26 +133,42 @@ fi
 
 # ── 5. Dépendances ──────────────────────────────────────────────────────────
 etape "5/9  Dépendances"
-npm ci --omit=dev --ignore-scripts || echec "npm ci a échoué."
-# `--ignore-scripts` saute le postinstall ; on génère le client juste après,
-# explicitement, pour que l'échec éventuel soit lisible.
+# `npm install` et NON `npm ci --omit=dev` : `prisma` est une devDependency,
+# et l'écarter rendrait `npx prisma generate` introuvable au pas suivant.
+npm install || echec "npm install a échoué."
 npx prisma generate || echec "prisma generate a échoué."
 vert "  Client Prisma régénéré."
 
 # ── 6. Migrations ───────────────────────────────────────────────────────────
 #
 # On MONTRE ce qui va s'appliquer avant de l'appliquer.
-etape "6/9  Migrations"
+#
+# ⚠️ CE PROJET N'UTILISE PAS `prisma migrate deploy`.
+#
+# Le schéma se pose par `prisma/manual/*.sql`, joués par ce script. Les dossiers
+# de `prisma/migrations/` ne servent qu'à tenir l'historique Prisma : une
+# migration qui n'a pas son jumeau dans `manual/` n'atteint JAMAIS la base.
+# C'est exactement ce qui est arrivé au plafond de réunion, resté inappliqué
+# plusieurs jours alors qu'on le croyait livré.
+#
+# Tous ces fichiers sont écrits en IF NOT EXISTS : les rejouer est sans effet.
+etape "6/9  SQL manuel (le vrai mécanisme de migration)"
 
-npx prisma migrate status || true
-echo
-read -r -p "  Appliquer les migrations ci-dessus ? [O/n] " REPONSE
-if [ "${REPONSE:-o}" = "n" ]; then
-  jaune "  Migrations sautées."
-else
-  npx prisma migrate deploy || echec "prisma migrate deploy a échoué — la base est dans l'état d'avant."
-  vert "  Migrations appliquées."
+# Filet : signaler toute migration sans jumeau, plutôt que de la perdre en
+# silence. La correspondance se fait sur le nom, à la convention près.
+MANQUANTES=""
+for DOSSIER in prisma/migrations/2*/; do
+  NOM="$(basename "$DOSSIER" | sed -E 's/^[0-9]+_//')"
+  grep -rqil "$NOM" prisma/manual/ 2>/dev/null || MANQUANTES="$MANQUANTES $NOM"
+done
+if [ -n "$MANQUANTES" ]; then
+  jaune "  ⚠ Migrations sans jumeau dans prisma/manual/ :"
+  for M in $MANQUANTES; do jaune "      $M"; done
+  jaune "    Vérifie qu'elles sont bien déjà en base — sinon ce déploiement ne les posera PAS."
 fi
+
+bash scripts/apply-manual-sql.sh || echec "apply-manual-sql.sh a échoué — la base est dans l'état d'avant."
+vert "  SQL manuel appliqué."
 
 # ── 7. Construction ─────────────────────────────────────────────────────────
 #
