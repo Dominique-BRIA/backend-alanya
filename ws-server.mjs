@@ -21,6 +21,22 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
+
+/**
+ * L'ORDRE DES MÉDIAS D'UN MESSAGE — jumeau de `src/lib/media-ordre.ts`.
+ *
+ * 🔴 Sans tri, les photos d'un envoi multiple arrivent EN DÉSORDRE : le client
+ * les téléverse une par une, dans l'ordre choisi, mais `include: { media: true }`
+ * ne demande aucun ordre à la lecture et PostgreSQL rend les lignes comme il
+ * l'entend.
+ *
+ * ⚠️ Les deux définitions doivent rester IDENTIQUES. C'est le WebSocket qui sert
+ * le temps réel et le REST qui sert le rechargement : deux ordres différents
+ * feraient sauter la grille entre l'arrivée du message et sa relecture. Le
+ * détail complet est dans le fichier TypeScript, que ce serveur ne peut pas
+ * importer (il est en `.mjs`).
+ */
+const MEDIA_ORDONNE = { orderBy: [{ createdAt: "asc" }, { id: "asc" }] };
 import {
   TYPES_STRUCTURES,
   chargeValide,
@@ -908,7 +924,8 @@ async function handleSend(ws, msg) {
         ? { media: { connect: uniqueMediaIds.map((id) => ({ id })) } }
         : {}),
     },
-    include: { media: true },
+    // Ordonné : c'est cette réponse qui dessine la grille en temps réel.
+    include: { media: MEDIA_ORDONNE },
   });
 
   // F10 + F11 : met à jour le dernier message dénormalisé + incrémente unreadCount
@@ -3028,7 +3045,9 @@ async function handleForwardMessage(ws, msg) {
 
   const original = await prisma.message.findUnique({
     where: { id: messageId },
-    include: { media: true },
+    // Ordonné : recopier les médias en désordre propagerait le défaut au
+    // message transféré.
+    include: { media: MEDIA_ORDONNE },
   });
   if (!original || original.deletedAt) return;
 
@@ -3062,7 +3081,7 @@ async function handleForwardMessage(ws, msg) {
         status: "SENT",
         ...(mediaIds.length > 0 ? { media: { connect: mediaIds.map((id) => ({ id })) } } : {}),
       },
-      include: { media: true },
+      include: { media: MEDIA_ORDONNE },
     });
 
     // Fait remonter la conversation cible (dernier message dénormalisé) et

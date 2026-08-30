@@ -5,6 +5,7 @@ import { z } from "zod";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
 import { apercuMessage } from "@/lib/message-payload.mjs";
+import { MEDIA_ORDONNE } from "@/lib/media-ordre";
 
 const forwardSchema = z.object({
   messageId: z.string().uuid(),
@@ -26,7 +27,9 @@ export const POST = withAuth(
       // Récupère le message source (avec ses médias).
       const original = await prisma.message.findUnique({
         where: { id: messageId },
-        include: { media: true },
+        // Ordonné : un transfert recopie les médias, et les recopier en
+        // désordre propagerait le défaut au message transféré.
+        include: { media: MEDIA_ORDONNE },
       });
       if (!original) return fail("Message introuvable", 404, "NOT_FOUND");
       // On ne transfère pas un message déjà supprimé.

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { sendMessageSchema } from "@/lib/validation";
+import { MEDIA_ORDONNE } from "@/lib/media-ordre";
 import { assertParticipant } from "@/modules/messaging/access";
 import { creerMessage, serialiserMessage } from "@/modules/messaging/envoi";
 
@@ -57,7 +58,9 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     include: {
-      media: true,
+      // Sans tri explicite, la grille de photos se réordonne à chaque lecture —
+      // voir `src/lib/media-ordre.ts`.
+      media: MEDIA_ORDONNE,
       reactions: { select: { userId: true, emoji: true } },
       stars: { where: { userId }, select: { id: true } },
     },
