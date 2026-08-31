@@ -196,6 +196,23 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
           // différent, et aucun n'était le créateur. Une seule colonne, lue par
           // tout le monde, et les membres d'un groupe voient enfin les mêmes.
           role: pp.role,
+          /*
+           * JUSQU'OÙ CE MEMBRE A LU. Ajout FACULTATIF : les clients qui ne le
+           * connaissent pas l'ignorent, et aucun champ existant ne bouge.
+           *
+           * Sans lui, un client qui vient d'ouvrir un groupe ne peut pas dire
+           * combien de personnes ont lu un message : il n'apprend les lectures
+           * que par les trames `read` reçues PENDANT qu'il regarde, et tout ce
+           * qui a été lu avant son arrivée lui reste invisible. Le compteur
+           * repartirait de zéro à chaque rechargement.
+           *
+           * `null` = ce membre n'a jamais ouvert la conversation. C'est une
+           * information, pas une absence de donnée : il n'a rien lu.
+           *
+           * Aucune migration — la colonne existe et sert déjà au compteur de
+           * non-lus et à l'écran « infos du message ».
+           */
+          lastReadAt: pp.lastReadAt ?? null,
         };
       }),
       lastMessage: lastContent != null
