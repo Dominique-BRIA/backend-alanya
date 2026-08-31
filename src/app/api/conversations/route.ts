@@ -236,6 +236,15 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
         );
       })(),
       unread: p.unreadCount,
+      /*
+       * Notifications coupées pour MOI dans cette conversation.
+       *
+       * Ajout FACULTATIF : les clients qui l'ignorent ne changent pas de
+       * comportement. À côté de `unread` parce que c'est la même nature —
+       * l'état du LECTEUR sur cette conversation, et non celui de la
+       * conversation elle-même.
+       */
+      sourdine: p.sourdine === 1,
       isPinned: p.isPinned === 1,
       isArchived: p.isArchived === 1,
       // Verrou pose par un appareil de CE compte, s'il en existe un et qu'il

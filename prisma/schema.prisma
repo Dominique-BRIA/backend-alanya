@@ -781,6 +781,14 @@ model Participant {
   // --- F10 : Compteur de non-lus ---
   unreadCount Int @default(0) @db.SmallInt
 
+  /// Notifications coupees pour CE participant (0 = non, 1 = oui).
+  ///
+  /// Par PARTICIPANT et non par conversation : mettre en sourdine est un choix
+  /// personnel, et le poser sur la conversation le ferait subir a tout le
+  /// groupe. Ne coupe QUE la poussee de notification — la conversation continue
+  /// de se mettre a jour en direct chez celui qui la regarde.
+  sourdine Int @default(0) @db.SmallInt
+
   @@unique([convId, userId])
   @@index([userId])
   @@map("conv_participants")

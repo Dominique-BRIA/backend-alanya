@@ -1016,8 +1016,24 @@ async function handleSend(ws, msg) {
     const preview =
       type === "TEXT" ? (content ?? "").slice(0, 120) : apercuStructure(type, content ?? null);
 
+    /*
+     * LA SOURDINE NE VAUT QUE POUR LA POUSSEE.
+     *
+     * ⚠️ SURTOUT PAS DANS LA DIFFUSION TEMPS REEL, quarante lignes plus haut, qui
+     * parcourt CES MEMES `recipients` : couper celle-la ferait cesser la
+     * conversation de se mettre a jour chez quelqu'un qui la REGARDE. Mettre en
+     * sourdine, c'est ne pas etre DERANGE — pas cesser de recevoir.
+     *
+     * Le drapeau se lit dans `conv.participants`, deja charge ci-dessus pour le
+     * titre : aucune requete supplementaire, aucun N+1.
+     */
+    const enSourdine = new Set(
+      (conv?.participants ?? []).filter((p) => p.sourdine === 1).map((p) => p.userId),
+    );
+
     for (const uid of recipients) {
       if (uid === ws.userId || isUserOnline(uid)) continue;
+      if (enSourdine.has(uid)) continue;
       await pushNewMessage(prisma, {
         recipientId: uid,
         senderName,
