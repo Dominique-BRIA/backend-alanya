@@ -41,7 +41,60 @@ export type ResultatEnvoi =
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
 function creerLigneMessage(data: Parameters<typeof prisma.message.create>[0]["data"]) {
-  return prisma.message.create({ data, include: { media: true } });
+  return prisma.message.create({ data, include: { media: true, mentions: true } });
+}
+
+/**
+ * Les mentions RÉELLEMENT retenues pour un message.
+ *
+ * 🔴 FILTRÉES SUR LES PARTICIPANTS, et c'est la garde de sécurité de la
+ * fonction : le client envoie des identifiants, et rien n'empêcherait d'y
+ * glisser celui de quelqu'un qui n'est pas dans le groupe. Une mention
+ * acceptée telle quelle enverrait alors une notification à un inconnu, en lui
+ * apprenant l'existence d'une conversation à laquelle il n'appartient pas.
+ *
+ * ⚠️ HORS GROUPE, AUCUNE MENTION N'EST RETENUE. Mentionner la seule autre
+ * personne d'un tête-à-tête ne veut rien dire, et le client ne le propose pas :
+ * accepter la charge quand même laisserait entrer par l'API ce que l'écran
+ * interdit.
+ *
+ * Le libellé est tronqué à la longueur de la colonne plutôt que refusé : un nom
+ * trop long est un défaut d'affichage, pas une raison de perdre le message.
+ */
+async function mentionsRetenues(params: {
+  convId: string;
+  expediteurId: string;
+  demandees: { userId: string; libelle: string }[];
+}): Promise<{ userId: string; libelle: string }[]> {
+  const { convId, expediteurId, demandees } = params;
+  if (demandees.length === 0) return [];
+
+  const conv = await prisma.conversation.findUnique({
+    where: { id: convId },
+    select: { isGroup: true },
+  });
+  if (!conv?.isGroup) return [];
+
+  const membres = new Set(
+    (
+      await prisma.participant.findMany({
+        where: { convId },
+        select: { userId: true },
+      })
+    ).map((p) => p.userId),
+  );
+
+  const vus = new Set<string>();
+  const retenues: { userId: string; libelle: string }[] = [];
+  for (const m of demandees) {
+    // Se mentionner soi-même n'a pas de sens et se notifierait tout seul.
+    if (m.userId === expediteurId) continue;
+    if (!membres.has(m.userId)) continue;
+    if (vus.has(m.userId)) continue;
+    vus.add(m.userId);
+    retenues.push({ userId: m.userId, libelle: m.libelle.slice(0, 80) });
+  }
+  return retenues;
 }
 
 /**
@@ -59,6 +112,9 @@ export async function creerMessage(params: {
   mediaId?: string;
   mediaIds?: string[];
   replyToId?: string;
+  /// Les comptes visés par une mention `@`, tels que le client les annonce.
+  /// Filtrés par [mentionsRetenues] avant d'être écrits.
+  mentions?: { userId: string; libelle: string }[];
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
 
@@ -133,6 +189,20 @@ export async function creerMessage(params: {
   const ttl = convCfg?.disappearingSeconds ?? 0;
   const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
 
+  /*
+   * Les mentions sont résolues AVANT la création, et écrites AVEC elle.
+   *
+   * ⚠️ EN UNE SEULE ÉCRITURE (`mentions: { create: … }`) et non par un second
+   * appel : un message créé puis une insertion qui échoue laisserait une
+   * mention perdue — un « @Dominique » à l'écran qui ne notifierait personne,
+   * sans que rien ne le signale.
+   */
+  const mentions = await mentionsRetenues({
+    convId,
+    expediteurId,
+    demandees: params.mentions ?? [],
+  });
+
   const message = await creerLigneMessage({
     convId,
     senderId: expediteurId,
@@ -142,6 +212,7 @@ export async function creerMessage(params: {
     status: "SENT",
     expiresAt,
     ...(idsMedias.length > 0 ? { media: { connect: idsMedias.map((id) => ({ id })) } } : {}),
+    ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
   });
 
   /*
@@ -192,6 +263,18 @@ export function serialiserMessage(message: Awaited<ReturnType<typeof creerLigneM
       mimeType: f.mimeType,
       sizeBytes: f.sizeBytes,
       durationMs: f.durationMs,
+    })),
+    /*
+     * LES MENTIONS ACCOMPAGNENT LE MESSAGE, jamais son texte.
+     *
+     * Le client met en évidence `@libelle` dans la bulle et sait, pour chaque
+     * mention, QUEL compte est visé — ce que le texte seul ne dit pas. Un
+     * client plus ancien ignore le champ et affiche une phrase ordinaire :
+     * c'est tout l'intérêt d'avoir laissé le texte en clair.
+     */
+    mentions: (message.mentions ?? []).map((m) => ({
+      userId: m.userId,
+      libelle: m.libelle,
     })),
     createdAt: message.createdAt,
   };

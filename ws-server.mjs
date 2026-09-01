@@ -596,6 +596,10 @@ async function serializeMessage(m, media) {
     })),
     // Réactions brutes { userId, emoji } ; le client agrège et repère les siennes.
     reactions: (m.reactions ?? []).map((r) => ({ userId: r.userId, emoji: r.emoji })),
+    // Les mentions accompagnent le message, jamais son texte — jumeau de
+    // `serialiserMessage` cote API. Un client qui ignore le champ affiche une
+    // phrase ordinaire, le texte portant deja « @Dominique » en clair.
+    mentions: (m.mentions ?? []).map((x) => ({ userId: x.userId, libelle: x.libelle })),
     createdAt: m.createdAt,
     editedAt: m.editedAt ?? null,
     expiresAt: m.expiresAt ?? null,
@@ -909,6 +913,45 @@ async function handleSend(ws, msg) {
     }
   }
 
+  /*
+   * LES MENTIONS `@`, JUMEAU DE `src/modules/messaging/envoi.ts`.
+   *
+   * ⚠️ LES DEUX CHEMINS D'ENVOI DOIVENT SE COMPORTER PAREIL : celui-ci sert le
+   * temps reel, l'autre sert de repli quand le WebSocket n'acquitte pas. Une
+   * mention retenue ici et pas la-bas ferait dependre la notification de l'etat
+   * du reseau au moment de l'envoi — defaut introuvable a la relecture.
+   *
+   * Meme garde de securite : filtrees sur les participants REELS du groupe.
+   * Sans elle, un client pourrait glisser l'identifiant de quelqu'un qui n'est
+   * pas dans la conversation, et lui envoyer une notification qui lui
+   * apprendrait l'existence d'un groupe auquel il n'appartient pas.
+   */
+  const mentionsDemandees = Array.isArray(msg.mentions) ? msg.mentions : [];
+  let mentions = [];
+  if (mentionsDemandees.length > 0) {
+    const conv = await prisma.conversation.findUnique({
+      where: { id: convId },
+      select: { isGroup: true },
+    });
+    // Hors groupe, aucune mention : mentionner la seule autre personne d'un
+    // tete-a-tete ne veut rien dire, et l'ecran ne le propose pas.
+    if (conv?.isGroup) {
+      const membres = new Set(participants);
+      const vus = new Set();
+      for (const m of mentionsDemandees) {
+        const userId = typeof m?.userId === "string" ? m.userId : null;
+        const libelle = typeof m?.libelle === "string" ? m.libelle.trim() : "";
+        if (!userId || libelle === "") continue;
+        if (userId === ws.userId) continue; // se mentionner soi-meme
+        if (!membres.has(userId)) continue;
+        if (vus.has(userId)) continue;
+        vus.add(userId);
+        mentions.push({ userId, libelle: libelle.slice(0, 80) });
+        if (mentions.length >= 30) break;
+      }
+    }
+  }
+
   const created = await prisma.message.create({
     data: {
       convId,
@@ -923,9 +966,12 @@ async function handleSend(ws, msg) {
       ...(uniqueMediaIds.length > 0
         ? { media: { connect: uniqueMediaIds.map((id) => ({ id })) } }
         : {}),
+      // En UNE ecriture : un message cree puis une insertion ratee laisserait
+      // un « @Dominique » a l'ecran qui ne notifierait personne.
+      ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
     },
     // Ordonné : c'est cette réponse qui dessine la grille en temps réel.
-    include: { media: MEDIA_ORDONNE },
+    include: { media: MEDIA_ORDONNE, mentions: true },
   });
 
   // F10 + F11 : met à jour le dernier message dénormalisé + incrémente unreadCount
@@ -1031,15 +1077,32 @@ async function handleSend(ws, msg) {
       (conv?.participants ?? []).filter((p) => p.sourdine === 1).map((p) => p.userId),
     );
 
+    /*
+     * QUI A ETE MENTIONNE. Sert a deux choses, et a une seule pour l'instant :
+     * annoncer la mention dans la notification.
+     *
+     * ⚠️ LA SOURDINE N'EST PAS LEVEE PAR UNE MENTION, deliberement. WhatsApp le
+     * fait ; nous non, parce que la regle posee ici le 31/08/2026 est explicite —
+     * « etre en sourdine, c'est ne pas etre derange ». Lever la sourdine sur une
+     * mention rendrait le silence dependant de ce qu'ECRIVENT les autres, alors
+     * que l'utilisateur a demande le silence pour cette conversation. A changer
+     * si le user le demande, mais pas en passant.
+     */
+    const mentionnes = new Set(mentions.map((m) => m.userId));
+
     for (const uid of recipients) {
       if (uid === ws.userId || isUserOnline(uid)) continue;
       if (enSourdine.has(uid)) continue;
+      const mentionne = mentionnes.has(uid);
       await pushNewMessage(prisma, {
         recipientId: uid,
         senderName,
         convId,
         convTitle: convTitle ?? senderName,
-        preview,
+        // « Vous a mentionne : … » — la notification dit POURQUOI elle mérite
+        // d'etre ouverte avant les autres. Sans cela, une mention dans un groupe
+        // actif se noie dans le flot.
+        preview: mentionne ? `Vous a mentionné : ${preview ?? ""}`.trim() : preview,
         messageType: type,
       });
     }

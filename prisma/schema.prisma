@@ -857,6 +857,7 @@ model Message {
   hides      MessageHide[]
   reactions  MessageReaction[]
   stars      MessageStar[]
+  mentions   MessageMention[]
 
   @@index([convId, createdAt])
   @@index([senderId])
@@ -865,6 +866,44 @@ model Message {
   /// etre declare ici : supprime par un `db push` le 06/08/2026.
   @@index([expiresAt])
   @@map("message")
+}
+
+/// UNE MENTION `@` DANS UN MESSAGE DE GROUPE.
+///
+/// 🔴 LA MENTION DÉSIGNE UN COMPTE, PAS UNE CHAÎNE. Le texte du message garde
+/// « @Dominique » en clair — un client qui ignore les mentions affiche une
+/// phrase normale — et c'est cette table qui dit QUI a réellement été visé.
+/// Sans elle, notifier la bonne personne demanderait de deviner un pseudo, ce
+/// qui échoue dès que deux membres portent le même nom.
+///
+/// ⚠️ [libelle] EST FIGÉ À L'ENVOI, et ce n'est pas une duplication du pseudo :
+/// c'est le texte à retrouver dans le message pour le mettre en évidence. Le
+/// pseudo du compte peut changer ensuite, le message dira toujours
+/// « @Dominique » — surligner d'après le pseudo courant ne trouverait plus
+/// rien. Il garde aussi le message lisible quand la personne a quitté le groupe
+/// ou que son compte a disparu.
+///
+/// ⚠️ AUCUNE CLÉ ÉTRANGÈRE VERS `users`, à dessein : la base est partagée avec
+/// un second système qui peut effacer un compte par un chemin que nous ne
+/// contrôlons pas. Un `userId` orphelin est un cas NORMAL ici — le libellé
+/// reste affiché, et la mention ne notifie plus personne.
+///
+/// SQL manuel : `prisma/manual/2026-08_message_mention.sql`.
+model MessageMention {
+  id        String  @id @default(uuid()) @map("idMention") @db.Uuid
+  messageId String  @map("idMessage") @db.Uuid
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  /// Le compte visé. C'est lui qui fait la mention.
+  userId String @map("userId") @db.Uuid
+
+  /// Le texte inséré, SANS le « @ ».
+  libelle String @db.VarChar(80)
+
+  @@unique([messageId, userId], map: "message_mention_message_user_key")
+  @@index([messageId], map: "idx_message_mention_message")
+  @@index([userId], map: "idx_message_mention_user")
+  @@map("message_mention")
 }
 
 // Messages favoris (étoile). Privé à chaque utilisateur (comme WhatsApp) :

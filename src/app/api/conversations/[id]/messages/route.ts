@@ -63,6 +63,10 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
       media: MEDIA_ORDONNE,
       reactions: { select: { userId: true, emoji: true } },
       stars: { where: { userId }, select: { id: true } },
+      // Les mentions `@` : sans elles ici, un message relu depuis l'historique
+      // perdrait sa mise en évidence — elle n'apparaîtrait que sur les messages
+      // arrivés en temps réel, ce qui ressemblerait à un défaut d'affichage.
+      mentions: { select: { userId: true, libelle: true } },
     },
   });
 
@@ -139,6 +143,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         expiresAt: m.expiresAt,
         starred: m.stars.length > 0,
         reactions: m.reactions.map((r) => ({ userId: r.userId, emoji: r.emoji })),
+        mentions: m.mentions.map((x) => ({ userId: x.userId, libelle: x.libelle })),
         media: m.media.map((f) => ({
           id: f.id,
           url: `/api/media/${f.id}`,
@@ -190,6 +195,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     mediaId: body.mediaId,
     mediaIds: body.mediaIds,
     replyToId: body.replyToId,
+    mentions: body.mentions,
   });
 
   if (!envoi.ok) {

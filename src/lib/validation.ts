@@ -213,6 +213,25 @@ export const sendMessageSchema = z.object({
   mediaId: z.string().uuid().optional(),
   mediaIds: z.array(z.string().uuid()).max(10).optional(),
   replyToId: z.string().uuid().optional(),
+  /**
+   * LES MENTIONS `@` D'UN MESSAGE DE GROUPE.
+   *
+   * Le texte garde « @Dominique » en clair ; ce tableau dit QUELS comptes sont
+   * visés. `creerMessage` les filtre ensuite sur les participants réels du
+   * groupe — ce schéma ne vérifie que la forme.
+   *
+   * ⚠️ PLAFONNÉ À 30 : au-delà, ce n'est plus une mention, c'est un envoi en
+   * masse déguisé. Chaque entrée déclenche une notification chez quelqu'un.
+   */
+  mentions: z
+    .array(
+      z.object({
+        userId: z.string().uuid(),
+        libelle: z.string().trim().min(1).max(80),
+      }),
+    )
+    .max(30)
+    .optional(),
 }).refine((d) => chargeValide(d.type, d.content ?? null), {
   // CONTACT et LOCATION portent leur charge en JSON dans `content` : sans ce
   // contrôle, un client mal réglé écrirait une ligne que plus rien ne peut
