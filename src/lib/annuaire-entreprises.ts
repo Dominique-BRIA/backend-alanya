@@ -66,13 +66,24 @@ export async function typesDEntreprise(idPaysUtilisateur: number | null): Promis
 /**
  * Le filtre par pays.
  *
- * ⚠️ UN UTILISATEUR SANS PAYS VOIT TOUT. On ne peut pas filtrer sur une valeur
- * qu'on n'a pas, et lui montrer une liste vide serait lui dire qu'aucune
+ * ⚠️ SANS PAYS CHOISI, ON VOIT TOUT. On ne peut pas filtrer sur une valeur
+ * qu'on n'a pas, et rendre une liste vide reviendrait à dire qu'aucune
  * entreprise n'existe. Le cas est réel : `users.idPays` est nul pour la moitié
  * des comptes en production.
+ *
+ * 🔴 LES ENTREPRISES SANS PAYS SONT TOUJOURS INCLUSES, et ce n'est pas une
+ * tolérance : une entreprise sans pays n'est pas « d'un autre pays », elle est
+ * NON CLASSÉE. L'exclure la rendrait invisible partout — dans chaque pays du
+ * menu, et depuis le 31/08/2026 dans la recherche aussi, qui suit désormais le
+ * filtre.
+ *
+ * Mesuré en production le 31/08/2026 : 2 entreprises actives, dont **1 sans
+ * pays**. Un filtre strict aurait fait disparaître la moitié de l'annuaire.
  */
 function filtrePays(idPays: number | null) {
-  return idPays == null ? {} : { idPays };
+  return idPays == null
+    ? {}
+    : { OR: [{ idPays }, { idPays: null }] };
 }
 
 /** Les entreprises d'un type, dans MON pays. */
@@ -85,26 +96,79 @@ export async function entreprisesDuType(idTypeCompany: number, idPaysUtilisateur
 }
 
 /**
- * Recherche d'entreprise — SANS filtre de pays.
+ * LES PAYS QUI ONT AU MOINS UNE ENTREPRISE.
  *
- * 🔴 C'EST LA DEMANDE EXPLICITE DU USER, et c'est aussi le seul chemin vers une
- * entreprise sans pays. Chercher, c'est déjà savoir ce qu'on veut : on ne
- * découvre pas une entreprise étrangère par hasard, on la nomme.
+ * 🔴 SEUL LE SERVEUR PEUT RÉPONDRE À ÇA, et c'est pour cette raison que la
+ * route existe : un client qui construirait le menu depuis la table `pays`
+ * proposerait 67 pays dont 65 rendraient une liste vide. Le filtre doit
+ * n'offrir que des choix qui mènent quelque part.
+ *
+ * ⚠️ LES ENTREPRISES SANS PAYS N'APPARAISSENT NULLE PART dans ce menu — elles
+ * n'ont pas de pays à proposer. Elles restent atteignables par la RECHERCHE,
+ * qui ne filtre sur rien : c'est déjà la règle du chemin de recherche, et c'est
+ * ce qui empêche ce filtre de rendre une entreprise introuvable.
+ *
+ * Le même `ACTIVE` que partout ailleurs : un pays dont toutes les entreprises
+ * sont désactivées ne doit pas être proposé.
+ */
+export async function paysAvecEntreprises(): Promise<
+  { idPays: number; libelle: string }[]
+> {
+  const groupes = await prisma.company.groupBy({
+    by: ["idPays"],
+    where: { ...ACTIVE, idPays: { not: null } },
+    _count: { _all: true },
+  });
+  const ids = groupes
+    .map((g) => g.idPays)
+    .filter((id): id is number => id != null);
+  if (ids.length === 0) return [];
+
+  return prisma.pays.findMany({
+    where: { idPays: { in: ids }, isDelete: false },
+    select: { idPays: true, libelle: true },
+    orderBy: { libelle: "asc" },
+  });
+}
+
+/**
+ * Recherche d'entreprise — DANS LE PAYS SÉLECTIONNÉ.
+ *
+ * 🔴 DÉCISION RENVERSÉE LE 31/08/2026, à la demande du user : « je pense que
+ * c'est mieux si la recherche est alignée sur le filtrage ». Elle ignorait
+ * auparavant le pays, à sa demande également — ne pas revenir en arrière sans
+ * lui.
+ *
+ * Ce que ce renversement coûte, et ce qui le rend acceptable : la recherche
+ * était le seul chemin vers une entreprise étrangère. Elle ne l'est plus — il
+ * faut d'abord changer de pays dans le filtre, ce que l'écran permet. En
+ * revanche les entreprises SANS pays restent trouvables partout, parce que
+ * `filtrePays` les inclut : sans cela, la moitié de l'annuaire de production
+ * serait devenue introuvable.
  *
  * Le libellé ET les mots-clés sont fouillés : `company.motcles` existe pour ça —
  * une entreprise connue sous une marque différente de sa raison sociale reste
  * trouvable.
  */
-export async function chercherEntreprises(requete: string) {
+export async function chercherEntreprises(requete: string, idPays: number | null) {
   const q = requete.trim();
   if (q === "") return [];
 
   return prisma.company.findMany({
     where: {
       ...ACTIVE,
-      OR: [
-        { libelle: { contains: q, mode: "insensitive" } },
-        { motcles: { contains: q, mode: "insensitive" } },
+      ...filtrePays(idPays),
+      // ⚠️ `AND` EXPLICITE, et il est indispensable : `filtrePays` pose déjà un
+      // `OR` (le pays choisi ou les non classées). Écrire un second `OR` à côté
+      // écraserait le premier — l'objet n'a qu'une clé de ce nom — et la
+      // recherche cesserait silencieusement de filtrer sur le pays.
+      AND: [
+        {
+          OR: [
+            { libelle: { contains: q, mode: "insensitive" } },
+            { motcles: { contains: q, mode: "insensitive" } },
+          ],
+        },
       ],
     },
     orderBy: { libelle: "asc" },

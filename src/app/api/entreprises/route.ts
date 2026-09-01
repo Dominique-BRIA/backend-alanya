@@ -6,6 +6,7 @@ import {
   centresDeLEntreprise,
   chercherEntreprises,
   entreprisesDuType,
+  paysAvecEntreprises,
   typesDEntreprise,
 } from "@/lib/annuaire-entreprises";
 
@@ -61,30 +62,60 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     return ok({ entreprise: fiche, centres: await centresDeLEntreprise(idCompany) });
   }
 
+  // ── Les pays qui ont au moins une entreprise ───────────────────────────
+  //
+  // Ce que le filtre de l'écran propose. Servi à part de la navigation : la
+  // liste ne dépend ni du type regardé ni du pays courant, et la recharger à
+  // chaque changement de type serait du travail pour rien.
+  if (params.get("pays-disponibles") !== null) {
+    return ok({ pays: await paysAvecEntreprises() });
+  }
+
+  /*
+   * LE PAYS RETENU — celui du filtre de l'écran, à défaut celui de l'appelant.
+   *
+   * 🔴 LE CLIENT PEUT DÉSORMAIS LE CHOISIR (demande du user, 31/08/2026).
+   * L'ancien commentaire disait qu'« un client n'a pas à décider quel pays il
+   * prétend habiter » — c'était vrai tant que le pays servait à borner ce qu'on
+   * a le droit de voir. Ce n'est pas le cas ici : l'annuaire des entreprises
+   * est PUBLIC, et le pays n'y est qu'un critère d'affichage. Rien ne se
+   * protège en le refusant, et le refuser interdisait de regarder ailleurs.
+   *
+   * ⚠️ Le pays de l'appelant reste le DÉFAUT : un client qui n'envoie rien —
+   * l'ancienne application, le web — se comporte exactement comme avant.
+   */
+  const paysDemande = params.get("pays");
+  let idPays: number | null;
+  if (paysDemande !== null && paysDemande.trim() !== "") {
+    const n = Number(paysDemande);
+    if (!Number.isInteger(n) || n <= 0) {
+      return fail("Pays invalide", 400, "BAD_COUNTRY");
+    }
+    idPays = n;
+  } else {
+    const moi = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { idPays: true },
+    });
+    idPays = moi?.idPays ?? null;
+  }
+
   /*
    * ── La recherche ─────────────────────────────────────────────────────
    *
-   * Prioritaire sur la navigation par type, et SANS filtre de pays : c'est ce
-   * qui permet de trouver une entreprise étrangère, et le seul chemin vers une
-   * entreprise dont le pays n'est pas renseigné.
+   * 🔴 ELLE SUIT LE FILTRE DEPUIS LE 31/08/2026 (demande du user). Elle
+   * l'ignorait auparavant, à sa demande aussi : ne pas revenir en arrière sans
+   * lui. Voir `chercherEntreprises`, qui porte la conséquence.
+   *
+   * Toujours prioritaire sur la navigation par type : on cherche dans un pays,
+   * pas dans un type.
    */
   if (requete !== null && requete.trim() !== "") {
     return ok({
       recherche: requete,
-      entreprises: await chercherEntreprises(requete),
+      entreprises: await chercherEntreprises(requete, idPays),
     });
   }
-
-  /*
-   * Le pays de l'appelant : c'est lui qui borne la NAVIGATION, jamais la
-   * recherche. Lu à chaque appel plutôt que porté par le client — un client
-   * n'a pas à décider quel pays il prétend habiter.
-   */
-  const moi = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { idPays: true },
-  });
-  const idPays = moi?.idPays ?? null;
 
   // ── Les entreprises d'un type ──────────────────────────────────────────
   if (type !== null) {
