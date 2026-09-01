@@ -71,19 +71,24 @@ export async function typesDEntreprise(idPaysUtilisateur: number | null): Promis
  * entreprise n'existe. Le cas est réel : `users.idPays` est nul pour la moitié
  * des comptes en production.
  *
- * 🔴 LES ENTREPRISES SANS PAYS SONT TOUJOURS INCLUSES, et ce n'est pas une
- * tolérance : une entreprise sans pays n'est pas « d'un autre pays », elle est
- * NON CLASSÉE. L'exclure la rendrait invisible partout — dans chaque pays du
- * menu, et depuis le 31/08/2026 dans la recherche aussi, qui suit désormais le
- * filtre.
+ * 🔴 UNE ENTREPRISE SANS PAYS N'EST AFFICHÉE NULLE PART — tranché par le user
+ * le 31/08/2026, en connaissance de cause.
  *
- * Mesuré en production le 31/08/2026 : 2 entreprises actives, dont **1 sans
- * pays**. Un filtre strict aurait fait disparaître la moitié de l'annuaire.
+ * Ce que cela implique, mesuré en production le même jour : 2 entreprises
+ * actives, dont **1 sans pays**. Cette entreprise-là n'apparaît donc ni dans la
+ * navigation, ni dans la recherche — qui suit désormais le filtre. Elle n'est
+ * pas perdue, elle est INVISIBLE tant que son `idPays` n'est pas renseigné.
+ *
+ * ⚠️ NE PAS « RÉPARER » ÇA en réintroduisant les non classées : la décision est
+ * délibérée, et le remède est de renseigner le pays de l'entreprise.
+ *
+ * ⚠️ Un APPELANT sans pays, lui, voit tout : on ne peut pas filtrer sur une
+ * valeur qu'on n'a pas, et lui rendre une liste vide reviendrait à dire
+ * qu'aucune entreprise n'existe. `users.idPays` est nul pour la moitié des
+ * comptes en production. C'est un cas distinct de celui ci-dessus.
  */
 function filtrePays(idPays: number | null) {
-  return idPays == null
-    ? {}
-    : { OR: [{ idPays }, { idPays: null }] };
+  return idPays == null ? {} : { idPays };
 }
 
 /** Les entreprises d'un type, dans MON pays. */
@@ -103,10 +108,9 @@ export async function entreprisesDuType(idTypeCompany: number, idPaysUtilisateur
  * proposerait 67 pays dont 65 rendraient une liste vide. Le filtre doit
  * n'offrir que des choix qui mènent quelque part.
  *
- * ⚠️ LES ENTREPRISES SANS PAYS N'APPARAISSENT NULLE PART dans ce menu — elles
- * n'ont pas de pays à proposer. Elles restent atteignables par la RECHERCHE,
- * qui ne filtre sur rien : c'est déjà la règle du chemin de recherche, et c'est
- * ce qui empêche ce filtre de rendre une entreprise introuvable.
+ * ⚠️ Les entreprises SANS pays ne pèsent sur rien ici — elles n'ont pas de pays
+ * à proposer — et elles ne s'affichent nulle part ailleurs non plus (voir
+ * `filtrePays`, décision du user du 31/08/2026).
  *
  * Le même `ACTIVE` que partout ailleurs : un pays dont toutes les entreprises
  * sont désactivées ne doit pas être proposé.
@@ -139,12 +143,12 @@ export async function paysAvecEntreprises(): Promise<
  * auparavant le pays, à sa demande également — ne pas revenir en arrière sans
  * lui.
  *
- * Ce que ce renversement coûte, et ce qui le rend acceptable : la recherche
- * était le seul chemin vers une entreprise étrangère. Elle ne l'est plus — il
- * faut d'abord changer de pays dans le filtre, ce que l'écran permet. En
- * revanche les entreprises SANS pays restent trouvables partout, parce que
- * `filtrePays` les inclut : sans cela, la moitié de l'annuaire de production
- * serait devenue introuvable.
+ * Ce que ce renversement coûte : la recherche était le seul chemin vers une
+ * entreprise étrangère, et le seul vers une entreprise SANS pays. Pour
+ * l'étrangère, il suffit de changer de pays dans le filtre. Pour celle sans
+ * pays, il n'y a plus de chemin du tout — le user l'a tranché, voir
+ * `filtrePays` : elle ne s'affiche nulle part tant que son pays n'est pas
+ * renseigné.
  *
  * Le libellé ET les mots-clés sont fouillés : `company.motcles` existe pour ça —
  * une entreprise connue sous une marque différente de sa raison sociale reste
@@ -158,10 +162,12 @@ export async function chercherEntreprises(requete: string, idPays: number | null
     where: {
       ...ACTIVE,
       ...filtrePays(idPays),
-      // ⚠️ `AND` EXPLICITE, et il est indispensable : `filtrePays` pose déjà un
-      // `OR` (le pays choisi ou les non classées). Écrire un second `OR` à côté
-      // écraserait le premier — l'objet n'a qu'une clé de ce nom — et la
-      // recherche cesserait silencieusement de filtrer sur le pays.
+      // ⚠️ `AND` EXPLICITE, ET LE GARDER MÊME S'IL PARAÎT SUPERFLU. Le `OR`
+      // ci-dessous porte les deux colonnes fouillées ; `filtrePays` n'en pose
+      // plus, mais le jour où il en reposerait un — c'était le cas quelques
+      // heures durant le 31/08 — les deux `OR` se retrouveraient dans le même
+      // objet et le second écraserait le premier. La recherche cesserait alors
+      // de filtrer sur le pays, en silence.
       AND: [
         {
           OR: [
