@@ -37,6 +37,22 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
           : p.user.isOnline,
       role: p.role,
       joinedAt: p.joinedAt,
+      /*
+       * JUSQU'OÙ CE MEMBRE A LU. Même ajout que dans `GET /api/conversations`
+       * (`8ad8fbf`), pour la même raison — et il manquait ICI, alors que c'est
+       * cette route-ci que le mobile appelle en ouvrant un groupe.
+       *
+       * Sans lui, le compteur « N lu » ne connaîtrait que les lectures reçues
+       * PENDANT qu'on regarde : il repartirait de zéro à chaque ouverture, et
+       * tout ce qui a été lu avant serait invisible.
+       *
+       * `null` = ce membre n'a jamais ouvert la conversation. C'est une
+       * information, pas une absence de donnée.
+       *
+       * Facultatif et additif : aucun champ existant ne bouge, aucune
+       * migration — la colonne sert déjà aux non-lus et aux infos du message.
+       */
+      lastReadAt: p.lastReadAt ?? null,
     })),
   });
 });
