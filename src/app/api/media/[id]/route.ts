@@ -27,8 +27,40 @@ function resolveUserId(req: NextRequest): string {
   }
 }
 
+/**
+ * Le média illustre-t-il un STATUT que ce demandeur a le droit de voir ?
+ *
+ * 🔴 SANS CE CONTRÔLE, LA PHOTO ET LA VIDÉO D'UN STATUT SONT INVISIBLES POUR
+ * TOUT LE MONDE SAUF LEUR AUTEUR. Un média de statut n'est attaché à aucun
+ * message : `isParticipant` est donc toujours faux, et le seul à passer était
+ * le propriétaire. Le fil listait bien les statuts des contacts, mais chaque
+ * binaire repartait en 403 — un statut média ne s'ouvrait jamais.
+ *
+ * La règle d'accès est EXACTEMENT celle du fil (`GET /api/statuses`) : on voit
+ * les statuts non expirés des personnes qu'on a dans ses contacts. Les deux
+ * doivent rester accordées, sinon une vignette s'affiche dans la liste sans
+ * que son contenu s'ouvre.
+ */
+async function peutVoirStatutDuMedia(userId: string, mediaId: string): Promise<boolean> {
+  // `mediaUrl` est écrit par POST /api/statuses sous cette forme exacte, et
+  // par lui seul.
+  const statut = await prisma.status.findFirst({
+    where: { mediaUrl: `/api/media/${mediaId}`, expiresAt: { gt: new Date() } },
+    select: { userId: true },
+  });
+  if (!statut) return false;
+  if (statut.userId === userId) return true;
+
+  const contact = await prisma.contact.findFirst({
+    where: { userId, contactId: statut.userId, isBlocked: false },
+    select: { id: true },
+  });
+  return contact !== null;
+}
+
 // GET /api/media/:id — sert le binaire à un utilisateur autorisé.
-// Autorisé si : propriétaire du média, ou participant d'une conversation où il est attaché.
+// Autorisé si : propriétaire du média, participant d'une conversation où il est
+// attaché, avatar d'un profil, ou média d'un statut visible par le demandeur.
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const userId = resolveUserId(req);
@@ -54,7 +86,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         )
       : false;
 
-    if (!isOwner && !isParticipant && !isAvatar) {
+    const isStatus = !isOwner && !isParticipant && !isAvatar
+      ? await peutVoirStatutDuMedia(userId, id)
+      : false;
+
+    if (!isOwner && !isParticipant && !isAvatar && !isStatus) {
       return fail("Accès refusé", 403, "FORBIDDEN");
     }
 
