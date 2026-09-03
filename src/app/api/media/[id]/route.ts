@@ -10,6 +10,7 @@ import {
   deleteStored,
   useCloudStorage,
 } from "@/modules/media/storage";
+import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 
 
 // Récupère l'userId via le Bearer OU via ?token= (utile pour le côté web,
@@ -49,13 +50,11 @@ async function peutVoirStatutDuMedia(userId: string, mediaId: string): Promise<b
     select: { userId: true },
   });
   if (!statut) return false;
-  if (statut.userId === userId) return true;
 
-  const contact = await prisma.contact.findFirst({
-    where: { userId, contactId: statut.userId, isBlocked: false },
-    select: { id: true },
-  });
-  return contact !== null;
+  // 🔴 LA MÊME RÈGLE QUE LE FIL, ET LE MÊME CODE. C'est la seule garantie que
+  // les deux ne divergent pas : une vignette listée dont le binaire repart en
+  // 403 est exactement ce qui est arrivé le 02/09.
+  return peutVoirStatutsDe(userId, statut.userId);
 }
 
 // GET /api/media/:id — sert le binaire à un utilisateur autorisé.

@@ -251,6 +251,20 @@ export const createStatusSchema = z.object({
   message: "Un statut TEXT requiert text ; IMAGE/VIDEO requiert mediaId",
 });
 
+/**
+ * Audience des statuts. Les trois valeurs suivent l'enum PostgreSQL
+ * `StatusAudienceMode` ET la règle de `statut-audience.mjs` — les trois listes
+ * doivent rester identiques.
+ *
+ * La liste est bornée à 500 : elle est remplacée d'un bloc à chaque
+ * enregistrement, et un tableau sans borne serait une porte ouverte à une
+ * requête démesurée.
+ */
+export const statusPrivacySchema = z.object({
+  mode: z.enum(["MES_CONTACTS", "MES_CONTACTS_SAUF", "PARTAGER_AVEC"]),
+  userIds: z.array(z.string().uuid()).max(500).default([]),
+});
+
 export const aiChatSchema = z.object({
   message: z.string().trim().min(1, "Message vide").max(8000),
 });

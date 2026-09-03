@@ -137,6 +137,12 @@ model User {
   ownedMedia       MediaFile[]
   statuses         Status[]
   statusViews      StatusView[]
+  /// Audience de MES statuts, et les personnes que j'y ai nommées.
+  /// `statusListedIn` est le sens inverse : les listes où JE figure — il
+  /// n'existe que parce que Prisma exige les deux bouts d'une relation.
+  statusPrivacy    StatusPrivacy?
+  statusAudience   StatusAudienceEntry[] @relation("StatusAudienceOwner")
+  statusListedIn   StatusAudienceEntry[] @relation("StatusAudienceListed")
   callsInitiated   Call[]            @relation("CallInitiator")
   /// Appels où ce compte sert d'identité de rappel (voir `Call.callerMaskId`).
   callsAsMask      Call[]            @relation("CallCallerMask")
@@ -1024,6 +1030,63 @@ model StatusView {
 
   @@unique([statusId, viewerId])
   @@map("statut_views")
+}
+
+/// Qui voit mes statuts.
+///
+/// Les trois choix de WhatsApp, et pas un de plus : une audience se comprend
+/// d'un coup d'œil ou elle ne sert à rien.
+enum StatusAudienceMode {
+  /// Toutes les personnes qui m'ont dans leurs contacts. C'est le défaut, et
+  /// c'était le SEUL comportement possible avant.
+  MES_CONTACTS
+
+  /// Mes contacts, moins ceux que je liste.
+  MES_CONTACTS_SAUF
+
+  /// Personne, sauf ceux que je liste.
+  PARTAGER_AVEC
+}
+
+/// L'audience des statuts d'UN compte.
+///
+/// 🔴 TABLE À NOUS, ET C'EST VOLONTAIRE. `statut` appartient au référentiel de
+/// l'équipe (elle s'appelait `statuses` avant l'harmonisation du 24/07) : lui
+/// ajouter une colonne serait un écart de plus à défendre à chaque
+/// harmonisation. L'audience vit donc à côté.
+///
+/// ⚠️ UNE LIGNE PAR COMPTE, PAS PAR STATUT. Le réglage est un réglage de
+/// compte, comme chez WhatsApp — il s'applique donc aussi aux statuts déjà
+/// publiés. C'est un choix : quelqu'un qui restreint son audience veut que ça
+/// prenne effet MAINTENANT, pas au prochain statut. L'absence de ligne vaut
+/// `MES_CONTACTS`, ce qui rend la migration silencieuse pour les 79 comptes
+/// existants.
+model StatusPrivacy {
+  userId    String             @id @map("alanyaID") @db.Uuid
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode      StatusAudienceMode @default(MES_CONTACTS)
+  updatedAt DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("statut_confidentialite")
+}
+
+/// Une personne nommée dans la liste d'audience d'un compte.
+///
+/// La même table sert aux DEUX modes qui ont une liste : en `MES_CONTACTS_SAUF`
+/// elle exclut, en `PARTAGER_AVEC` elle inclut. Deux tables auraient laissé
+/// traîner l'ancienne liste au changement de mode, et personne n'aurait su
+/// laquelle des deux faisait foi.
+model StatusAudienceEntry {
+  id      String   @id @default(uuid()) @db.Uuid
+  userId  String   @map("alanyaID") @db.Uuid
+  otherId String   @map("idAutre") @db.Uuid
+  user    User     @relation("StatusAudienceOwner", fields: [userId], references: [id], onDelete: Cascade)
+  other   User     @relation("StatusAudienceListed", fields: [otherId], references: [id], onDelete: Cascade)
+  addedAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([userId, otherId])
+  @@index([userId])
+  @@map("statut_audience")
 }
 
 // ---------------------------------------------------------------------------
