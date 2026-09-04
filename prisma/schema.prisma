@@ -876,6 +876,21 @@ model Message {
   statusQuote StatusReplyQuote?
   stars      MessageStar[]
   mentions   MessageMention[]
+
+  /// Le message mentionne TOUT le groupe (« @all », « @tous »…).
+  ///
+  /// ⚠️ Un booleen, et NON trente lignes dans `MessageMention` : une liste figee
+  /// a l'envoi serait fausse des le lendemain, quand quelqu'un rejoint le
+  /// groupe et n'y figure pas alors que le message dit « tout le monde ».
+  /// L'intention se resout a la LECTURE.
+  mentionneTous Boolean @default(false) @map("mentionne_tous")
+
+  /// Le texte tape apres le « @ », sans le « @ ».
+  ///
+  /// Sert a surligner la mention : l'application parle neuf langues, et le
+  /// deduire demanderait de connaitre les neuf formes — et de deviner celle de
+  /// l'auteur, qui n'est pas forcement celle du lecteur.
+  mentionTousLibelle String? @map("mention_tous_libelle") @db.VarChar(80)
   /// Les épinglages de ce message. En pratique zéro ou un — la contrainte
   /// d'unicité (conversation, message) l'impose — mais la relation reste une
   /// liste, comme toute relation inverse.

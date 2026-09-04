@@ -165,6 +165,10 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         starred: m.stars.length > 0,
         reactions: m.reactions.map((r) => ({ userId: r.userId, emoji: r.emoji })),
         mentions: m.mentions.map((x) => ({ userId: x.userId, libelle: x.libelle })),
+        // La mention collective voyage a cote des nominatives. Un client qui ne
+        // la connait pas l'ignore et affiche le texte sans surlignage.
+        mentionneTous: m.mentionneTous === true,
+        mentionTousLibelle: m.mentionTousLibelle ?? null,
         media: m.media.map((f) => ({
           id: f.id,
           url: `/api/media/${f.id}`,
@@ -218,6 +222,8 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     replyToId: body.replyToId,
     statutCite: body.statutCite,
     mentions: body.mentions,
+    mentionneTous: body.mentionneTous,
+    mentionTousLibelle: body.mentionTousLibelle,
   });
 
   if (!envoi.ok) {

@@ -122,8 +122,23 @@ export async function creerMessage(params: {
   /// Les comptes visés par une mention `@`, tels que le client les annonce.
   /// Filtrés par [mentionsRetenues] avant d'être écrits.
   mentions?: { userId: string; libelle: string }[];
+  /// Le message mentionne TOUT le groupe. Ignoré hors groupe.
+  mentionneTous?: boolean;
+  /// Le texte tapé après le « @ », sans le « @ ». Sert au surlignage.
+  mentionTousLibelle?: string;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
+
+  // La mention collective n'a de sens qu'en GROUPE, et le libellé est
+  // indispensable au surlignage : sans lui, rien à mettre en évidence.
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: convId },
+    select: { isGroup: true },
+  });
+  const mentionneTous =
+    params.mentionneTous === true &&
+    conversation?.isGroup === true &&
+    (params.mentionTousLibelle ?? "").trim() !== "";
 
   /*
    * ⚠️ RAMENÉ À LA LONGUEUR DE LA COLONNE AVANT TOUT LE RESTE.
@@ -220,6 +235,18 @@ export async function creerMessage(params: {
     expiresAt,
     ...(idsMedias.length > 0 ? { media: { connect: idsMedias.map((id) => ({ id })) } } : {}),
     ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
+    /*
+     * LA MENTION COLLECTIVE — jumeau exact de `ws-server.mjs`.
+     *
+     * Un booléen, et non une ligne par membre : une liste figée à l'envoi serait
+     * fausse dès le lendemain, quand quelqu'un rejoint le groupe et n'y figure
+     * pas alors que le message dit « tout le monde ».
+     *
+     * Refusée hors groupe, comme les mentions nominatives : le serveur ne fait
+     * jamais confiance à ce que le client lui envoie.
+     */
+    mentionneTous,
+    mentionTousLibelle: mentionneTous ? (params.mentionTousLibelle ?? "").trim().slice(0, 80) : null,
   });
 
   /*

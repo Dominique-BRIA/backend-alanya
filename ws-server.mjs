@@ -600,6 +600,10 @@ async function serializeMessage(m, media) {
     // `serialiserMessage` cote API. Un client qui ignore le champ affiche une
     // phrase ordinaire, le texte portant deja « @Dominique » en clair.
     mentions: (m.mentions ?? []).map((x) => ({ userId: x.userId, libelle: x.libelle })),
+    // La mention collective voyage a cote des nominatives : un client qui ne la
+    // connait pas l'ignore, et affiche le texte sans surlignage.
+    mentionneTous: m.mentionneTous === true,
+    mentionTousLibelle: m.mentionTousLibelle ?? null,
     createdAt: m.createdAt,
     editedAt: m.editedAt ?? null,
     expiresAt: m.expiresAt ?? null,
@@ -926,8 +930,38 @@ async function handleSend(ws, msg) {
    * pas dans la conversation, et lui envoyer une notification qui lui
    * apprendrait l'existence d'un groupe auquel il n'appartient pas.
    */
+  /*
+   * LA MENTION COLLECTIVE — « @all », « @tous », selon la langue.
+   *
+   * Un BOOLEEN, et non trente lignes de mention : une liste figee a l'envoi
+   * serait fausse des le lendemain, quand quelqu'un rejoint le groupe et n'y
+   * figure pas alors que le message dit « tout le monde ». L'intention se
+   * resout a la LECTURE.
+   *
+   * Meme garde que les mentions nominatives : HORS GROUPE, elle ne veut rien
+   * dire et l'ecran ne la propose pas. On la refuse quand meme ici — le serveur
+   * ne fait jamais confiance a ce qu'on lui envoie.
+   */
+  const veutTous = msg.mentionneTous === true;
+  const libelleTousBrut =
+    typeof msg.mentionTousLibelle === "string" ? msg.mentionTousLibelle.trim() : "";
+
   const mentionsDemandees = Array.isArray(msg.mentions) ? msg.mentions : [];
   let mentions = [];
+  let mentionneTous = false;
+  let mentionTousLibelle = null;
+
+  if (veutTous) {
+    const convTous = await prisma.conversation.findUnique({
+      where: { id: convId },
+      select: { isGroup: true },
+    });
+    if (convTous?.isGroup && libelleTousBrut !== "") {
+      mentionneTous = true;
+      mentionTousLibelle = libelleTousBrut.slice(0, 80);
+    }
+  }
+
   if (mentionsDemandees.length > 0) {
     const conv = await prisma.conversation.findUnique({
       where: { id: convId },
@@ -969,6 +1003,8 @@ async function handleSend(ws, msg) {
       // En UNE ecriture : un message cree puis une insertion ratee laisserait
       // un « @Dominique » a l'ecran qui ne notifierait personne.
       ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
+      mentionneTous,
+      mentionTousLibelle,
     },
     // Ordonné : c'est cette réponse qui dessine la grille en temps réel.
     include: { media: MEDIA_ORDONNE, mentions: true },

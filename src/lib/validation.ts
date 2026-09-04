@@ -235,6 +235,30 @@ export const sendMessageSchema = z.object({
     )
     .max(30)
     .optional(),
+
+  /**
+   * Le message mentionne TOUT le groupe (« @all », « @tous »…).
+   *
+   * ⚠️ Un booléen, et non trente entrées dans `mentions` ci-dessus : une liste
+   * figée à l'envoi serait fausse dès le lendemain, quand quelqu'un rejoint le
+   * groupe et n'y figure pas alors que le message dit « tout le monde ».
+   * L'intention se résout à la LECTURE.
+   *
+   * `creerMessage` la refuse hors groupe — ce schéma ne vérifie que la forme.
+   */
+  mentionneTous: z.boolean().optional(),
+
+  /**
+   * Le texte tapé après le « @ », sans le « @ ».
+   *
+   * Sert à surligner la mention à l'affichage. L'application parle neuf langues
+   * et l'auteur a pu écrire « all », « tous », « alle » : le déduire à la
+   * lecture demanderait de connaître les neuf formes, et de deviner celle de
+   * l'auteur — qui n'est pas forcément celle du lecteur.
+   *
+   * Même longueur que `libelle` d'une mention nominative.
+   */
+  mentionTousLibelle: z.string().trim().min(1).max(80).optional(),
 }).refine((d) => chargeValide(d.type, d.content ?? null), {
   // CONTACT et LOCATION portent leur charge en JSON dans `content` : sans ce
   // contrôle, un client mal réglé écrirait une ligne que plus rien ne peut
