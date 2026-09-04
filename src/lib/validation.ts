@@ -213,6 +213,9 @@ export const sendMessageSchema = z.object({
   mediaId: z.string().uuid().optional(),
   mediaIds: z.array(z.string().uuid()).max(10).optional(),
   replyToId: z.string().uuid().optional(),
+  // Le statut auquel ce message repond. Seul l identifiant transite : l apercu
+  // est recopie cote serveur, pour qu on ne puisse pas fabriquer une citation.
+  statutCite: z.string().uuid().optional(),
   /**
    * LES MENTIONS `@` D'UN MESSAGE DE GROUPE.
    *

@@ -143,6 +143,8 @@ model User {
   statusPrivacy    StatusPrivacy?
   statusAudience   StatusAudienceEntry[] @relation("StatusAudienceOwner")
   statusListedIn   StatusAudienceEntry[] @relation("StatusAudienceListed")
+  /// Les citations de MES statuts posees dans des conversations.
+  statusQuotes     StatusReplyQuote[]
   callsInitiated   Call[]            @relation("CallInitiator")
   /// Appels où ce compte sert d'identité de rappel (voir `Call.callerMaskId`).
   callsAsMask      Call[]            @relation("CallCallerMask")
@@ -862,6 +864,8 @@ model Message {
   deletedAt  DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
   hides      MessageHide[]
   reactions  MessageReaction[]
+  /// Le statut auquel ce message répond, s'il en cite un.
+  statusQuote StatusReplyQuote?
   stars      MessageStar[]
   mentions   MessageMention[]
 
@@ -1030,6 +1034,30 @@ model StatusView {
 
   @@unique([statusId, viewerId])
   @@map("statut_views")
+}
+
+/// Le statut qu'un message cite — l'aperçu affiché au-dessus d'une réponse.
+///
+/// 🔴 C'EST UN INSTANTANÉ, PAS UNE RÉFÉRENCE. Un statut est purgé au bout de
+/// 24 h ; une citation qui pointerait vers lui disparaîtrait avec. On recopie
+/// donc ce qu'il faut pour redessiner l'aperçu, et la conversation garde son
+/// sens indéfiniment. `statusId` n'a pour cette raison AUCUNE clé étrangère :
+/// la ligne visée est destinée à disparaître.
+///
+/// ⚠️ `Message.replyToId` ne pouvait pas servir : il pointe vers un MESSAGE.
+model StatusReplyQuote {
+  messageId String   @id @map("msgID") @db.Uuid
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  statusId  String   @map("statutID") @db.Uuid
+  authorId  String   @map("auteurID") @db.Uuid
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  type      String   @db.VarChar(10)
+  text      String?  @map("texte") @db.VarChar(700)
+  mediaUrl  String?  @map("media_url")
+  bgColor   String?  @map("couleur") @db.VarChar(9)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("statut_reponse")
 }
 
 /// Qui voit mes statuts.

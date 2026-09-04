@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
+import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 
 /**
  * LE CŒUR D'ENVOI D'UN MESSAGE — partagé par la route de conversation et par
@@ -112,6 +113,12 @@ export async function creerMessage(params: {
   mediaId?: string;
   mediaIds?: string[];
   replyToId?: string;
+  /// Le statut auquel ce message répond.
+  ///
+  /// ⚠️ LE CLIENT N'ENVOIE QU'UN IDENTIFIANT ; l'aperçu est recopié ICI depuis
+  /// la base, après contrôle de visibilité. Laisser le client fournir le texte
+  /// et l'image aurait permis de fabriquer une citation qui n'a jamais existé.
+  statutCite?: string;
   /// Les comptes visés par une mention `@`, tels que le client les annonce.
   /// Filtrés par [mentionsRetenues] avant d'être écrits.
   mentions?: { userId: string; libelle: string }[];
@@ -214,6 +221,42 @@ export async function creerMessage(params: {
     ...(idsMedias.length > 0 ? { media: { connect: idsMedias.map((id) => ({ id })) } } : {}),
     ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
   });
+
+  /*
+   * L'INSTANTANÉ DU STATUT CITÉ.
+   *
+   * Écrit APRÈS le message, puisqu'il porte sa clé. Un échec ici laisse un
+   * message ordinaire — sans aperçu, mais remis — plutôt que pas de message du
+   * tout : c'est le bon compromis pour une décoration.
+   *
+   * ⚠️ RECOPIÉ, JAMAIS RÉFÉRENCÉ : le statut est purgé au bout de 24 h, et une
+   * citation qui pointerait vers lui disparaîtrait avec.
+   */
+  if (params.statutCite) {
+    try {
+      const statut = await prisma.status.findUnique({
+        where: { id: params.statutCite },
+        select: { id: true, userId: true, type: true, text: true, mediaUrl: true, bgColor: true },
+      });
+      // On ne cite que ce qu'on avait le droit de voir — sinon la citation
+      // deviendrait une porte dérobée sur un statut privé.
+      if (statut && (await peutVoirStatutsDe(expediteurId, statut.userId))) {
+        await prisma.statusReplyQuote.create({
+          data: {
+            messageId: message.id,
+            statusId: statut.id,
+            authorId: statut.userId,
+            type: statut.type,
+            text: statut.text,
+            mediaUrl: statut.mediaUrl,
+            bgColor: statut.bgColor,
+          },
+        });
+      }
+    } catch (e) {
+      console.error("[messages] citation de statut ignorée :", e);
+    }
+  }
 
   /*
    * `lastMessage` reçoit le LIBELLÉ, jamais la charge utile.

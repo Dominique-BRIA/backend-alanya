@@ -116,6 +116,15 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
     : [];
   const replyMap = new Map(replyTargets.map((t) => [t.id, t]));
 
+  // --- Statuts cités ---
+  // Même principe que les messages cités, en une seule requête pour la page.
+  // ⚠️ L'aperçu est celui RECOPIÉ à l'envoi, pas le statut vivant : celui-ci a
+  // pu expirer ou être supprimé depuis, et la conversation doit garder son sens.
+  const citations = await prisma.statusReplyQuote.findMany({
+    where: { messageId: { in: page.map((m) => m.id) } },
+  });
+  const citationParMessage = new Map(citations.map((c) => [c.messageId, c]));
+
   return ok({
     messages: page.map((m) => {
       let replyTo = null;
@@ -138,6 +147,18 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         status: m.status,
         replyToId: m.replyToId,
         replyTo,
+        statutCite: (() => {
+          const c = citationParMessage.get(m.id);
+          if (!c) return null;
+          return {
+            statusId: c.statusId,
+            authorId: c.authorId,
+            type: c.type,
+            text: c.text,
+            mediaUrl: c.mediaUrl,
+            bgColor: c.bgColor,
+          };
+        })(),
         deletedAt: m.deletedAt,
         editedAt: m.editedAt,
         expiresAt: m.expiresAt,
@@ -195,6 +216,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     mediaId: body.mediaId,
     mediaIds: body.mediaIds,
     replyToId: body.replyToId,
+    statutCite: body.statutCite,
     mentions: body.mentions,
   });
 
@@ -210,5 +232,34 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     return fail("Message non distribuable", 403, "BLOCKED");
   }
 
-  return ok(serialiserMessage(envoi.message), 201);
+  /*
+   * La citation part AVEC la réponse, et pas seulement au rechargement.
+   *
+   * Sans ça, la bulle apparaît d'abord sans son aperçu et le gagne quelques
+   * secondes plus tard — un clignotement que l'utilisateur lit comme un défaut.
+   * Elle est relue en base plutôt que recopiée depuis la requête : c'est le
+   * serveur qui décide ce qui a été cité, et lui seul.
+   */
+  const citation = body.statutCite
+    ? await prisma.statusReplyQuote.findUnique({
+        where: { messageId: envoi.message.id },
+      })
+    : null;
+
+  return ok(
+    {
+      ...serialiserMessage(envoi.message),
+      statutCite: citation
+        ? {
+            statusId: citation.statusId,
+            authorId: citation.authorId,
+            type: citation.type,
+            text: citation.text,
+            mediaUrl: citation.mediaUrl,
+            bgColor: citation.bgColor,
+          }
+        : null,
+    },
+    201,
+  );
 });
