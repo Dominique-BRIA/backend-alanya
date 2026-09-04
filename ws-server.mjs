@@ -1336,25 +1336,82 @@ async function handleEditMessage(ws, msg) {
 // Épingler / détacher un message (partagé à toute la conversation).
 // messageId = id à épingler, ou null/absent pour détacher.
 // Diffuse { type:"message_pinned", convId, messageId|null } aux participants.
+/**
+ * Epingle ou detache un message. PLUSIEURS peuvent l'etre a la fois.
+ *
+ * ⚠️ LA TRAME DIFFUSEE GARDE SES DEUX FORMES.
+ *
+ * `messageId` designe le plus RECENT des epingles, au singulier : c'est ce que
+ * lit l'application mobile. Le retirer ferait disparaitre le bandeau chez tous
+ * ceux qui n'ont pas mis a jour — c'est-a-dire tous, le jour du deploiement.
+ *
+ * `messageIds` porte la liste complete, du plus recent au plus ancien. Un client
+ * qui la connait l'utilise ; les autres l'ignorent et gardent le comportement
+ * d'avant.
+ *
+ * Sans `epingle`, on BASCULE : epingler un message deja epingle le detache.
+ * `messageId: null` detache TOUT — c'est l'ancien contrat, ou `null` voulait
+ * dire « plus rien d'epingle ».
+ */
 async function handlePinMessage(ws, msg) {
   const { convId } = msg;
   const messageId = typeof msg.messageId === "string" ? msg.messageId : null;
   if (!convId) return;
   if (!(await isParticipant(convId, ws.userId))) return;
-  if (messageId) {
+
+  if (!messageId) {
+    await prisma.messagePinned.deleteMany({ where: { convId } });
+  } else {
     const m = await prisma.message.findFirst({
       where: { id: messageId, convId },
+      select: { id: true, deletedAt: true },
+    });
+    // Un message supprime pour tous ne s'epingle pas : le bandeau afficherait
+    // « Message supprime », ce qui occupe la place sans rien dire.
+    if (!m || m.deletedAt) return;
+
+    const existant = await prisma.messagePinned.findUnique({
+      where: { convId_messageId: { convId, messageId } },
       select: { id: true },
     });
-    if (!m) return;
+    const doitEpingler =
+      typeof msg.epingle === "boolean" ? msg.epingle : existant === null;
+
+    if (doitEpingler) {
+      // `upsert` : deux appareils du meme compte peuvent epingler en meme temps,
+      // et la contrainte d'unicite ferait echouer le second sur une action
+      // pourtant sans consequence.
+      await prisma.messagePinned.upsert({
+        where: { convId_messageId: { convId, messageId } },
+        create: { convId, messageId, userId: ws.userId },
+        update: {},
+      });
+    } else {
+      await prisma.messagePinned.deleteMany({ where: { convId, messageId } });
+    }
   }
+
+  const tous = await prisma.messagePinned.findMany({
+    where: { convId },
+    orderBy: { pinnedAt: "desc" },
+    select: { messageId: true },
+  });
+  const ids = tous.map((e) => e.messageId);
+
+  // La colonne d'origine suit le plus recent : le mobile ne lit qu'elle.
   await prisma.conversation.update({
     where: { id: convId },
-    data: { pinnedMessageId: messageId },
+    data: { pinnedMessageId: ids[0] ?? null },
   });
+
   const recipients = await participantsOf(convId);
   for (const uid of recipients) {
-    sendTo(uid, { type: "message_pinned", convId, messageId });
+    sendTo(uid, {
+      type: "message_pinned",
+      convId,
+      messageId: ids[0] ?? null,
+      messageIds: ids,
+    });
   }
 }
 

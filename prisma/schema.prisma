@@ -752,10 +752,18 @@ model Conversation {
   lastMessageType     Int?      @db.SmallInt
   lastMessageStatus   Int?      @db.SmallInt
 
-  // Message épinglé (partagé à toute la conversation). Null = aucun. Pas de FK :
-  // si le message est supprimé pour tous il reste consultable (deletedAt), et on
-  // filtre à la lecture au besoin.
+  /// Le message épinglé le PLUS RÉCENT. Null = aucun.
+  ///
+  /// ⚠️ CE CHAMP NE PORTE PLUS LA VÉRITÉ — c'est `MessagePinned` qui la porte,
+  /// depuis qu'une conversation peut en épingler plusieurs. Il est CONSERVÉ et
+  /// tenu à jour parce que l'application mobile le lit encore : le retirer ferait
+  /// disparaître le bandeau épinglé chez tous ceux qui n'ont pas mis à jour.
+  ///
+  /// Pointant le plus récent, il donne à un client qui ne connaît que lui
+  /// exactement le comportement d'avant.
   pinnedMessageId String? @map("pinned_message_id") @db.Uuid
+
+  epingles MessagePinned[]
 
   // Messages éphémères : durée de vie (en secondes) des NOUVEAUX messages.
   // 0 = désactivé. Les valeurs usuelles : 86400 (24h), 604800 (7j), 7776000 (90j).
@@ -868,6 +876,10 @@ model Message {
   statusQuote StatusReplyQuote?
   stars      MessageStar[]
   mentions   MessageMention[]
+  /// Les épinglages de ce message. En pratique zéro ou un — la contrainte
+  /// d'unicité (conversation, message) l'impose — mais la relation reste une
+  /// liste, comme toute relation inverse.
+  epingles   MessagePinned[]
 
   @@index([convId, createdAt])
   @@index([senderId])
@@ -914,6 +926,31 @@ model MessageMention {
   @@index([messageId], map: "idx_message_mention_message")
   @@index([userId], map: "idx_message_mention_user")
   @@map("message_mention")
+}
+
+/// Messages épinglés d'une conversation — COLLECTIF, visible par tous.
+///
+/// Une conversation n'en portait qu'UN, dans une colonne : épingler un second
+/// écrasait silencieusement le premier. Ce n'était pas un défaut de code, c'était
+/// la limite du modèle.
+///
+/// À ne pas confondre avec `MessageStar` juste en dessous, qui est PRIVÉ : mettre
+/// en favori ne regarde que soi, épingler s'impose à toute la conversation.
+model MessagePinned {
+  id        String       @id @default(uuid()) @db.Uuid
+  convId    String       @map("conversID") @db.Uuid
+  messageId String       @map("messageID") @db.Uuid
+  /// Qui a épinglé. Sert au message système et aux contrôles de droits.
+  userId    String       @map("alanyaID") @db.Uuid
+  pinnedAt  DateTime     @default(now()) @map("pinned_at") @db.Timestamptz
+  conv      Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+  message   Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  /// Épingler deux fois le même message n'a pas de sens : la base le refuse,
+  /// plutôt que de compter sur le client.
+  @@unique([convId, messageId], map: "message_pinned_conv_message_key")
+  @@index([convId, pinnedAt(sort: Desc)], map: "message_pinned_conv_date_idx")
+  @@map("message_pinned")
 }
 
 // Messages favoris (étoile). Privé à chaque utilisateur (comme WhatsApp) :
