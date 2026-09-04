@@ -187,6 +187,16 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
         return {
           id: pp.userId,
           pseudo: nomAffichage(pp.user),
+          /*
+           * LA PHOTO DE PROFIL DU MEMBRE. Ajout FACULTATIF : les clients qui
+           * l'ignorent continuent d'afficher les initiales.
+           *
+           * Sans elle, tout écran listant les membres — fiche d'une mention,
+           * liste du groupe — ne pouvait montrer QUE des initiales, alors que
+           * la photo existe et s'affiche partout ailleurs. Deux ronds de
+           * couleur ne distinguent pas deux personnes du même prénom.
+           */
+          avatarUrl: avatarPublicUrl(pp.user.avatarUrl ?? null),
           publicNumber: pp.user.publicNumber,
           isOnline: hidePresence ? 0 : pp.user.isOnline,
           lastSeen: hidePresence ? null : (pp.user.lastSeen ?? null),
