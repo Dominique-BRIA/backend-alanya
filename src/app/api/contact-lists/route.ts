@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { creerListesParDefaut } from "@/lib/listes-par-defaut";
 import { createContactListSchema } from "@/lib/validation";
 import {
   AVEC_MEMBRES,
@@ -16,6 +17,21 @@ import {
 // GET /api/contact-lists — les listes de l'utilisateur connecte, de la plus
 // ancienne a la plus recente. L'ordre est contractuel, voir ORDRE_LISTES.
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
+  /*
+   * LES QUATRE LISTES PAR DÉFAUT, posées à la première lecture.
+   *
+   * ICI plutôt qu'à l'inscription, et pour une raison qui compte : les comptes
+   * existants n'ont jamais reçu cette création. Les traiter par une migration
+   * aurait écrit dans la base de chacun — y compris ceux qui n'ouvriront jamais
+   * cet écran — et n'aurait rien fait pour les comptes créés entre-temps par
+   * l'autre plateforme, qui ne passe pas par notre inscription.
+   *
+   * La fonction ne fait rien si le compte a déjà une liste : elle est donc sans
+   * effet à chaque appel suivant, et quelqu'un qui a tout supprimé ne les voit
+   * pas revenir.
+   */
+  await creerListesParDefaut(userId);
+
   const lists = await listesDe(userId);
 
   // Un seul aller-retour de repertoire pour TOUTE la reponse, membres de toutes
