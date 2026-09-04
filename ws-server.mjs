@@ -604,6 +604,19 @@ async function serializeMessage(m, media) {
     // connait pas l'ignore, et affiche le texte sans surlignage.
     mentionneTous: m.mentionneTous === true,
     mentionTousLibelle: m.mentionTousLibelle ?? null,
+    // La citation voyage AVEC le message : sans elle ici, le destinataire
+    // verrait « joli ! » sans savoir a quel statut cela repond, jusqu'au
+    // prochain rechargement de la conversation.
+    statutCite: m.statusQuote
+      ? {
+          statusId: m.statusQuote.statusId,
+          authorId: m.statusQuote.authorId,
+          type: m.statusQuote.type,
+          text: m.statusQuote.text,
+          mediaUrl: m.statusQuote.mediaUrl,
+          bgColor: m.statusQuote.bgColor,
+        }
+      : null,
     createdAt: m.createdAt,
     editedAt: m.editedAt ?? null,
     expiresAt: m.expiresAt ?? null,
@@ -986,6 +999,58 @@ async function handleSend(ws, msg) {
     }
   }
 
+  /*
+   * REPONSE A UN STATUT — la citation qui accompagne le message.
+   *
+   * ⚠️ RECOPIEE, JAMAIS REFERENCEE : un statut est purge au bout de 24 h, et
+   * une citation qui pointerait vers lui disparaitrait avec. Jumeau exact de
+   * `src/modules/messaging/envoi.ts`, qui sert de repli quand la socket
+   * n'acquitte pas — et ce chemin-ci ne la traitait PAS DU TOUT. L'envoi
+   * passant par la socket en priorite, la citation etait donc perdue a chaque
+   * fois, sans la moindre erreur.
+   *
+   * ⚠️ LA GARDE : on ne cite que ce qu'on avait le droit de VOIR, sinon la
+   * citation deviendrait une porte derobee sur un statut prive.
+   *
+   * Elle se pose sur la VUE ENREGISTREE plutot qu'en rejouant la regle
+   * d'audience : voir un statut passe deja par ce controle, si bien qu'une vue
+   * existante PROUVE le droit. Rejouer la regle ici demanderait de dupliquer
+   * une dizaine de requetes — et deux copies d'une regle de confidentialite
+   * finissent toujours par diverger.
+   */
+  let citationStatut = null;
+  const statutCiteId = typeof msg.statutCite === "string" ? msg.statutCite : null;
+  if (statutCiteId) {
+    try {
+      const statut = await prisma.status.findUnique({
+        where: { id: statutCiteId },
+        select: { id: true, userId: true, type: true, text: true, mediaUrl: true, bgColor: true },
+      });
+      if (statut) {
+        const aLeDroit =
+          statut.userId === ws.userId ||
+          (await prisma.statusView.findUnique({
+            where: { statusId_viewerId: { statusId: statut.id, viewerId: ws.userId } },
+            select: { id: true },
+          })) !== null;
+        if (aLeDroit) {
+          citationStatut = {
+            statusId: statut.id,
+            authorId: statut.userId,
+            type: statut.type,
+            text: statut.text,
+            mediaUrl: statut.mediaUrl,
+            bgColor: statut.bgColor,
+          };
+        }
+      }
+    } catch (e) {
+      // Une citation manquante degrade l'affichage ; elle ne doit pas faire
+      // perdre le message lui-meme.
+      console.error("[messages] citation de statut ignoree :", e?.message ?? e);
+    }
+  }
+
   const created = await prisma.message.create({
     data: {
       convId,
@@ -1005,9 +1070,12 @@ async function handleSend(ws, msg) {
       ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
       mentionneTous,
       mentionTousLibelle,
+      // En UNE ecriture, comme les mentions : un message cree puis une
+      // insertion ratee laisserait une reponse qui ne cite plus rien.
+      ...(citationStatut ? { statusQuote: { create: citationStatut } } : {}),
     },
     // Ordonné : c'est cette réponse qui dessine la grille en temps réel.
-    include: { media: MEDIA_ORDONNE, mentions: true },
+    include: { media: MEDIA_ORDONNE, mentions: true, statusQuote: true },
   });
 
   // F10 + F11 : met à jour le dernier message dénormalisé + incrémente unreadCount
