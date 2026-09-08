@@ -21,6 +21,15 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
+// Le cache de lecture. Redis absent ou en panne : ces fonctions interrogent la
+// base exactement comme le faisait le code qu'elles remplacent — voir
+// `src/lib/cache-redis.mjs` pour la raison de chaque choix.
+import {
+  metaConversation,
+  profilCache,
+  invaliderConversation,
+} from "./src/lib/cache-redis.mjs";
+import { fermerRedis } from "./src/lib/redis-client.mjs";
 
 /**
  * L'ORDRE DES MÉDIAS D'UN MESSAGE — jumeau de `src/lib/media-ordre.ts`.
@@ -876,12 +885,18 @@ async function handleSend(ws, msg) {
     type = typeDepuisMime(premierMime);
   }
 
-  // Messages éphémères : si la conversation a un minuteur, calcule l'expiration.
-  const convCfg = await prisma.conversation.findUnique({
-    where: { id: convId },
-    select: { disappearingSeconds: true },
-  });
-  const ttl = convCfg?.disappearingSeconds ?? 0;
+  /*
+   * LA CONVERSATION, LUE UNE FOIS POUR TOUT L'ENVOI.
+   *
+   * ⚠️ Cette lecture servait à la seule expiration des messages éphémères, et la
+   * même conversation était REDEMANDÉE DEUX FOIS plus bas pour savoir si c'est
+   * un groupe — deux requêtes identiques à dix lignes d'écart. Trois allers-
+   * retours pour deux champs qui ne bougent pas pendant l'envoi.
+   *
+   * `metaConversation` les rend ensemble, et depuis le cache quand il répond.
+   */
+  const meta = await metaConversation(prisma, convId);
+  const ttl = meta?.disappearingSeconds ?? 0;
   const expiresAt = ttl > 0 ? new Date(Date.now() + ttl * 1000) : null;
 
   /**
@@ -965,24 +980,16 @@ async function handleSend(ws, msg) {
   let mentionTousLibelle = null;
 
   if (veutTous) {
-    const convTous = await prisma.conversation.findUnique({
-      where: { id: convId },
-      select: { isGroup: true },
-    });
-    if (convTous?.isGroup && libelleTousBrut !== "") {
+    if (meta?.isGroup && libelleTousBrut !== "") {
       mentionneTous = true;
       mentionTousLibelle = libelleTousBrut.slice(0, 80);
     }
   }
 
   if (mentionsDemandees.length > 0) {
-    const conv = await prisma.conversation.findUnique({
-      where: { id: convId },
-      select: { isGroup: true },
-    });
     // Hors groupe, aucune mention : mentionner la seule autre personne d'un
     // tete-a-tete ne veut rien dire, et l'ecran ne le propose pas.
-    if (conv?.isGroup) {
+    if (meta?.isGroup) {
       const membres = new Set(participants);
       const vus = new Set();
       for (const m of mentionsDemandees) {
@@ -1142,24 +1149,41 @@ async function handleSend(ws, msg) {
   }
 
   if (isPushEnabled()) {
-    const sender = await prisma.user.findUnique({
-      where: { id: ws.userId },
-    });
+    /*
+     * ⚠️ La lecture d'origine ne posait AUCUN `select` : elle ramenait la ligne
+     * entière de l'expéditeur — empreinte du mot de passe, jetons, réglages —
+     * pour n'en tirer qu'un nom. `profilCache` ne demande que les quatre champs
+     * d'affichage, et les garde dix minutes.
+     */
+    const sender = await profilCache(prisma, ws.userId);
     // `nomAffichage` et non `pseudo` : c'est le NOM qui s'affiche partout
     // ailleurs, et la notification était le dernier endroit à montrer le
     // pseudo — un libellé d'inscription que 39 comptes sur 49 laissent vide.
     const senderName =
       (sender ? nomAffichage(sender) : null) ?? "Quelqu'un";
+
+    /*
+     * ⚠️ ON NE CHARGE PLUS LA FICHE DE CHAQUE MEMBRE (`include: { user: true }`).
+     *
+     * Cette jointure ne servait qu'au titre d'un tête-à-tête, et elle le
+     * calculait FAUX : elle prenait « l'autre participant » vu de l'EXPÉDITEUR,
+     * c'est-à-dire le DESTINATAIRE lui-même. Celui qui recevait la notification
+     * lisait donc SON PROPRE NOM en titre, au lieu de celui qui venait de lui
+     * écrire — une notification signée du nom de celui qui la reçoit.
+     *
+     * En tête-à-tête, le titre est le nom de l'expéditeur, déjà calculé
+     * ci-dessus. Il ne reste donc à lire que le nom du groupe et les sourdines :
+     * deux colonnes au lieu de la table des comptes du groupe, à chaque message.
+     */
     const conv = await prisma.conversation.findUnique({
       where: { id: convId },
-      include: { participants: { include: { user: true } } },
+      select: {
+        name: true,
+        isGroup: true,
+        participants: { select: { userId: true, sourdine: true } },
+      },
     });
-    let convTitle = conv?.name ?? null;
-    if (conv && !conv.isGroup) {
-      const other = conv.participants.find((p) => p.userId !== ws.userId);
-      convTitle =
-        (other ? nomAffichage(other.user) : null) ?? convTitle;
-    }
+    const convTitle = conv?.isGroup ? (conv.name ?? null) : senderName;
     // Aperçu du push : le texte pour un TEXT, le libellé pour un message
     // structuré (« 👤 Jean Dupont »), rien pour un média — `pushNewMessage`
     // pose alors son propre libellé selon le type.
@@ -1174,8 +1198,8 @@ async function handleSend(ws, msg) {
      * conversation de se mettre a jour chez quelqu'un qui la REGARDE. Mettre en
      * sourdine, c'est ne pas etre DERANGE — pas cesser de recevoir.
      *
-     * Le drapeau se lit dans `conv.participants`, deja charge ci-dessus pour le
-     * titre : aucune requete supplementaire, aucun N+1.
+     * Le drapeau se lit dans `conv.participants`, deja charge ci-dessus :
+     * aucune requete supplementaire, aucun N+1.
      */
     const enSourdine = new Set(
       (conv?.participants ?? []).filter((p) => p.sourdine === 1).map((p) => p.userId),
@@ -1530,6 +1554,9 @@ async function handleSetDisappearing(ws, msg) {
     where: { id: convId },
     data: { disappearingSeconds: seconds },
   });
+  // Voir la note jumelle dans la route REST : le cache tient ce minuteur, et
+  // les deux processus partagent le MÊME Redis — effacer ici suffit aux deux.
+  await invaliderConversation(convId);
 
   // Message système persistant dans le fil (façon WhatsApp). Non éphémère.
   const label =
@@ -4689,5 +4716,9 @@ process.on("SIGINT", async () => {
   // une socket dont le process s'en va.
   pont.close();
   await prisma.$disconnect();
+  // Le cache part avec le reste : une connexion Redis laissee ouverte occupe un
+  // client cote serveur jusqu'a son delai d'inactivite, et un redemarrage en
+  // boucle en accumulerait.
+  await fermerRedis();
   process.exit(0);
 });

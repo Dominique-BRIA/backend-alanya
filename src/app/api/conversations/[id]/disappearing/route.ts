@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
@@ -32,6 +33,10 @@ export const POST = withAuth(
       where: { id: convId },
       data: { disappearingSeconds: value },
     });
+    // Le cache porte ce minuteur : sans cet effacement, les messages envoyés
+    // dans les cinq minutes suivantes garderaient l'ANCIENNE expiration —
+    // éternels alors qu'on vient de les vouloir éphémères, ou l'inverse.
+    await invaliderConversation(convId);
     return ok({ disappearingSeconds: value });
   },
 );

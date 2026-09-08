@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invaliderProfil } from "@/lib/cache-redis.mjs";
 import { ok, fail, handleError } from "@/lib/http";
 import { setupSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
@@ -95,6 +96,10 @@ export async function POST(req: NextRequest) {
         typeCompte: 0,
       },
     });
+
+    // Le compte existait déjà (créé à la vérification) : son profil a pu être
+    // lu, donc mis en cache, avant que ce nom-ci ne soit posé.
+    await invaliderProfil(user.id);
 
     // Premiere connexion du compte : elle merite sa ligne au journal.
     await recordAccess(prisma, { userId: user.id, req });

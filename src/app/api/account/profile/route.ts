@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invaliderProfil } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { updateProfileSchema } from "@/lib/validation";
@@ -49,6 +50,11 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string) => {
       ...(data.idPays !== undefined && { idPays: data.idPays }),
     },
   });
+
+  // Le nom et la photo voyagent dans les notifications poussées, qui les
+  // lisent en cache. Sans cet effacement, quelqu'un qui vient de changer de nom
+  // continuerait de signer ses notifications de l'ancien pendant dix minutes.
+  await invaliderProfil(userId);
 
   return ok({
     pseudo: nomAffichage(user),
