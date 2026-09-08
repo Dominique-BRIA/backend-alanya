@@ -134,6 +134,41 @@ export async function etatCache() {
   const c = redis();
   if (!c) return { actif: false, raison: "REDIS_URL absente" };
 
+  /*
+   * 🔴 CE POINT-CI ATTEND LA CONNEXION. Lui seul.
+   *
+   * `redis()` n'ouvre la connexion qu'au PREMIER appel, et ioredis refuse toute
+   * commande tant que sa poignée de main n'est pas finie
+   * (`enableOfflineQueue: false`). Le tout premier appel à ce point de santé
+   * après un redémarrage est donc aussi celui qui ouvre la connexion : il
+   * repartait avec « Stream isn't writeable » et annonçait le cache MORT alors
+   * qu'il allait très bien une demi-seconde plus tard. Constaté en production
+   * le 08/09/2026, juste après la mise en service.
+   *
+   * ⚠️ NE JAMAIS FAIRE CETTE ATTENTE DANS `lireOuCharger`. Là, elle ajouterait
+   * jusqu'à deux secondes à une requête d'utilisateur pour lui servir ce que la
+   * base rendait déjà en quelques millisecondes — le contraire exact du but.
+   * Une lecture qui rate le cache descend en base, sans attendre personne.
+   */
+  if (c.status !== "ready") {
+    const pret = await new Promise((res) => {
+      const fin = (v) => {
+        clearTimeout(minuteur);
+        c.removeListener("ready", surPret);
+        res(v);
+      };
+      const surPret = () => fin(true);
+      const minuteur = setTimeout(() => fin(false), 2000);
+      c.once("ready", surPret);
+    });
+    if (!pret) {
+      // `status` dit CE QUI se passe, là où le message d'erreur d'une commande
+      // ne disait que sa conséquence : « connecting » (le serveur ne répond
+      // pas), « reconnecting » (mot de passe refusé, sans doute), « end ».
+      return { actif: false, raison: `connexion ${c.status}` };
+    }
+  }
+
   try {
     const info = await c.info("memory");
     const lire = (champ) => {
