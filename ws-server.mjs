@@ -26,6 +26,7 @@ import { nomAffichage } from "./src/lib/display-name.mjs";
 // `src/lib/cache-redis.mjs` pour la raison de chaque choix.
 import {
   metaConversation,
+  membresConversation,
   profilCache,
   invaliderConversation,
 } from "./src/lib/cache-redis.mjs";
@@ -568,19 +569,22 @@ async function flushPendingCalls(userId, ws) {
 }
 
 async function participantsOf(convId) {
-  const parts = await prisma.participant.findMany({
-    where: { convId },
-    select: { userId: true },
-  });
-  return parts.map((p) => p.userId);
+  return membresConversation(prisma, convId);
 }
 
+/**
+ * ⚠️ DÉSORMAIS DÉRIVÉ DE LA LISTE, et non plus d'une recherche par clé.
+ *
+ * Un `findUnique` sur l'index composé était moins cher qu'un `findMany`… tant
+ * qu'on descendait en base à chaque fois. Ces deux fonctions posant la MÊME
+ * question sur la MÊME conversation, les faire partager une seule entrée de
+ * cache économise bien plus que la différence entre les deux requêtes : la
+ * première des deux à passer paie la lecture, toutes les suivantes sont
+ * gratuites, quelle que soit celle qui appelle.
+ */
 async function isParticipant(convId, userId) {
-  const p = await prisma.participant.findUnique({
-    where: { convId_userId: { convId, userId } },
-    select: { id: true },
-  });
-  return Boolean(p);
+  const membres = await membresConversation(prisma, convId);
+  return membres.includes(userId);
 }
 
 // ═══════════════════════════════════════════════

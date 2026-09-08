@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 
@@ -24,6 +25,11 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) =>
 
   // Supprime la conversation
   await prisma.conversation.delete({ where: { id: convId } });
+
+  // La conversation n'existe plus : ses copies en cache non plus. Sans cela,
+  // elles survivraient jusqu'à expiration et le serveur temps réel croirait
+  // encore diffuser vers des membres d'un fil disparu.
+  await invaliderConversation(convId);
 
   return ok({ message: "Conversation supprimée", id: convId });
 });

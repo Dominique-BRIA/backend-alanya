@@ -51,6 +51,24 @@ export const DUREES = {
    * exemple. Un cache sans expiration finit toujours par mentir.
    */
   conversation: 300,
+  /*
+   * ⚠️ UNE MINUTE SEULEMENT POUR LA LISTE DES MEMBRES, et c'est délibérément
+   * bien plus court que tout le reste.
+   *
+   * 🔴 Cette liste N'EST PAS UNE DONNÉE D'AFFICHAGE : c'est le CONTRÔLE D'ACCÈS.
+   * C'est elle qui décide qui peut écrire dans une conversation et qui en reçoit
+   * les messages. Une copie périmée d'un nom affiche un nom périmé ; une copie
+   * périmée de cette liste-ci laisse quelqu'un qu'on vient d'exclure continuer à
+   * lire et à écrire.
+   *
+   * L'effacement explicite couvre les quatre écritures qui changent la
+   * composition d'une conversation — ajout, retrait, départ volontaire,
+   * suppression — et c'est lui qui fait le travail : en marche normale,
+   * l'exclusion prend effet IMMÉDIATEMENT. Cette minute ne borne que le cas où
+   * l'effacement lui-même aurait échoué, Redis ayant hoqueté au mauvais instant.
+   * C'est le prix à payer, et il se paie en secondes plutôt qu'en minutes.
+   */
+  membres: 60,
   // Un profil bouge encore moins : nom, avatar, numéro.
   profil: 600,
 };
@@ -225,6 +243,41 @@ export async function metaConversation(prisma, convId) {
     // et redemander la base à chaque message serait le pire des cas.
     return c ? { isGroup: c.isGroup, disappearingSeconds: c.disappearingSeconds } : null;
   });
+}
+
+/**
+ * Qui participe à une conversation.
+ *
+ * ⚠️ LA LECTURE LA PLUS FRÉQUENTE DE TOUT LE SERVEUR TEMPS RÉEL : chaque
+ * message, chaque « est en train d'écrire », chaque accusé de lecture et chaque
+ * changement de présence la refait. Vingt-trois appels dans `ws-server.mjs`.
+ *
+ * ⚠️ NE JAMAIS Y METTRE AUTRE CHOSE QUE LES IDENTIFIANTS. La ligne complète d'un
+ * participant porte `unreadCount`, `lastReadAt`, `sourdine`, `role` — des champs
+ * qui changent à chaque message et à chaque lecture. Les mettre en cache
+ * afficherait des compteurs de non-lus faux, et il faudrait alors invalider à
+ * chaque message : le cache coûterait plus qu'il ne rapporte. La composition,
+ * elle, ne change que quatre fois dans toute la vie du code.
+ */
+export async function membresConversation(prisma, convId) {
+  const liste = await lireOuCharger(cles.convMembres(convId), DUREES.membres, async () => {
+    const lignes = await prisma.participant.findMany({
+      where: { convId },
+      select: { userId: true },
+    });
+    return lignes.map((l) => l.userId);
+  });
+
+  /*
+   * ⚠️ EN CAS DE DOUTE, PERSONNE N'EST MEMBRE — jamais l'inverse.
+   *
+   * Si une valeur illisible traînait sous cette clé (format d'une version
+   * précédente, écriture tronquée), `includes` lèverait sur une valeur non
+   * tableau et ferait échouer l'envoi. Rendre une liste VIDE refuse l'accès :
+   * l'utilisateur voit une erreur, ce qui se corrige. L'inverse — accorder par
+   * défaut — ouvrirait la conversation à qui n'y est pas.
+   */
+  return Array.isArray(liste) ? liste : [];
 }
 
 /**

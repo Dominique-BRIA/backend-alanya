@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
@@ -100,6 +101,13 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       role: "MEMBER" as const,
     })),
   });
+  /*
+   * ⚠️ AVANT L'AVIS SYSTÈME QUI SUIT, PAS APRÈS. Cet avis est diffusé en temps
+   * réel par le serveur WebSocket, qui demande alors la liste des membres : s'il
+   * la lisait encore en cache, elle ne contiendrait pas les nouveaux venus, et
+   * le message annonçant leur arrivée n'arriverait justement pas jusqu'à eux.
+   */
+  await invaliderConversation(convId);
 
   // Un avis par personne ajoutée : « X a été ajouté par Y ». Les noms sont
   // figés dans l'avis — si quelqu'un change de pseudo plus tard, l'historique
@@ -157,6 +165,12 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   await prisma.participant.delete({
     where: { convId_userId: { convId, userId: targetId } },
   });
+  /*
+   * 🔴 IMMÉDIATEMENT APRÈS LE RETRAIT. Cette liste est le contrôle d'accès de la
+   * conversation : tant qu'une copie périmée circule, la personne retirée
+   * continue d'y écrire et d'en recevoir les messages.
+   */
+  await invaliderConversation(convId);
 
   // Si c'est soi-même qui quitte, on peut aussi supprimer la conv si vide
   let convSupprimee = false;

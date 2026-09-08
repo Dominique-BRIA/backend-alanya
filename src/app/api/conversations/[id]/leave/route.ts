@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
@@ -25,6 +26,8 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   await prisma.participant.delete({
     where: { convId_userId: { convId, userId } },
   });
+  // Même raison qu'au retrait : la liste des membres décide de qui reçoit quoi.
+  await invaliderConversation(convId);
 
   // Si le groupe n'a plus de membres, supprime la conversation
   const remaining = await prisma.participant.count({ where: { convId } });
