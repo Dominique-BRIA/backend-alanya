@@ -8,50 +8,85 @@ import { prisma } from "./prisma";
  * là — famille, bureau, confiance, amis — répondent à la question avant qu'elle
  * se pose, et il ne reste qu'à y glisser des gens.
  *
- * ⚠️ CE NE SONT PAS DES LISTES SPÉCIALES. Une fois créées, elles se renomment,
- * se recolorent et se suppriment comme les autres. Aucun drapeau ne les
- * distingue en base — les marquer aurait demandé une colonne, et surtout aurait
- * empêché de les supprimer pour de bon : celui qui n'en veut pas les verrait
- * revenir à chaque connexion.
+ * 🔴 ELLES SE MODIFIENT MAIS NE SE SUPPRIMENT PAS (décision du 08/09/2026).
+ *
+ * Le choix précédent était l'inverse : aucune marque en base, donc suppression
+ * libre — pour que celui qui n'en veut pas ne les voie pas revenir à chaque
+ * connexion. La demande a changé : ces quatre listes doivent être présentes chez
+ * TOUT LE MONDE. Nom, couleur, sonnerie et membres restent librement
+ * modifiables ; seule la suppression est refusée, et c'est `cle` qui permet au
+ * serveur de savoir laquelle protéger.
  *
  * Les sonneries sont des noms de fichiers LIVRÉS AVEC LES CLIENTS, pas des
  * médias téléversés : le champ accepte les deux formes, et poser quatre fichiers
  * identiques par utilisateur remplirait le stockage pour rien.
  */
 export const LISTES_PAR_DEFAUT = [
-  { name: "Bureau", color: "#1e88e5", ringtone: "liste-bureau.mp3" },
-  { name: "Amis", color: "#43a047", ringtone: "liste-amis.mp3" },
-  { name: "Confiance", color: "#8e24aa", ringtone: "liste-confiance.mp3" },
-  { name: "Famille", color: "#e53935", ringtone: "liste-famille.mp3" },
+  { cle: "bureau", name: "Bureau", color: "#1e88e5", ringtone: "liste-bureau.mp3" },
+  { cle: "amis", name: "Amis", color: "#43a047", ringtone: "liste-amis.mp3" },
+  { cle: "confiance", name: "Confiance", color: "#8e24aa", ringtone: "liste-confiance.mp3" },
+  { cle: "famille", name: "Famille", color: "#e53935", ringtone: "liste-famille.mp3" },
 ] as const;
 
 /**
- * Crée les quatre listes pour un compte qui n'en a aucune.
+ * Crée celles des quatre listes qui manquent à ce compte.
  *
- * ⚠️ SEULEMENT SI LE COMPTE N'EN A AUCUNE, et c'est ce qui rend l'appel sûr à
- * répéter. Sans cette condition, quelqu'un qui a supprimé « Bureau » la verrait
- * réapparaître à sa prochaine connexion — et n'aurait aucun moyen de s'en
- * débarrasser.
+ * ⚠️ SÛR À RÉPÉTER, et c'est ce qu'on lui demande : cette fonction est appelée à
+ * CHAQUE lecture des listes (`GET /api/contact-lists`). L'idempotence vient de la
+ * clé — une liste déjà présente sous sa clé n'est pas recréée, même renommée.
  *
- * `createMany` avec `skipDuplicates` en plus : deux appareils qui se connectent
- * au même instant passeraient tous deux le test « aucune liste », et le second
- * échouerait sur la contrainte d'unicité (utilisateur, nom).
+ * On ne peut plus « supprimer Bureau pour de bon » : c'est précisément ce que la
+ * décision du 08/09/2026 a changé, et le serveur refuse désormais cette
+ * suppression au lieu de laisser la liste réapparaître sans explication.
  *
  * Ne lève jamais : un compte sans ses listes par défaut reste parfaitement
  * utilisable, alors qu'une erreur ici bloquerait l'écran des contacts.
  */
 export async function creerListesParDefaut(userId: string): Promise<void> {
   try {
-    const dejaLa = await prisma.contactList.count({ where: { userId } });
-    if (dejaLa > 0) return;
+    /*
+     * 🐛 ON NE TESTE PLUS « LE COMPTE N'A AUCUNE LISTE », et c'était le défaut.
+     *
+     * Cette condition voulait dire : on ne sème qu'aux comptes neufs. Or tout
+     * compte existant avait déjà au moins une liste à lui — il n'a donc JAMAIS
+     * reçu les quatre, et son propriétaire ne comprenait pas pourquoi elles
+     * n'apparaissaient pas. On sème maintenant CLÉ PAR CLÉ : l'appel devient
+     * rejouable, et les comptes anciens sont rattrapés à leur première ouverture
+     * de l'écran des contacts.
+     */
+    const existantes = await prisma.contactList.findMany({
+      where: { userId },
+      select: { cle: true, name: true },
+    });
+    const clesPrises = new Set(existantes.map((l) => l.cle).filter(Boolean));
+    const nomsPris = new Set(existantes.map((l) => l.name));
+
+    const aCreer = LISTES_PAR_DEFAUT.filter((l) => {
+      if (clesPrises.has(l.cle)) return false;
+      /*
+       * ⚠️ UN NOM DÉJÀ PRIS FAIT RENONCER, plutôt que d'adopter la liste
+       * existante ou d'en créer une seconde.
+       *
+       * Adopter la liste « Amis » que l'utilisateur a faite lui-même la rendrait
+       * NON SUPPRIMABLE sans qu'il l'ait demandé. En créer une seconde du même
+       * nom violerait l'unicité (utilisateur, nom) et ferait échouer tout le
+       * lot. Renoncer ne retire rien à personne.
+       */
+      if (nomsPris.has(l.name)) return false;
+      return true;
+    });
+    if (aCreer.length === 0) return;
 
     await prisma.contactList.createMany({
-      data: LISTES_PAR_DEFAUT.map((l) => ({
+      data: aCreer.map((l) => ({
         userId,
+        cle: l.cle,
         name: l.name,
         color: l.color,
         ringtone: l.ringtone,
       })),
+      // Deux appareils ouvrant l'écran au même instant passeraient tous deux le
+      // test ci-dessus ; le second échouerait sur l'unicité (compte, clé).
       skipDuplicates: true,
     });
   } catch (e) {

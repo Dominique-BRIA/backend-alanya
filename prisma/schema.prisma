@@ -642,6 +642,19 @@ model ContactList {
   /// pour la meme raison que la sonnerie : la palette appartient au client.
   color String? @db.VarChar(20)
 
+  /// Liste creee D'OFFICE : `bureau`, `amis`, `confiance` ou `famille`.
+  /// `null` pour une liste ordinaire.
+  ///
+  /// 🔴 SERT A REFUSER LA SUPPRESSION. Ces quatre-la sont presentes chez tout le
+  /// monde et se modifient librement — nom, couleur, sonnerie, membres — mais ne
+  /// se suppriment pas. Sans cette marque, le serveur ne saurait pas lesquelles
+  /// proteger, et le client ne saurait pas quel bouton masquer.
+  ///
+  /// ⚠️ UNE CLE PLUTOT QU'UN BOOLEEN : il faut savoir LAQUELLE, sinon le semeur
+  /// ne peut pas dire si « Bureau » existe deja chez ce compte apres que
+  /// l'utilisateur l'a renommee en « Travail ».
+  cle String? @db.VarChar(20)
+
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   members ContactListMember[]
@@ -649,6 +662,9 @@ model ContactList {
   /// Le nom est l'identite visible d'une liste : deux homonymes chez le meme
   /// compte seraient indiscernables a l'ecran.
   @@unique([userId, name])
+  /// Une seule liste par cle et par compte : le semeur s'appuie dessus pour
+  /// etre rejouable sans creer de doublon.
+  @@unique([userId, cle])
   @@index([userId])
   @@map("contactList")
 }

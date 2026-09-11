@@ -31,6 +31,14 @@ export interface ListeJson {
   color: string | null;
   createdAt: string;
   members: MembreJson[];
+  /**
+   * Liste creee d'office (`bureau`, `amis`, `confiance`, `famille`), ou `null`.
+   *
+   * 🔴 LE CLIENT EN A BESOIN POUR MASQUER LE BOUTON DE SUPPRESSION. Le serveur
+   * refuse deja la requete, mais laisser le bouton ne ferait qu'annoncer une
+   * erreur apres coup : une action impossible ne doit pas etre proposee.
+   */
+  cle: string | null;
 }
 
 /// Ligne Prisma minimale attendue en entree — c'est ce que `AVEC_MEMBRES` charge.
@@ -39,6 +47,7 @@ interface LigneListe {
   name: string;
   ringtone: string | null;
   color: string | null;
+  cle: string | null;
   createdAt: Date;
   members: {
     memberId: string;
@@ -180,6 +189,7 @@ export function jsonListe(
     name: liste.name,
     ringtone: liste.ringtone,
     color: liste.color,
+    cle: liste.cle,
     createdAt: liste.createdAt.toISOString(),
     members: liste.members.map((m) =>
       membreAffichable({ id: m.memberId, ...m.member }, repertoire),

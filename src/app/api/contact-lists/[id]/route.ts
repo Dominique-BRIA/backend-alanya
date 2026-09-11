@@ -19,7 +19,7 @@ import {
 async function listePossedee(id: string, userId: string) {
   const list = await prisma.contactList.findUnique({
     where: { id },
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, cle: true },
   });
   return list && list.userId === userId ? list : null;
 }
@@ -114,8 +114,29 @@ export const PATCH = PUT;
 export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const { id } = await ctx.params;
 
-  if (!(await listePossedee(id, userId))) {
+  const liste = await listePossedee(id, userId);
+  if (!liste) {
     return fail("Liste introuvable", 404, "NOT_FOUND");
+  }
+
+  /*
+   * 🔴 LES QUATRE LISTES CRÉÉES D'OFFICE NE SE SUPPRIMENT PAS.
+   *
+   * Elles se renomment, se recolorent, changent de sonnerie et de membres — tout
+   * sauf disparaître. Le refus vit ICI et pas seulement dans les clients : un
+   * contrôle qui n'existe que dans l'interface n'en est pas un, et les trois
+   * clients ne se mettent pas à jour en même temps.
+   *
+   * 409 et non 403 : ce n'est pas une question de droits — le propriétaire est
+   * bien le demandeur — mais d'état. La liste ne PEUT pas être supprimée,
+   * quiconque demande.
+   */
+  if (liste.cle) {
+    return fail(
+      "Cette liste fait partie des listes par défaut et ne peut pas être supprimée",
+      409,
+      "LISTE_PAR_DEFAUT",
+    );
   }
 
   // Les lignes de `contactListMember` partent avec, par la cle etrangere en
