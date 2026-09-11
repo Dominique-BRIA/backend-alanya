@@ -209,6 +209,24 @@ export const sendMessageSchema = z.object({
    * qu'elle ne traverse la pile.
    */
   content: z.string().trim().min(1).max(8000).optional(),
+  /**
+   * L'IDENTIFIANT QUE LE CLIENT DONNE À SON ENVOI, pour qu'un rejeu ne crée pas
+   * un second message.
+   *
+   * Le mobile garde ses envois dans une file persistée et les rejoue au retour
+   * du réseau ; si la coupure tombe entre l'écriture et la réponse, il rejoue un
+   * message déjà écrit. Cet identifiant permet au serveur de reconnaître le
+   * rejeu et de renvoyer le message d'origine. Voir `src/lib/idempotence.mjs`.
+   *
+   * ⚠️ FACULTATIF, ET IL DOIT LE RESTER : les APK déjà installés ne l'envoient
+   * pas, et leurs messages doivent continuer de passer — sans déduplication,
+   * exactement comme aujourd'hui.
+   *
+   * La forme acceptée est celle de `tempIdValide` ; on ne la redit pas ici, un
+   * refus à l'entrée transformerait un client mal formé en erreur 422 alors
+   * qu'on préfère simplement ne pas dédupliquer.
+   */
+  tempId: z.string().max(64).optional(),
   type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO", "CONTACT", "LOCATION"]).default("TEXT"),
   mediaId: z.string().uuid().optional(),
   mediaIds: z.array(z.string().uuid()).max(10).optional(),

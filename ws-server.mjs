@@ -31,6 +31,14 @@ import {
   invaliderConversation,
 } from "./src/lib/cache-redis.mjs";
 import { fermerRedis } from "./src/lib/redis-client.mjs";
+// Qu'un envoi rejoue ne s'ecrive qu'une fois. Meme module que la route REST,
+// donc meme cle : un message rejoue par l'autre chemin est reconnu ici aussi.
+import {
+  reserverEnvoi,
+  confirmerEnvoi,
+  annulerEnvoi,
+  tempIdValide,
+} from "./src/lib/idempotence.mjs";
 
 /**
  * L'ORDRE DES MÉDIAS D'UN MESSAGE — jumeau de `src/lib/media-ordre.ts`.
@@ -1062,7 +1070,41 @@ async function handleSend(ws, msg) {
     }
   }
 
-  const created = await prisma.message.create({
+  /*
+   * QU'UN REJEU N'ÉCRIVE PAS UN SECOND MESSAGE — voir `src/lib/idempotence.mjs`.
+   *
+   * La réservation est posée ICI, juste avant l'écriture, et non à l'entrée de
+   * la fonction : tous les refus qui précèdent — conversation interdite, charge
+   * invalide, média étranger — n'ont alors rien à libérer, et il devient
+   * impossible d'oublier une annulation sur l'un des huit chemins d'erreur.
+   *
+   * ⚠️ LE CLIENT ENVOIE DÉJÀ CE `tempId` DEPUIS TOUJOURS, pour retrouver sa
+   * bulle dans l'écho. On lui donne ici un second rôle sans rien changer au
+   * protocole : aucun client n'a besoin d'être mis à jour pour en profiter.
+   */
+  const cleIdempotence = tempIdValide(tempId);
+  const reservation = await reserverEnvoi(ws.userId, cleIdempotence);
+  if (!reservation.reserve) {
+    /*
+     * Ce message est déjà écrit — ou en train de l'être. On ne réécrit rien et
+     * l'on ne rediffuse rien : les destinataires l'ont reçu au premier passage.
+     * L'émetteur, lui, reçoit son accusé, sans quoi sa bulle resterait
+     * éternellement « en cours d'envoi ».
+     */
+    ws.send(
+      JSON.stringify({
+        type: "send_ack",
+        tempId,
+        messageId: reservation.messageId,
+        deja: true,
+      }),
+    );
+    return;
+  }
+
+  let created;
+  try {
+    created = await prisma.message.create({
     data: {
       convId,
       senderId: ws.userId,
@@ -1087,7 +1129,17 @@ async function handleSend(ws, msg) {
     },
     // Ordonné : c'est cette réponse qui dessine la grille en temps réel.
     include: { media: MEDIA_ORDONNE, mentions: true, statusQuote: true },
-  });
+    });
+  } catch (e) {
+    // 🔴 L'écriture a échoué : libérer la réservation, sinon le rejeu que le
+    // client va tenter s'entendrait répondre « déjà envoyé » pour un message
+    // qui n'existe nulle part.
+    await annulerEnvoi(ws.userId, cleIdempotence);
+    throw e;
+  }
+
+  // Le message existe : le rejeu qui arriverait maintenant recevra son identifiant.
+  await confirmerEnvoi(ws.userId, cleIdempotence, created.id);
 
   // F10 + F11 : met à jour le dernier message dénormalisé + incrémente unreadCount
   await prisma.conversation.update({

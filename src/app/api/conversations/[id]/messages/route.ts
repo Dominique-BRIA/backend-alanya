@@ -6,6 +6,12 @@ import { sendMessageSchema } from "@/lib/validation";
 import { MEDIA_ORDONNE } from "@/lib/media-ordre";
 import { assertParticipant } from "@/modules/messaging/access";
 import { creerMessage, serialiserMessage } from "@/modules/messaging/envoi";
+import {
+  reserverEnvoi,
+  confirmerEnvoi,
+  annulerEnvoi,
+  tempIdValide,
+} from "@/lib/idempotence.mjs";
 
 const PAGE_SIZE = 50;
 
@@ -192,12 +198,93 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   });
 });
 
+/** La citation d'un statut, telle qu'elle part au client. */
+function serialiserCitation(c: {
+  statusId: string;
+  authorId: string;
+  type: string;
+  text: string | null;
+  mediaUrl: string | null;
+  bgColor: string | null;
+}) {
+  return {
+    statusId: c.statusId,
+    authorId: c.authorId,
+    type: c.type,
+    text: c.text,
+    mediaUrl: c.mediaUrl,
+    bgColor: c.bgColor,
+  };
+}
+
+/**
+ * Le message déjà écrit sous cette réservation, prêt à être renvoyé — ou `null`
+ * s'il a disparu depuis.
+ *
+ * ⚠️ LA RÉPONSE DOIT ÊTRE LA MÊME QUE CELLE DU PREMIER ENVOI, citation
+ * comprise. Un client qui rejoue reçoit ainsi exactement ce qu'il attendait, et
+ * retire son entrée de la file. Lui répondre un corps appauvri l'obligerait à
+ * recharger la conversation pour retrouver l'aperçu.
+ *
+ * ⚠️ `null` EST UN CAS NORMAL : la réservation dure vingt-quatre heures, et le
+ * message peut avoir été supprimé entre-temps. L'appelant laisse alors l'envoi
+ * suivre son cours ordinaire — mieux vaut un message réécrit qu'un message
+ * perdu.
+ */
+async function messageDejaEcrit(messageId: string) {
+  const message = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: { media: true, mentions: true },
+  });
+  if (!message) return null;
+
+  const citation = await prisma.statusReplyQuote.findUnique({
+    where: { messageId: message.id },
+  });
+
+  return {
+    ...serialiserMessage(message),
+    statutCite: citation ? serialiserCitation(citation) : null,
+  };
+}
+
 // POST /api/conversations/:id/messages — envoie un message dans la conversation.
 export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const { id: convId } = await ctx.params;
   await assertParticipant(convId, userId);
 
   const body = sendMessageSchema.parse(await req.json());
+
+  /*
+   * QU'UN REJEU N'ÉCRIVE PAS UN SECOND MESSAGE.
+   *
+   * 🔴 C'est PAR ICI que passe la file d'envois du mobile (`outbox.dart`), et
+   * non par la socket. Elle ne retire son entrée qu'une fois la réponse reçue :
+   * une coupure survenue APRÈS l'écriture mais AVANT la réponse lui fait croire
+   * à un échec, et elle rejoue. Sans la réservation qui suit, le message part
+   * une seconde fois.
+   *
+   * ⚠️ UN CLIENT SANS `tempId` PASSE COMME AVANT. Les APK déjà installés n'en
+   * envoient pas ; leur refuser l'envoi serait échanger un doublon occasionnel
+   * contre une panne totale.
+   */
+  const tempId = tempIdValide(body.tempId);
+  const reservation = await reserverEnvoi(userId, tempId);
+  if (!reservation.reserve) {
+    if (!reservation.messageId) {
+      /*
+       * Le même envoi est en train de s'écrire, ailleurs. On ne peut pas encore
+       * rendre le message — il n'existe pas — et rendre un succès vide ferait
+       * retirer l'entrée de la file pour un message peut-être jamais écrit. Le
+       * client réessaiera, et trouvera alors la réservation complète.
+       */
+      return fail("Envoi déjà en cours", 409, "ENVOI_EN_COURS");
+    }
+    const dejaEcrit = await messageDejaEcrit(reservation.messageId);
+    // La réservation survit vingt-quatre heures, le message peut avoir été
+    // supprimé entre-temps : on laisse alors l'envoi suivre son cours normal.
+    if (dejaEcrit) return ok(dejaEcrit, 200);
+  }
 
   /*
    * La séquence d'envoi vit dans `creerMessage` — contrôle de blocage, messages
@@ -227,6 +314,15 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   });
 
   if (!envoi.ok) {
+    /*
+     * 🔴 LIBÉRER LA RÉSERVATION, SANS QUOI L'ÉCHEC DEVIENDRAIT DÉFINITIF.
+     * Aucun message n'a été écrit ; garder la clé vingt-quatre heures ferait
+     * répondre « déjà envoyé » à chaque rejeu, pour un message qui n'existe
+     * nulle part — soit exactement le contraire de ce que la file du mobile
+     * doit permettre.
+     */
+    await annulerEnvoi(userId, tempId);
+
     if (envoi.motif === "MEDIA_ETRANGER") {
       return fail("Média inconnu ou non possédé", 403, "MEDIA_FORBIDDEN");
     }
@@ -237,6 +333,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     }
     return fail("Message non distribuable", 403, "BLOCKED");
   }
+
+  // Le message existe : le rejeu qui arriverait maintenant recevra celui-ci.
+  await confirmerEnvoi(userId, tempId, envoi.message.id);
 
   /*
    * La citation part AVEC la réponse, et pas seulement au rechargement.
@@ -255,16 +354,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   return ok(
     {
       ...serialiserMessage(envoi.message),
-      statutCite: citation
-        ? {
-            statusId: citation.statusId,
-            authorId: citation.authorId,
-            type: citation.type,
-            text: citation.text,
-            mediaUrl: citation.mediaUrl,
-            bgColor: citation.bgColor,
-          }
-        : null,
+      statutCite: citation ? serialiserCitation(citation) : null,
     },
     201,
   );
