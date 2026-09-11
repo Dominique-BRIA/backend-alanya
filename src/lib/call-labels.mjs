@@ -16,10 +16,28 @@ import { TYPE_COMPTE_CENTRE } from "./ivr.mjs";
 
 /// Délai au bout duquel un appel qui sonne est considéré sans réponse.
 ///
-/// 90 s et non 2 min : c'est la valeur du minuteur Telecom côté Android. Quand
-/// les deux divergent, l'appel disparaît de l'écran du téléphone avant que le
-/// serveur ne le clôture, et l'utilisateur voit une sonnerie fantôme.
-export const DELAI_SANS_REPONSE_MS = 90 * 1000;
+/// 🔴 TRENTE SECONDES (décision du user, 11/09/2026), et non plus quatre-vingt-dix.
+///
+/// L'ancienne valeur s'alignait sur le minuteur Telecom d'Android, par crainte
+/// que l'appel disparaisse de l'écran du téléphone avant que le serveur ne le
+/// clôture — une sonnerie fantôme. Cette crainte visait le sens INVERSE de
+/// celui-ci : un serveur plus LENT qu'Android. Terminer AVANT lui ne pose pas
+/// le même problème, l'application retirant elle-même l'appel natif dès qu'elle
+/// reçoit `call_ended` (`AlanyaTelecom.endCall`, `cancelIncomingCall`).
+///
+/// ⚠️ CETTE PROPRIÉTÉ EST LA CONDITION DE CE DÉLAI. Le jour où l'application
+/// cesserait de retirer la notification native sur `call_ended`, le téléphone
+/// sonnerait soixante secondes de plus que le serveur, et la sonnerie fantôme
+/// reviendrait — par l'autre bout.
+///
+/// Trente secondes est aussi la durée usuelle en téléphonie, et le répondeur la
+/// rend indolore : au bout de ce délai l'appelant n'a plus une ligne morte, il a
+/// le message d'accueil de son correspondant.
+///
+/// Cas dégradé connu : téléphone éteint ou hors réseau, l'application ne reçoit
+/// pas l'ordre et la notification survit jusqu'au minuteur d'Android. Sans
+/// gravité, et rien ne permet de l'éviter.
+export const DELAI_SANS_REPONSE_MS = 30 * 1000;
 
 /**
  * Formule un statut d'appel DU POINT DE VUE d'un destinataire donné.

@@ -410,7 +410,7 @@ async function fermeAppelsPerimes() {
      * des appelants en file d'attente s'arrêtaient avant même les 5 minutes
      * promises). Un appel routé par un standard reste `RINGING` tout le temps
      * qu'il navigue le menu, sonne un agent, ou PATIENTE EN FILE — jusqu'à 5
-     * min (`DELAI_ATTENTE_MAX_MS`), largement au-delà des 90 s de ce balayage
+     * min (`DELAI_ATTENTE_MAX_MS`), largement au-delà des 30 s de ce balayage
      * générique conçu pour les appels ORDINAIRES sans réponse. Sans cette
      * exclusion, ce balayage clôturait en NO_ANSWER des appels parfaitement
      * vivants, gérés par leurs PROPRES minuteurs (`armerMinuteurMenu`,
@@ -4558,7 +4558,22 @@ wss.on("listening", () => {
   // Toutes les 30 s : bien plus court que le délai de 90 s, pour qu'un appel
   // abandonné ne survive jamais longtemps à son échéance.
   fermeAppelsPerimes();
-  setInterval(fermeAppelsPerimes, 30 * 1000);
+  /*
+   * ⚠️ DIX SECONDES, ET NON TRENTE COMME LE SEUIL LUI-MEME.
+   *
+   * La periode du balayage s'AJOUTE au seuil : passer toutes les 30 s sur un
+   * seuil de 30 s cloturait un appel abandonne entre 30 et 60 s — le double,
+   * dans le pire cas. Tant que le seuil valait 90 s, ces 30 s de flou pesaient
+   * un tiers ; sur 30 s, elles pesaient autant que le delai.
+   *
+   * Dix secondes ramenent le pire cas a 40 s. Le cout est nul : la requete ne
+   * lit que les appels RINGING, qui se comptent sur les doigts d'une main.
+   *
+   * ⚠️ CE BALAYAGE N'EST QU'UN FILET. Dans le cas normal, c'est le client de
+   * l'APPELANT qui cloture a l'expiration de sa sonnerie, immediatement. Le
+   * filet ne sert que lorsqu'il a disparu — onglet ferme, application tuee.
+   */
+  setInterval(fermeAppelsPerimes, 10 * 1000);
   // Rappels de réunion : même cadence que les appels périmés. La fenêtre de
   // rappel dure cinq minutes, un balayage toutes les 30 s la traverse dix fois
   // — aucune réunion ne peut la franchir sans être vue.
