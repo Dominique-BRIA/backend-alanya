@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { lireOuCharger, cles, DUREES } from "@/lib/cache-redis.mjs";
 
 /**
  * ANNUAIRE DES ENTREPRISES — types, entreprises, et les centres qu'on appelle.
@@ -47,6 +48,12 @@ export interface TypeEntreprise {
  * deux mondes : l'utilisateur croit à une panne.
  */
 export async function typesDEntreprise(idPaysUtilisateur: number | null): Promise<TypeEntreprise[]> {
+  return lireOuCharger(cles.annuaireTypes(idPaysUtilisateur), DUREES.annuaire, () =>
+    typesDepuisLaBase(idPaysUtilisateur),
+  );
+}
+
+async function typesDepuisLaBase(idPaysUtilisateur: number | null): Promise<TypeEntreprise[]> {
   const types = await prisma.typeCompany.findMany({ orderBy: { libelle: "asc" } });
 
   const comptes = await prisma.company.groupBy({
@@ -141,6 +148,10 @@ export async function entreprisesDuType(idTypeCompany: number, idPaysUtilisateur
 export async function paysAvecEntreprises(): Promise<
   { idPays: number; libelle: string }[]
 > {
+  return lireOuCharger(cles.annuairePays(), DUREES.annuaire, paysDepuisLaBase);
+}
+
+async function paysDepuisLaBase(): Promise<{ idPays: number; libelle: string }[]> {
   const groupes = await prisma.company.groupBy({
     by: ["idPays"],
     where: { ...ACTIVE, idPays: { not: null } },

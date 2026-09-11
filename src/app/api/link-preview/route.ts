@@ -1,11 +1,26 @@
 import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { lireCache, ecrireCache, cles, DUREES } from "@/lib/cache-redis.mjs";
 
-// Cache en mémoire (LRU simple) — 500 entrées max, TTL 1h.
-const cache = new Map<string, { data: LinkMeta; ts: number }>();
-const MAX_CACHE = 500;
-const TTL_MS = 60 * 60 * 1000; // 1 heure
+/*
+ * L'APERÇU D'UN LIEN EST LE MÊME POUR TOUT LE MONDE, et c'est ce qui décide de
+ * l'endroit où on le garde.
+ *
+ * Il vivait dans une `Map` locale, bornée à 500 entrées : chaque processus
+ * récupérait donc la même page de son côté, et tout était reperdu à chaque
+ * redéploiement. Un lien collé dans un groupe de dix partait ainsi chercher la
+ * page plusieurs fois, pour un résultat identique.
+ *
+ * En cache partagé, le premier qui colle le lien paie la requête et les autres
+ * lisent sa réponse. La borne de 500 entrées disparaît avec la `Map` : c'est
+ * désormais `maxmemory` de Redis qui arbitre, et il le fait globalement.
+ *
+ * ⚠️ LA CLÉ EST L'URL TELLE QUE LE CLIENT L'ENVOIE. Deux écritures d'une même
+ * page — avec et sans barre finale — occupent deux entrées. C'était déjà le cas
+ * avec la `Map` ; normaliser changerait ce que l'on met en cache, pas où, et
+ * c'est un autre sujet.
+ */
 
 interface LinkMeta {
   url: string;
@@ -16,23 +31,12 @@ interface LinkMeta {
   favicon?: string;
 }
 
-function getCached(url: string): LinkMeta | null {
-  const entry = cache.get(url);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > TTL_MS) {
-    cache.delete(url);
-    return null;
-  }
-  return entry.data;
+async function getCached(url: string): Promise<LinkMeta | null> {
+  return lireCache(cles.apercuLien(url));
 }
 
-function setCache(url: string, data: LinkMeta) {
-  // Éviction LRU basique
-  if (cache.size >= MAX_CACHE) {
-    const oldest = cache.keys().next().value;
-    if (oldest) cache.delete(oldest);
-  }
-  cache.set(url, { data, ts: Date.now() });
+async function setCache(url: string, data: LinkMeta): Promise<void> {
+  await ecrireCache(cles.apercuLien(url), DUREES.apercuLien, data);
 }
 
 // GET /api/link-preview?url=https://example.com
@@ -50,7 +54,7 @@ export const GET = withAuth(async (req: NextRequest, _userId: string) => {
   }
 
   // Vérifie le cache
-  const cached = getCached(url);
+  const cached = await getCached(url);
   if (cached) return ok(cached);
 
   try {
@@ -74,7 +78,7 @@ export const GET = withAuth(async (req: NextRequest, _userId: string) => {
     const html = await res.text();
     const meta = parseOpenGraph(html, url);
 
-    setCache(url, meta);
+    await setCache(url, meta);
     return ok(meta);
   } catch (err: any) {
     if (err?.name === "AbortError") {

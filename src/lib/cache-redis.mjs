@@ -39,6 +39,21 @@ export const cles = {
   convMeta: (convId) => `${PREFIXE}conv:${convId}:meta`,
   convMembres: (convId) => `${PREFIXE}conv:${convId}:membres`,
   profil: (userId) => `${PREFIXE}user:${userId}:profil`,
+  /// La liste des pays. UNE seule clé pour tout le monde : elle ne dépend
+  /// d'aucun compte, et c'est ce qui la rend si rentable à garder.
+  pays: () => `${PREFIXE}pays`,
+  /// Les plafonds de réunion applicables à un compte.
+  limitesReunion: (userId) => `${PREFIXE}user:${userId}:limites-reunion`,
+  /// L'aperçu d'un lien. Partagé par tous : une page d'actualité est la même
+  /// pour celui qui la colle et pour les cinq personnes du groupe qui la lisent.
+  apercuLien: (url) => `${PREFIXE}lien:${url}`,
+  /// Les types d'entreprise et leurs effectifs, POUR UN PAYS DONNÉ — le compte
+  /// affiché est celui d'après filtre, il change donc avec le pays du lecteur.
+  /// `null` (pas de pays connu) a sa propre entrée, et c'est voulu : c'est la
+  /// vue « toutes entreprises », qui n'est celle d'aucun pays.
+  annuaireTypes: (idPays) => `${PREFIXE}annuaire:types:${idPays ?? "tous"}`,
+  /// Les pays où il existe au moins une entreprise. Ne dépend d'aucun lecteur.
+  annuairePays: () => `${PREFIXE}annuaire:pays`,
 };
 
 /** Durées de vie, en secondes. */
@@ -71,6 +86,44 @@ export const DUREES = {
   membres: 60,
   // Un profil bouge encore moins : nom, avatar, numéro.
   profil: 600,
+  /*
+   * UNE HEURE POUR LES PAYS. La table change une fois par an, et la route est
+   * PUBLIQUE — appelée à chaque inscription, avant même qu'un compte existe.
+   * L'ajout d'un pays efface la clé explicitement ; cette heure ne couvre que
+   * les modifications faites directement en base.
+   */
+  pays: 3600,
+  /*
+   * ⚠️ UNE MINUTE POUR LES PLAFONDS DE RÉUNION, et pas davantage.
+   *
+   * `limites-reunion.ts` REFUSAIT tout cache, et sa raison était juste : « un
+   * cache local rendrait une baisse de plafond effective ici et pas là ». Un
+   * cache PARTAGÉ ne souffre pas de ce défaut — tous les processus lisent la
+   * même valeur, et la baisse prend effet partout au même instant.
+   *
+   * Reste la question du délai, et c'est pourquoi une minute : un plafond qu'on
+   * abaisse est presque toujours abaissé POUR ARRÊTER quelque chose. Soixante
+   * secondes bornent ce que l'ancienne valeur laisse encore passer, là où dix
+   * minutes laisseraient créer des réunions qu'on croyait déjà interdites.
+   */
+  limitesReunion: 60,
+  /*
+   * UNE HEURE POUR UN APERÇU DE LIEN — la durée qu'appliquait déjà le cache en
+   * mémoire qu'il remplace. Le gain n'est pas la durée mais le PARTAGE : un lien
+   * collé dans un groupe était jusqu'ici récupéré une fois par processus, et
+   * reperdu à chaque redéploiement.
+   */
+  apercuLien: 3600,
+  /*
+   * CINQ MINUTES POUR L'ANNUAIRE PUBLIC.
+   *
+   * Deux `groupBy` par consultation, sur des données qui bougent quand une
+   * entreprise s'inscrit — c'est-à-dire rarement. Cinq minutes est le délai
+   * qu'une entreprise nouvelle met à apparaître dans l'annuaire ; personne ne
+   * le remarque, et c'est sans conséquence : rien ici ne décide d'un droit,
+   * contrairement à la liste des membres d'une conversation.
+   */
+  annuaire: 300,
 };
 
 /* ─────────────────────────────── Lecture */
@@ -87,6 +140,40 @@ export const DUREES = {
  * c'est précisément le cas où le cache sert le plus, puisque la réponse ne
  * changera plus.
  */
+/**
+ * Lit une valeur, ou `null` si elle n'y est pas.
+ *
+ * ⚠️ À N'UTILISER QUE QUAND `lireOuCharger` NE CONVIENT PAS, c'est-à-dire quand
+ * l'échec du chargement ne doit PAS être mis en cache. `lireOuCharger` range
+ * `null` volontairement — c'est ce qui empêche de redemander sans fin une
+ * conversation supprimée. Mais pour un aperçu de lien, garder l'échec
+ * signifierait qu'un site indisponible dix secondes reste « sans aperçu »
+ * pendant une heure pour tout le monde.
+ *
+ * L'appelant décide donc lui-même de ce qu'il range, avec `ecrireCache`.
+ */
+export async function lireCache(cle) {
+  const c = redis();
+  if (!c) return null;
+  try {
+    const brut = await c.get(cle);
+    return brut === null ? null : JSON.parse(brut);
+  } catch {
+    return null;
+  }
+}
+
+/** Range une valeur pour une durée donnée. Une panne de cache reste silencieuse. */
+export async function ecrireCache(cle, dureeSecondes, valeur) {
+  const c = redis();
+  if (!c) return;
+  try {
+    await c.set(cle, JSON.stringify(valeur ?? null), "EX", dureeSecondes);
+  } catch {
+    // Cache plein ou coupé : la valeur est déjà calculée chez l'appelant.
+  }
+}
+
 export async function lireOuCharger(cle, dureeSecondes, chargeur) {
   const c = redis();
 

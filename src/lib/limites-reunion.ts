@@ -1,4 +1,5 @@
 import { prisma } from "./prisma";
+import { lireOuCharger, cles, DUREES } from "./cache-redis.mjs";
 
 // Plafond de participants d'une reunion : LA source unique de verite.
 //
@@ -171,12 +172,34 @@ function resoudre(lignes: LignePlafond[]): LimitesResolues {
 /// en une passe, mais ce depot n'en contient aucune et elle figerait les noms
 /// de colonnes physiques dans du TypeScript, hors de portee du typage.
 ///
-/// POURQUOI PAS DE CACHE. Un plafond change rarement, la tentation est forte.
-/// Mais l'application tourne en plusieurs instances : un cache local rendrait
-/// une baisse de plafond effective ici et pas la, pendant un temps que
-/// personne ne pourrait constater. Une lecture indexee par reunion creee est
-/// un prix negligeable a cote de cette incoherence.
+/// POURQUOI UN CACHE PARTAGE, ET PAS UN CACHE LOCAL.
+///
+/// Cette fonction a longtemps refuse tout cache, pour une raison qui etait
+/// juste : l'application tourne en plusieurs instances, et un cache LOCAL
+/// aurait rendu une baisse de plafond effective ici et pas la, pendant un
+/// temps que personne n'aurait pu constater.
+///
+/// Un cache PARTAGE ne souffre pas de ce defaut : tous les processus lisent la
+/// meme valeur, et une baisse prend effet partout au meme instant — des que la
+/// clef expire ou qu'on l'efface. L'objection tombe donc avec l'outil, pas avec
+/// le raisonnement.
+///
+/// ⚠️ SOIXANTE SECONDES, ET PAS DAVANTAGE. Un plafond qu'on abaisse est presque
+/// toujours abaisse POUR ARRETER quelque chose ; cette minute borne ce que
+/// l'ancienne valeur laisse encore passer. `src/app/api/admin/limites-reunion`
+/// n'efface aucune clef : il faudrait les connaitre toutes, une par compte.
+/// C'est le delai qui fait le travail, et c'est pourquoi il est court.
+///
+/// ⚠️ LA CLEF EST PAR COMPTE, pas par entreprise : la resolution
+/// utilisateur → entreprise → plafond se fait dans la requete elle-meme, et
+/// l'extraire pour affiner la clef reintroduirait la lecture qu'on evite.
 export async function limitesPour(userId: string): Promise<LimitesReunion> {
+  return lireOuCharger(cles.limitesReunion(userId), DUREES.limitesReunion, () =>
+    limitesDepuisLaBase(userId),
+  );
+}
+
+async function limitesDepuisLaBase(userId: string): Promise<LimitesReunion> {
   try {
     const lignes = await prisma.limiteReunion.findMany({
       where: {

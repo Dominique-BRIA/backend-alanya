@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createPaysSchema } from "@/lib/validation";
+import { lireOuCharger, invalider, cles, DUREES } from "@/lib/cache-redis.mjs";
 
 /**
  * GET /api/pays — la liste de référence des pays.
@@ -25,17 +26,28 @@ import { createPaysSchema } from "@/lib/validation";
  * afficher un choix et formater un numéro.
  */
 export async function GET(_req: NextRequest) {
-  const pays = await prisma.pays.findMany({
-    where: { isDelete: false },
-    orderBy: { libelle: "asc" },
-    select: {
-      idPays: true,
-      libelle: true,
-      libelleAnglais: true,
-      iso2: true,
-      prefix: true,
-    },
-  });
+  /*
+   * EN CACHE, ET C'EST LA LECTURE QUI S'Y PRÊTE LE MIEUX DE TOUT LE DÉPÔT :
+   * une table de référence, identique pour tout le monde, sans donnée
+   * personnelle, et demandée par CHAQUE écran d'inscription avant même qu'un
+   * compte existe. Une seule clé sert donc tous les appelants à la fois.
+   *
+   * L'ajout d'un pays (POST, plus bas) efface la clé : la nouvelle liste est
+   * visible tout de suite, sans attendre l'expiration.
+   */
+  const pays = await lireOuCharger(cles.pays(), DUREES.pays, () =>
+    prisma.pays.findMany({
+      where: { isDelete: false },
+      orderBy: { libelle: "asc" },
+      select: {
+        idPays: true,
+        libelle: true,
+        libelleAnglais: true,
+        iso2: true,
+        prefix: true,
+      },
+    }),
+  );
   return ok({ pays });
 }
 
@@ -49,5 +61,12 @@ export const POST = withAuth(async (req: NextRequest, _userId: string) => {
   if (existing) return fail("Ce pays existe déjà", 409, "ALREADY_EXISTS");
 
   const pays = await prisma.pays.create({ data: body });
+  /*
+   * La liste en cache ne contient pas ce pays : l'effacer la fait recharger au
+   * prochain appel. Sans cela, un pays ajouté resterait invisible jusqu'à une
+   * heure — et c'est pendant l'inscription que cette liste est lue, donc au
+   * moment où une absence coûte le plus cher.
+   */
+  await invalider(cles.pays());
   return ok(pays, 201);
 });
