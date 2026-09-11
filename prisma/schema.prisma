@@ -821,6 +821,29 @@ model Participant {
   /// de se mettre a jour en direct chez celui qui la regarde.
   sourdine Int @default(0) @db.SmallInt
 
+  /// Langue dans laquelle ECRIT le correspondant, declaree par l'utilisateur.
+  ///
+  /// `null` = detection automatique, soit le comportement actuel. Renseignee,
+  /// elle est passee telle quelle au moteur et la detection est entierement
+  /// court-circuitee : l'application cesse de deviner, et c'est tout l'objet du
+  /// reglage — la detection se trompait de langue source, ou ne traduisait pas.
+  ///
+  /// ⚠️ Dix caracteres et non deux : une langue s'ecrit parfois avec sa region
+  /// (`pt-BR`, `zh-Hans`), et tronquer confondrait deux traductions distinctes.
+  langueSource String? @map("langue_source") @db.VarChar(10)
+
+  /// Traduction automatique de CETTE conversation, en TROIS etats.
+  ///
+  /// `null` suit le reglage global, `0` refuse, `1` impose. Le reglage local
+  /// prime toujours sur le global — c'est pourquoi `0` et `1` existent tous les
+  /// deux alors qu'un seul semblerait suffire.
+  ///
+  /// 🔴 UN BOOLEEN AURAIT CONFONDU « JAMAIS TOUCHE » ET « ETEINT VOLONTAIREMENT ».
+  /// La difference est tout le sujet : le premier doit suivre le global quand il
+  /// change, le second doit lui resister. Avec un booleen, activer le global
+  /// aurait rallume des conversations qu'on avait expressement eteintes.
+  traductionAuto Int? @map("traduction_auto") @db.SmallInt
+
   @@unique([convId, userId])
   @@index([userId])
   @@map("conv_participants")

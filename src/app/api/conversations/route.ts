@@ -257,6 +257,22 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       sourdine: p.sourdine === 1,
       isPinned: p.isPinned === 1,
       isArchived: p.isArchived === 1,
+      /*
+       * Réglages de TRADUCTION de cette conversation, pour ce compte.
+       *
+       * 🔴 SERVIS AVEC LA LISTE, et c'est délibéré : le client doit connaître la
+       * langue déclarée AVANT d'afficher le premier message. Sinon la première
+       * fournée partirait en détection automatique — exactement ce que ce
+       * réglage supprime — et se ferait retraduire une seconde plus tard sous
+       * les yeux de l'utilisateur.
+       *
+       * ⚠️ `null` a un sens dans les deux cas, et ce n'est pas « absent » :
+       * détection automatique pour la langue, suivi du réglage global pour
+       * l'interrupteur. Les clients qui ignorent ces champs ne changent pas de
+       * comportement.
+       */
+      langueSource: p.langueSource,
+      traductionAuto: p.traductionAuto === null ? null : p.traductionAuto === 1,
       // Verrou pose par un appareil de CE compte, s'il en existe un et qu'il
       // n'est pas perime. Il ne gouverne que l'ecriture : la conversation reste
       // lisible, et les messages continuent d'arriver.
