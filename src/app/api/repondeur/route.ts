@@ -4,49 +4,47 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 
 /**
- * LE MESSAGE D'ACCUEIL DU RÉPONDEUR.
+ * LES MESSAGES D'ACCUEIL DU RÉPONDEUR.
  *
- * `GET  /api/repondeur`              → le mien
- * `GET  /api/repondeur?appel=<id>`   → celui de la personne que j'appelle
- * `POST /api/repondeur`              → poser un accueil, l'activer, le couper
- * `DELETE /api/repondeur`            → le retirer
+ * `GET  /api/repondeur`               → mes accueils, et l'état de l'interrupteur
+ * `GET  /api/repondeur?appel=<id>`    → l'accueil ACTIF de la personne appelée
+ * `POST /api/repondeur`               → ajouter un accueil, ou allumer/éteindre
+ * `POST /api/repondeur?actif=<id>`    → désigner l'accueil actif
+ * `DELETE /api/repondeur?accueil=<id>` → retirer un accueil
  *
  * 🔴 LE RÉPONDEUR EST JOUÉ PAR LE CLIENT DE L'APPELANT, faute de quoi il
- * faudrait un serveur média. Les appels sont en pair-à-pair : quand personne ne
- * décroche, il n'existe AUCUN pair pour jouer l'accueil et enregistrer. À
- * l'expiration de la sonnerie, l'application de l'appelant télécharge donc
- * l'accueil du destinataire, le joue, et lui propose d'enregistrer.
+ * faudrait un serveur média : les appels sont en pair-à-pair, et quand personne
+ * ne décroche il n'existe AUCUN pair pour jouer l'accueil et enregistrer.
  *
  * ⚠️ C'EST POURQUOI `?appel=` EXISTE ET EST GARDÉ. Sans contrôle, cette route
  * laisserait n'importe qui moissonner la voix de n'importe qui : il suffirait de
- * demander l'accueil de chaque compte. On ne le sert donc qu'à quelqu'un qui a
- * RÉELLEMENT un appel en cours ou récent vers cette personne, resté sans
- * réponse.
+ * la demander compte par compte. On ne la sert donc qu'à quelqu'un qui a
+ * RÉELLEMENT un appel récent vers cette personne, resté sans réponse.
  */
 
-/** Un accueil n'a de sens que s'il est actif ET qu'un média le porte. */
-const SELECTION = {
-  repondeurActif: true,
-  repondeurMediaId: true,
-  repondeurMedia: {
-    select: { id: true, url: true, mimeType: true, durationMs: true, filename: true },
-  },
+const MEDIA = {
+  select: { id: true, url: true, mimeType: true, durationMs: true, filename: true },
 } as const;
+
+const ACCUEIL = {
+  id: true,
+  libelle: true,
+  actif: true,
+  createdAt: true,
+  media: MEDIA,
+} as const;
+
+/** Fenêtre pendant laquelle un appel donne droit à entendre l'accueil. */
+const FENETRE_APPEL_MS = 10 * 60 * 1000;
 
 /**
  * Un appel récent me donne-t-il le droit d'entendre l'accueil de sa cible ?
  *
- * ⚠️ QUATRE CONDITIONS, ET AUCUNE N'EST DÉCORATIVE :
- *   - l'appel existe et je l'ai INITIÉ — sinon j'écouterais l'accueil de
- *     quelqu'un que je n'ai jamais appelé ;
- *   - il n'a PAS été décroché — un appel abouti n'a rien à faire avec un
- *     répondeur ;
- *   - il est RÉCENT — sans quoi un identifiant d'appel vieux de six mois
- *     resterait un laissez-passer permanent ;
- *   - la cible a bien ACTIVÉ son répondeur.
+ * ⚠️ QUATRE CONDITIONS, ET AUCUNE N'EST DÉCORATIVE : l'appel existe et je l'ai
+ * INITIÉ ; il n'a PAS été décroché ; il est RÉCENT — sans quoi un identifiant
+ * vieux de six mois resterait un laissez-passer ; et il ne vise qu'UNE personne,
+ * un appel de groupe n'ayant pas de répondeur.
  */
-const FENETRE_APPEL_MS = 10 * 60 * 1000;
-
 async function cibleAutorisee(callId: string, userId: string) {
   const appel = await prisma.call.findUnique({
     where: { id: callId },
@@ -62,11 +60,7 @@ async function cibleAutorisee(callId: string, userId: string) {
   if (appel.answeredAt !== null) return null;
   if (Date.now() - appel.startedAt.getTime() > FENETRE_APPEL_MS) return null;
 
-  // Le destinataire : le seul participant qui ne soit pas moi. En appel de
-  // groupe il y en a plusieurs — un répondeur n'y a pas de sens, on renonce.
-  const autres = appel.participants
-    .map((p) => p.userId)
-    .filter((id) => id !== userId);
+  const autres = appel.participants.map((p) => p.userId).filter((id) => id !== userId);
   return autres.length === 1 ? autres[0] : null;
 }
 
@@ -81,99 +75,183 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
 
     const cible = await prisma.user.findUnique({
       where: { id: cibleId },
-      select: SELECTION,
+      select: { repondeurActif: true },
     });
-    if (!cible || cible.repondeurActif !== 1 || !cible.repondeurMedia) {
+    if (cible?.repondeurActif !== 1) {
       return fail("Aucun répondeur pour cet appel", 404, "NOT_FOUND");
     }
-    return ok({ accueil: cible.repondeurMedia });
+    const accueil = await prisma.repondeurAccueil.findFirst({
+      where: { userId: cibleId, actif: 1 },
+      select: { media: MEDIA },
+    });
+    if (!accueil) return fail("Aucun répondeur pour cet appel", 404, "NOT_FOUND");
+    return ok({ accueil: accueil.media });
   }
 
-  const moi = await prisma.user.findUnique({ where: { id: userId }, select: SELECTION });
-  return ok({
-    actif: moi?.repondeurActif === 1,
-    accueil: moi?.repondeurMedia ?? null,
-  });
+  const [moi, accueils] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, select: { repondeurActif: true } }),
+    prisma.repondeurAccueil.findMany({
+      where: { userId },
+      // Le plus récent en tête : c'est celui qu'on vient d'enregistrer, donc
+      // celui qu'on cherche.
+      orderBy: { createdAt: "desc" },
+      select: ACCUEIL,
+    }),
+  ]);
+  return ok({ actif: moi?.repondeurActif === 1, accueils });
 });
 
 /**
- * Pose un accueil, l'active ou le coupe. Les deux champs sont indépendants et
- * facultatifs : `{ "mediaId": "…" }`, `{ "actif": true }`, ou les deux.
+ * Ajoute un accueil, en désigne un comme actif, ou allume l'interrupteur.
  *
- * ⚠️ `mediaId` DOIT M'APPARTENIR. Sans ce contrôle, on poserait comme accueil le
- * fichier de n'importe qui — une photo reçue, l'enregistrement d'un autre — et
- * on le ferait jouer à ses correspondants.
+ * Corps possibles, indépendants :
+ *   `{ "mediaId": "…", "libelle": "Congés" }` → ajoute, et l'active
+ *   `{ "actif": true | false }`               → allume ou éteint le répondeur
+ * Ou `?actif=<idAccueil>`                     → désigne celui qu'on entend
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
+  const choisi = req.nextUrl.searchParams.get("actif");
+
+  // ── Désigner l'accueil actif ──────────────────────────────────────────
+  if (choisi !== null) {
+    const accueil = await prisma.repondeurAccueil.findUnique({
+      where: { id: choisi },
+      select: { userId: true },
+    });
+    if (!accueil || accueil.userId !== userId) {
+      return fail("Accueil introuvable", 404, "NOT_FOUND");
+    }
+    /*
+     * ⚠️ ÉTEINDRE LES AUTRES D'ABORD, ET DANS LA MÊME TRANSACTION.
+     *
+     * L'index unique partiel refuse deux actifs : allumer avant d'éteindre
+     * échouerait. Et sans transaction, une panne entre les deux laisserait le
+     * compte SANS aucun accueil actif — un répondeur muet qui se déclare prêt.
+     */
+    await prisma.$transaction([
+      prisma.repondeurAccueil.updateMany({
+        where: { userId, actif: 1 },
+        data: { actif: 0 },
+      }),
+      prisma.repondeurAccueil.update({ where: { id: choisi }, data: { actif: 1 } }),
+    ]);
+    const accueils = await prisma.repondeurAccueil.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      select: ACCUEIL,
+    });
+    const moi = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { repondeurActif: true },
+    });
+    return ok({ actif: moi?.repondeurActif === 1, accueils });
+  }
+
   let corps: unknown;
   try {
     corps = await req.json();
   } catch {
     return fail("Corps JSON invalide", 400, "BAD_JSON");
   }
-  const recu = (corps ?? {}) as { mediaId?: unknown; actif?: unknown };
-  const data: { repondeurMediaId?: string; repondeurActif?: number } = {};
+  const recu = (corps ?? {}) as { mediaId?: unknown; libelle?: unknown; actif?: unknown };
 
-  if ("mediaId" in recu) {
-    if (typeof recu.mediaId !== "string" || recu.mediaId.trim() === "") {
-      return fail("« mediaId » doit être un identifiant de média", 400, "BAD_BODY");
-    }
-    const media = await prisma.mediaFile.findUnique({
-      where: { id: recu.mediaId },
-      select: { ownerId: true, mimeType: true },
-    });
-    if (!media || media.ownerId !== userId) {
-      return fail("Média introuvable", 404, "NOT_FOUND");
-    }
-    // ⚠️ UN ACCUEIL EST UN SON. Accepter une image poserait un accueil que
-    // personne ne pourrait entendre, et l'écran promettrait un répondeur muet.
-    if (!media.mimeType.startsWith("audio/") && !media.mimeType.startsWith("video/")) {
-      return fail("Le message d'accueil doit être un fichier audio", 400, "BAD_MEDIA");
-    }
-    data.repondeurMediaId = recu.mediaId;
-  }
-
-  if ("actif" in recu) {
+  // ── Allumer ou éteindre le répondeur ──────────────────────────────────
+  if ("actif" in recu && !("mediaId" in recu)) {
     if (typeof recu.actif !== "boolean") {
       return fail("« actif » doit être un booléen", 400, "BAD_BODY");
     }
-    data.repondeurActif = recu.actif ? 1 : 0;
+    await prisma.user.update({
+      where: { id: userId },
+      data: { repondeurActif: recu.actif ? 1 : 0 },
+    });
+    const accueils = await prisma.repondeurAccueil.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      select: ACCUEIL,
+    });
+    return ok({ actif: recu.actif, accueils });
   }
 
-  if (Object.keys(data).length === 0) {
-    return fail("Aucun réglage fourni", 400, "BAD_BODY");
+  // ── Ajouter un accueil ────────────────────────────────────────────────
+  if (typeof recu.mediaId !== "string" || recu.mediaId.trim() === "") {
+    return fail("« mediaId » doit être un identifiant de média", 400, "BAD_BODY");
   }
+  const media = await prisma.mediaFile.findUnique({
+    where: { id: recu.mediaId },
+    select: { ownerId: true, mimeType: true },
+  });
+  // ⚠️ LE MÉDIA DOIT M'APPARTENIR : sans ce contrôle, on poserait comme accueil
+  // le fichier de n'importe qui — une photo reçue, l'enregistrement d'un autre —
+  // et on le ferait jouer à ses correspondants.
+  if (!media || media.ownerId !== userId) {
+    return fail("Média introuvable", 404, "NOT_FOUND");
+  }
+  if (!media.mimeType.startsWith("audio/") && !media.mimeType.startsWith("video/")) {
+    return fail("Le message d'accueil doit être un fichier audio", 400, "BAD_MEDIA");
+  }
+
+  const libelle =
+    typeof recu.libelle === "string" && recu.libelle.trim() !== ""
+      ? recu.libelle.trim().slice(0, 60)
+      : null;
 
   /*
-   * ⚠️ POSER UN ACCUEIL L'ACTIVE, sauf refus explicite dans la même requête.
+   * ⚠️ LE NOUVEL ACCUEIL DEVIENT L'ACTIF, et le répondeur s'allume avec lui.
    *
-   * Enregistrer son message puis devoir chercher un interrupteur pour qu'il
-   * serve est exactement le genre d'étape qu'on oublie — et le répondeur
-   * resterait muet sans que rien ne dise pourquoi.
+   * Enregistrer son message puis devoir le désigner, puis chercher un
+   * interrupteur, fait trois étapes dont deux s'oublient — et le répondeur
+   * resterait muet sans que rien ne dise pourquoi. Celui qui veut garder
+   * l'ancien actif n'a qu'à le redésigner, ce qui est un geste explicite.
    */
-  if (data.repondeurMediaId && data.repondeurActif === undefined) {
-    data.repondeurActif = 1;
-  }
+  await prisma.$transaction([
+    prisma.repondeurAccueil.updateMany({ where: { userId, actif: 1 }, data: { actif: 0 } }),
+    prisma.repondeurAccueil.create({
+      data: { userId, mediaId: recu.mediaId, libelle, actif: 1 },
+    }),
+    prisma.user.update({ where: { id: userId }, data: { repondeurActif: 1 } }),
+  ]);
 
-  const maj = await prisma.user.update({
-    where: { id: userId },
-    data,
-    select: SELECTION,
+  const accueils = await prisma.repondeurAccueil.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    select: ACCUEIL,
   });
-  return ok({ actif: maj.repondeurActif === 1, accueil: maj.repondeurMedia ?? null });
+  return ok({ actif: true, accueils }, 201);
 });
 
 /**
- * Retire l'accueil, et éteint le répondeur par la même occasion.
+ * Retire UN accueil, désigné par `?accueil=<id>`.
  *
- * ⚠️ LE MÉDIA N'EST PAS SUPPRIMÉ ICI. Le fichier appartient au compte et peut
- * avoir été partagé ailleurs ; le supprimer d'autorité casserait ces usages. On
- * détache, la suppression du fichier reste un geste à part.
+ * ⚠️ RETIRER L'ACTIF ÉTEINT LE RÉPONDEUR. Le laisser allumé sans accueil
+ * promettrait aux appelants un message que personne n'a enregistré : ils
+ * tomberaient sur un répondeur muet, ce qui est pire qu'un appel manqué.
  */
-export const DELETE = withAuth(async (_req: NextRequest, userId: string) => {
-  await prisma.user.update({
-    where: { id: userId },
-    data: { repondeurMediaId: null, repondeurActif: 0 },
+export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
+  const id = req.nextUrl.searchParams.get("accueil");
+  if (!id) return fail("« accueil » est requis", 400, "BAD_BODY");
+
+  const accueil = await prisma.repondeurAccueil.findUnique({
+    where: { id },
+    select: { userId: true, actif: true },
   });
-  return new Response(null, { status: 204 });
+  if (!accueil || accueil.userId !== userId) {
+    return fail("Accueil introuvable", 404, "NOT_FOUND");
+  }
+
+  await prisma.repondeurAccueil.delete({ where: { id } });
+
+  if (accueil.actif === 1) {
+    await prisma.user.update({ where: { id: userId }, data: { repondeurActif: 0 } });
+  }
+
+  const accueils = await prisma.repondeurAccueil.findMany({
+    where: { userId },
+    orderBy: { createdAt: "desc" },
+    select: ACCUEIL,
+  });
+  const moi = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { repondeurActif: true },
+  });
+  return ok({ actif: moi?.repondeurActif === 1, accueils });
 });

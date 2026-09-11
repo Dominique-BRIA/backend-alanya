@@ -100,13 +100,15 @@ model User {
   /// `readReceipts`, pour la même raison.
   repondeurActif Int @default(0) @map("repondeur_actif") @db.SmallInt
 
-  /// Média du message d'accueil, ou `null` si aucun n'a été enregistré.
+  /// Les messages d'accueil de ce compte. Au plus un porte `actif = 1`, ce que
+  /// la base garantit par un index unique partiel.
   ///
-  /// ⚠️ RÉFÉRENCÉ, PAS RECOPIÉ : la durée, le type MIME, la taille et le chemin
-  /// de stockage vivent déjà dans `media_files`. Les redoubler ici aurait créé
-  /// deux vérités, et celle-ci aurait vieilli la première.
-  repondeurMediaId String?    @map("repondeur_media_id") @db.Uuid
-  repondeurMedia   MediaFile? @relation("AccueilRepondeur", fields: [repondeurMediaId], references: [id], onDelete: SetNull)
+  /// 🔴 UNE TABLE ET NON UNE COLONNE — correction d'un choix precedent. Une
+  /// colonne rendait « un seul accueil actif » vrai par construction, mais ne
+  /// pouvait pas porter PLUSIEURS accueils parmi lesquels choisir selon le
+  /// contexte. La garantie n'est pas perdue pour autant : elle est descendue
+  /// dans l'index, donc toujours pas a la charge du code.
+  repondeurAccueils RepondeurAccueil[]
 
   readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
   lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
@@ -640,6 +642,39 @@ model Contact {
 /// reconnaitre a l'oreille une categorie d'appelants — la famille, l'equipe
 /// d'astreinte. C'est pourquoi la sonnerie est portee par la liste et non par
 /// chaque fiche contact.
+/// Un message d'accueil de répondeur.
+///
+/// 🔴 PLUSIEURS PAR COMPTE, UN SEUL ACTIF. Le besoin est d'en garder quelques-uns
+/// et d'en choisir un selon le contexte — congés, bureau, week-end — plutôt que
+/// de réenregistrer à chaque fois celui qu'on avait déjà.
+model RepondeurAccueil {
+  id       String @id @default(uuid()) @db.Uuid
+  userId   String @map("alanyaID") @db.Uuid
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// ⚠️ `Cascade` : un accueil dont le fichier a disparu ne serait qu'une ligne
+  /// morte promettant un son inexistant.
+  mediaId  String    @map("mediaID") @db.Uuid
+  media    MediaFile @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  /// Nom donné par l'utilisateur. C'est ce qui rend la liste utilisable : sans
+  /// lui, cinq accueils se ressemblent tous et il faut les écouter un par un.
+  libelle  String? @db.VarChar(60)
+
+  /// 1 = celui que les appelants entendent.
+  ///
+  /// ⚠️ L'UNICITÉ EST TENUE PAR UN INDEX PARTIEL en base, pas par le code :
+  /// `@@unique` de Prisma ne sait pas exprimer « unique là où actif = 1 ». Voir
+  /// `prisma/manual/2026-09_repondeur_accueils.sql`. Sans lui, « activer »
+  /// devrait éteindre les autres côté code — donc un jour l'oublier, et faire
+  /// dépendre ce que l'appelant entend de l'ordre de lecture des lignes.
+  actif    Int      @default(0) @db.SmallInt
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userId])
+  @@map("repondeur_accueil")
+}
+
 model ContactList {
   id     String @id @default(uuid()) @map("idContactList") @db.Uuid
   userId String @map("alanyaID") @db.Uuid
@@ -1120,8 +1155,8 @@ model MediaFile {
   enregistrementPisteAgent  CallRecording[] @relation("enregistrementPisteAgent")
   enregistrementPisteClient CallRecording[] @relation("enregistrementPisteClient")
   enregistrementMelange     CallRecording[] @relation("enregistrementMelange")
-  /// Comptes dont ce média est le message d'accueil du répondeur.
-  accueilRepondeur          User[]          @relation("AccueilRepondeur")
+  /// Accueils de répondeur qui s'appuient sur ce média.
+  accueilsRepondeur         RepondeurAccueil[]
 
   @@index([ownerId])
   @@index([messageId])
