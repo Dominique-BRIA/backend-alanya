@@ -40,7 +40,7 @@ etape() { printf '\n\033[1;36m▸ %s\033[0m\n' "$*"; }
 echec() { rouge "✗ $*"; exit 1; }
 
 # ── 1. Contrôles préalables ─────────────────────────────────────────────────
-etape "1/9  Contrôles préalables"
+etape "1/10  Contrôles préalables"
 
 [ -f package.json ] && [ -f ws-server.mjs ] \
   || echec "Ce dossier n'est pas le dépôt backend Alanya."
@@ -72,7 +72,7 @@ fi
 # « <son dossier courant>/.ws-interne.sock ». Les deux ne se trouvent donc QUE
 # s'ils tournent avec le même dossier courant — ce que rien ne garantit chez un
 # gestionnaire de processus. Une valeur explicite supprime la question.
-etape "2/9  Pont interne API ↔ WebSocket"
+etape "2/10  Pont interne API ↔ WebSocket"
 
 if grep -qE '^\s*WS_INTERNAL_URL\s*=\s*\S' .env; then
   vert "  Mode réseau (WS_INTERNAL_URL posée)."
@@ -91,8 +91,73 @@ else
   [ "${REPONSE:-n}" = "o" ] || echec "Déploiement interrompu."
 fi
 
-# ── 3. Récupération du code ─────────────────────────────────────────────────
-etape "3/9  Récupération de $BRANCHE"
+# ── 3. LE PIÈGE DE REDIS ────────────────────────────────────────────────────
+#
+# Même classe de panne que le pont ci-dessus : une variable absente, et du code
+# parfaitement déployé ne fait RIEN, sans la moindre erreur.
+#
+# `REDIS_URL` absente, tout continue de fonctionner — c'est la règle du dépôt,
+# et elle est tenue. Mais QUATRE choses cessent d'agir en silence :
+#
+#   • la déduplication des envois : un message rejoué après coupure repart en
+#     double, et personne ne saura l'expliquer ;
+#   • la limitation de débit devient LOCALE À CHAQUE PROCESSUS : « 5 tentatives
+#     de connexion par minute » en autorise 5 × le nombre de processus ;
+#   • le bus : celui qui patiente dans une file attend jusqu'à 4 s de plus ;
+#   • les caches de lecture : tout redescend en base.
+#
+# Aucune de ces quatre ne produit d'erreur. D'où ce contrôle.
+etape "3/10  Redis"
+
+if grep -qE '^\s*REDIS_URL\s*=\s*\S' .env; then
+  vert "  REDIS_URL posée."
+
+  # Répond-il vraiment ? Une URL juste vers un service arrêté a le même effet
+  # qu'une URL absente, mais sans l'avertissement.
+  if command -v redis-cli >/dev/null 2>&1; then
+    if redis-cli ping >/dev/null 2>&1; then
+      vert "  Redis répond (PING)."
+
+      # ⚠️ SANS `maxmemory`, Redis prendra tout ce que la machine lui laisse, et
+      # personne ne s'en apercevra avant que le noyau ne tue un processus.
+      MAXMEM="$(redis-cli config get maxmemory 2>/dev/null | tail -1 || echo 0)"
+      if [ "${MAXMEM:-0}" = "0" ]; then
+        jaune "  ⚠ maxmemory n'est pas borné : Redis peut consommer toute la RAM."
+        jaune "    Recommandé :  redis-cli config set maxmemory 512mb"
+        jaune "                  redis-cli config set maxmemory-policy allkeys-lru"
+        jaune "    Puis rendre-le durable dans /etc/redis/redis.conf."
+      else
+        vert "  maxmemory : $MAXMEM octets."
+      fi
+    else
+      rouge "  ⚠ REDIS_URL est posée mais Redis NE RÉPOND PAS."
+      jaune "    Le déploiement peut continuer — tout retombera sur PostgreSQL —"
+      jaune "    mais les quatre mécanismes ci-dessus seront inertes."
+      read -r -p "  Continuer quand même ? [o/N] " REPONSE
+      [ "${REPONSE:-n}" = "o" ] || echec "Déploiement interrompu."
+    fi
+  else
+    jaune "  redis-cli absent : impossible de vérifier que le service répond."
+  fi
+else
+  jaune "  ⚠ REDIS_URL n'est PAS posée dans .env."
+  jaune "    Le déploiement va réussir, et ces quatre mécanismes ne feront RIEN :"
+  jaune "      • déduplication des envois (doublons après coupure réseau)"
+  jaune "      • limitation de débit partagée (limite × nombre de processus)"
+  jaune "      • annonce d'agent libre (4 s d'attente en plus dans les files)"
+  jaune "      • caches de lecture (tout redescend en base)"
+  jaune "    Aucun ne produira d'erreur. Pour l'activer :"
+  jaune "        REDIS_URL=redis://127.0.0.1:6379"
+  read -r -p "  Continuer sans Redis ? [o/N] " REPONSE
+  [ "${REPONSE:-n}" = "o" ] || echec "Déploiement interrompu."
+fi
+
+# ⚠️ LE BUS OUVRE DEUX CONNEXIONS DE PLUS PAR PROCESSUS, et c'est structurel :
+# Redis interdit à un client abonné d'exécuter autre chose, le bus ne peut donc
+# pas réutiliser la connexion du cache. Compter 3 connexions par processus.
+
+# ── 4. Récupération du code ─────────────────────────────────────────────────
+etape "4/10  Récupération de $BRANCHE"
 
 AVANT="$(git rev-parse HEAD)"
 git fetch "$DEPOT_SSH" "$BRANCHE" || echec "Impossible de joindre GitHub."
@@ -111,7 +176,7 @@ fi
 #
 # AVANT toute migration, et le déploiement s'arrête si elle échoue. Une
 # migration ne se défait pas : c'est la seule marche arrière qui existe.
-etape "4/9  Sauvegarde de la base"
+etape "5/10  Sauvegarde de la base"
 
 URL_BASE="$(grep -E '^\s*DATABASE_URL\s*=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')"
 [ -n "$URL_BASE" ] || echec "DATABASE_URL introuvable dans .env."
@@ -132,7 +197,7 @@ else
 fi
 
 # ── 5. Dépendances ──────────────────────────────────────────────────────────
-etape "5/9  Dépendances"
+etape "6/10  Dépendances"
 # `npm install` et NON `npm ci --omit=dev` : `prisma` est une devDependency,
 # et l'écarter rendrait `npx prisma generate` introuvable au pas suivant.
 npm install || echec "npm install a échoué."
@@ -152,7 +217,7 @@ vert "  Client Prisma régénéré."
 # plusieurs jours alors qu'on le croyait livré.
 #
 # Tous ces fichiers sont écrits en IF NOT EXISTS : les rejouer est sans effet.
-etape "6/9  SQL manuel (le vrai mécanisme de migration)"
+etape "7/10  SQL manuel (le vrai mécanisme de migration)"
 
 # Filet : signaler toute migration sans jumeau, plutôt que de la perdre en
 # silence. La correspondance se fait sur le nom, à la convention près.
@@ -174,12 +239,12 @@ vert "  SQL manuel appliqué."
 #
 # AVANT le redémarrage : une construction ratée laisse l'ancienne version en
 # ligne, ce qui est très préférable à une coupure.
-etape "7/9  Construction"
+etape "8/10  Construction"
 npm run build || echec "next build a échoué — l'ancienne version tourne toujours."
 vert "  Construction terminée."
 
 # ── 8. Redémarrage des DEUX processus ───────────────────────────────────────
-etape "8/9  Redémarrage"
+etape "9/10  Redémarrage"
 
 if command -v pm2 >/dev/null 2>&1 && pm2 describe "$PROC_API" >/dev/null 2>&1; then
   # `--update-env` : sans lui, pm2 réutilise l'environnement du démarrage
@@ -206,7 +271,7 @@ if command -v nginx >/dev/null 2>&1 && ! sudo nginx -t >/dev/null 2>&1; then
 fi
 
 # ── 9. Contrôle ─────────────────────────────────────────────────────────────
-etape "9/9  Contrôle"
+etape "10/10  Contrôle"
 
 sleep 4
 ETAT_API="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT_API/api/health" || echo 000)"
