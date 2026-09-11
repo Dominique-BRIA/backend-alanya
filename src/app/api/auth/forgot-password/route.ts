@@ -10,7 +10,7 @@ import { rateLimit, clientIp } from "@/lib/rate-limit";
 // Déclenche l'envoi d'un code OTP si l'email existe.
 export async function POST(req: NextRequest) {
   try {
-    const rl = rateLimit(`forgot:${clientIp(req)}`, 5, 60_000); // 5 req/min
+    const rl = await rateLimit(`forgot:${clientIp(req)}`, 5, 60_000); // 5 req/min
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
     const email = emailSchema.parse((await req.json()).email);

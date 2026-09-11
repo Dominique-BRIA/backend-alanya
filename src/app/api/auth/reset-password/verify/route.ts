@@ -59,10 +59,10 @@ const FENETRE_ID_RECUPERATION_MS = 15 * 60_000;
 
 export async function POST(req: NextRequest) {
   try {
-    const rl = rateLimit(`reset:${clientIp(req)}`, 10, 60_000);
+    const rl = await rateLimit(`reset:${clientIp(req)}`, 10, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
-    const rlId = rateLimit(
+    const rlId = await rateLimit(
       `reset-id:${clientIp(req)}`,
       ESSAIS_ID_RECUPERATION,
       FENETRE_ID_RECUPERATION_MS,

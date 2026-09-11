@@ -71,7 +71,7 @@ export async function OPTIONS() {
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
   // Large a dessein — un utilisateur qui compose corrige, efface et recompose —
   // mais borne : sans plafond, la route se prete a un balayage des numeros.
-  const rl = rateLimit(`lookup:${userId}`, 60, 60_000);
+  const rl = await rateLimit(`lookup:${userId}`, 60, 60_000);
   if (!rl.allowed) {
     return fail("Trop de recherches de numéro, réessayez dans un instant", 429, "RATE_LIMITED");
   }

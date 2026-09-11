@@ -16,7 +16,7 @@ const MAX_ATTEMPTS = 5;
  * `/api/auth/verify` : plafond d'essais, expiration, consommation à l'usage.
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
-  const rl = rateLimit(`add-email-verify:${clientIp(req)}`, 10, 60_000);
+  const rl = await rateLimit(`add-email-verify:${clientIp(req)}`, 10, 60_000);
   if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
   const { email, code } = verifySchema.parse(await req.json());

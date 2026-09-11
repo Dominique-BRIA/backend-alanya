@@ -27,7 +27,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * vide sa file d'un coup, et le refuser perdrait des relevés légitimes. Il ne
    * sert qu'à borner un client déréglé qui enverrait en boucle.
    */
-  const rl = rateLimit(`geo:${userId}`, 60, 60_000);
+  const rl = await rateLimit(`geo:${userId}`, 60, 60_000);
   if (!rl.allowed) {
     return fail("Trop de relevés de position", 429, "RATE_LIMITED");
   }

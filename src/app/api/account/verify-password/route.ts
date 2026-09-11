@@ -31,11 +31,11 @@ const schema = z.object({
  * une seule IP ne doit pas non plus bloquer les autres comptes.
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
-  const parCompte = rateLimit(`verify-password:u:${userId}`, 5, 60_000);
+  const parCompte = await rateLimit(`verify-password:u:${userId}`, 5, 60_000);
   if (!parCompte.allowed) {
     return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
   }
-  const parIp = rateLimit(`verify-password:ip:${clientIp(req)}`, 20, 60_000);
+  const parIp = await rateLimit(`verify-password:ip:${clientIp(req)}`, 20, 60_000);
   if (!parIp.allowed) {
     return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
   }

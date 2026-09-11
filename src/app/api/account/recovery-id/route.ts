@@ -31,7 +31,7 @@ import { z } from "zod";
  * EXISTE, ce qui suffit à décider d'afficher l'entrée de menu.
  */
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
-  const rl = rateLimit(`recovery-id:${clientIp(req)}`, 10, 60_000);
+  const rl = await rateLimit(`recovery-id:${clientIp(req)}`, 10, 60_000);
   if (!rl.allowed) {
     return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
   }
@@ -81,7 +81,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
  * doubleraient le budget de qui essaie des mots de passe.
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
-  const rl = rateLimit(`recovery-id:${clientIp(req)}`, 10, 60_000);
+  const rl = await rateLimit(`recovery-id:${clientIp(req)}`, 10, 60_000);
   if (!rl.allowed) {
     return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
   }

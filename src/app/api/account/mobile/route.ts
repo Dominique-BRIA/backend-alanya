@@ -57,7 +57,7 @@ const schema = z.object({
  * Alanya ID qui ne mène plus nulle part.
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
-  const rl = rateLimit(`change-mobile:${clientIp(req)}`, 5, 60_000);
+  const rl = await rateLimit(`change-mobile:${clientIp(req)}`, 5, 60_000);
   if (!rl.allowed) return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
 
   const { password, mobile, idPaysNumero } = schema.parse(await req.json());

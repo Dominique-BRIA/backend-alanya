@@ -14,7 +14,7 @@ import { signSetupToken } from "@/lib/jwt";
 // Démarre l'inscription : génère un code OTP à 6 chiffres et l'envoie par email.
 export async function POST(req: NextRequest) {
   try {
-    const rl = rateLimit(`register:${clientIp(req)}`, 5, 60_000);
+    const rl = await rateLimit(`register:${clientIp(req)}`, 5, 60_000);
     if (!rl.allowed) return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
 
     const { email } = registerSchema.parse(await req.json());

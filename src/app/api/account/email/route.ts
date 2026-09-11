@@ -51,7 +51,7 @@ const schema = z.object({
  * que l'utilisateur ne relève plus.
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
-  const rl = rateLimit(`add-email:${clientIp(req)}`, 5, 60_000);
+  const rl = await rateLimit(`add-email:${clientIp(req)}`, 5, 60_000);
   if (!rl.allowed) return fail("Trop de demandes, réessayez plus tard", 429, "RATE_LIMITED");
 
   const { email, password } = schema.parse(await req.json());

@@ -14,7 +14,7 @@ const MAX_ATTEMPTS = 5;
 // numéro public à 6 chiffres et renvoie un « setupToken » pour l'étape pseudo + mot de passe.
 export async function POST(req: NextRequest) {
   try {
-    const rl = rateLimit(`verify:${clientIp(req)}`, 10, 60_000);
+    const rl = await rateLimit(`verify:${clientIp(req)}`, 10, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
     const { email, code } = verifySchema.parse(await req.json());

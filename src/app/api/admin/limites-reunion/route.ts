@@ -96,11 +96,11 @@ function secretsEgaux(fourni: string, attendu: string): boolean {
 /// refuse. Une route d'administration qui s'ouvre parce qu'une variable manque
 /// est pire que pas de route du tout — c'est exactement le cas ou personne ne
 /// s'en apercoit.
-function garde(req: NextRequest): Response | null {
+async function garde(req: NextRequest): Promise<Response | null> {
   // La limitation de debit vient AVANT la comparaison : elle doit ralentir
   // celui qui essaie des secrets, pas seulement celui qui en a un bon.
   const ip = clientIp(req);
-  const quota = rateLimit(`admin-limites:${ip}`, 20, 60_000);
+  const quota = await rateLimit(`admin-limites:${ip}`, 20, 60_000);
   if (!quota.allowed) {
     return fail(
       `Trop de requêtes, réessayez dans ${quota.retryAfterSec} s`,
@@ -192,7 +192,7 @@ function enJson(l: LigneBrute) {
 // (« combien de personnes cette entreprise peut-elle reunir ? »), pas
 // « existe-t-il une ligne en base ? ».
 export async function GET(req: NextRequest) {
-  const refus = garde(req);
+  const refus = await garde(req);
   if (refus) return refus;
 
   try {
@@ -295,7 +295,7 @@ const corpsSchema = z.object({
 });
 
 export async function PUT(req: NextRequest) {
-  const refus = garde(req);
+  const refus = await garde(req);
   if (refus) return refus;
 
   try {
@@ -379,7 +379,7 @@ export async function PUT(req: NextRequest) {
 // modifiable, et la seule facon d'en reposer un serait d'en connaitre
 // l'existence. On la remplace, on ne l'efface pas.
 export async function DELETE(req: NextRequest) {
-  const refus = garde(req);
+  const refus = await garde(req);
   if (refus) return refus;
 
   try {

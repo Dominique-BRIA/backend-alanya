@@ -18,7 +18,7 @@ import { avatarPublicUrl } from "@/lib/avatar";
 // Connexion par email OU par numéro public (6 ou 8 chiffres) + mot de passe.
 export async function POST(req: NextRequest) {
   try {
-    const rl = rateLimit(`login:${clientIp(req)}`, 5, 60_000);
+    const rl = await rateLimit(`login:${clientIp(req)}`, 5, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
     const { identifier, password, deviceId, typeDevice } = loginSchema.parse(

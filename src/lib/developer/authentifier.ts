@@ -88,7 +88,7 @@ export async function routeV1(
    * et une requête en base à chaque tentative. Sans lui, l'énumération de clés
    * est gratuite pour l'attaquant et payante pour nous.
    */
-  const parIp = rateLimit(`v1:ip:${clientIp(req)}`, PLAFOND_PAR_IP_PAR_MINUTE, 60_000);
+  const parIp = await rateLimit(`v1:ip:${clientIp(req)}`, PLAFOND_PAR_IP_PAR_MINUTE, 60_000);
   if (!parIp.allowed) return tropDeRequetes(parIp.retryAfterSec);
 
   const entete = req.headers.get("Authorization") || "";
@@ -114,7 +114,7 @@ export async function routeV1(
     prefixe: rawKey.slice(0, 12),
   };
 
-  const parCle = rateLimit(
+  const parCle = await rateLimit(
     `v1:cle:${donnees.id}:${options.chemin}`,
     options.plafondParMinute,
     60_000,
