@@ -31,6 +31,8 @@ import {
   invaliderConversation,
 } from "./src/lib/cache-redis.mjs";
 import { fermerRedis } from "./src/lib/redis-client.mjs";
+// Le bus : un processus annonce, les autres ecoutent. Voir src/lib/bus.mjs.
+import { publier, abonner, canaux, fermerBus } from "./src/lib/bus.mjs";
 // Qu'un envoi rejoue ne s'ecrive qu'une fois. Meme module que la route REST,
 // donc meme cle : un message rejoue par l'autre chemin est reconnu ici aussi.
 import {
@@ -1745,6 +1747,11 @@ function fermerSessionIvr(callId) {
   if (!session) return;
   if (session.minuteur) clearTimeout(session.minuteur);
   if (session.pollingInterval) clearInterval(session.pollingInterval);
+  // L'écouteur du bus part avec l'intervalle qu'il double. Oublié ici, il
+  // survivrait à la session et serait réveillé par chaque agent libéré du
+  // centre, pour un appel qui n'existe plus.
+  if (session.desabonnerBus) session.desabonnerBus();
+  session.desabonnerBus = null;
   // Le plafond de lecture d'un centre vocal. Oublié ici, il survivrait à la
   // session : 30 min plus tard il enverrait un message de fin à un appelant qui
   // a raccroché depuis longtemps, ou pire, en pleine autre communication.
@@ -2266,17 +2273,76 @@ async function choisirAgentIvrLibre(prisma, agentIds, centreId) {
  */
 function armerQueuePolling(session, option, touche) {
   if (session.pollingInterval) clearInterval(session.pollingInterval);
-  session.pollingInterval = setInterval(async () => {
+
+  /*
+   * UNE SEULE TENTATIVE À LA FOIS POUR CETTE SESSION.
+   *
+   * La boucle de quatre secondes et l'annonce du bus peuvent tomber au même
+   * instant — c'est même le cas le plus probable, puisque l'annonce arrive
+   * précisément quand un agent se libère. Deux tentatives simultanées
+   * dépileraient DEUX clients de la file pour un seul agent, et le second
+   * n'aurait personne au bout du fil.
+   *
+   * ⚠️ Ce verrou est LOCAL à la session, donc au processus. Il suffit
+   * aujourd'hui, où un seul serveur temps réel tient toutes les files. Le jour
+   * où il y en aura plusieurs, c'est `depilerClientSuivantWS` qui devra devenir
+   * atomique — ce verrou-ci ne pourra pas le faire à sa place.
+   */
+  let tentativeEnCours = false;
+
+  const tenter = async () => {
+    if (tentativeEnCours) return;
+    tentativeEnCours = true;
+    try {
+      await essayerAttribution();
+    } finally {
+      tentativeEnCours = false;
+    }
+  };
+
+  /*
+   * L'ANNONCE « UN AGENT S'EST LIBÉRÉ » DEVANCE LA BOUCLE.
+   *
+   * Elle ne la remplace pas : le bus ne conserve rien, et une annonce émise
+   * pendant que Redis hoquette est perdue sans que personne ne le sache. La
+   * boucle reste donc le mécanisme qui GARANTIT l'attribution ; le bus ne fait
+   * que supprimer, le plus souvent, les quelques secondes d'attente inutile.
+   *
+   * ⚠️ L'ABONNEMENT SE COUPE AVEC LA BOUCLE, et c'est indispensable : un appel
+   * entrant qui laisserait son écouteur derrière lui ferait grossir la liste
+   * sans fin, et chaque agent libéré réveillerait des sessions mortes.
+   */
+  const desabonner = session.centreId
+    ? abonner(canaux.agentLibre(session.centreId), () => void tenter())
+    : () => {};
+
+  const arreter = () => {
+    if (session.pollingInterval) clearInterval(session.pollingInterval);
+    session.pollingInterval = null;
+    desabonner();
+    session.desabonnerBus = null;
+  };
+
+  /*
+   * 🔴 POSÉ SUR LA SESSION, PARCE QUE `fermerSessionIvr` DOIT POUVOIR COUPER.
+   *
+   * Cette fonction n'est pas le seul chemin de sortie : un appelant qui
+   * raccroche passe par `fermerSessionIvr`, qui coupe les minuteurs et
+   * l'intervalle — mais qui ne connaît pas notre écouteur. Sans cette
+   * référence, chaque appel abandonné en laisserait un derrière lui, et chaque
+   * agent libéré réveillerait toutes les sessions mortes du centre.
+   */
+  session.desabonnerBus = desabonner;
+
+  async function essayerAttribution() {
     const vivante = sessionsIvr.get(session.callId);
     if (!vivante || vivante.etape !== "attente") {
-      if (session.pollingInterval) clearInterval(session.pollingInterval);
-      session.pollingInterval = null;
+      arreter();
       return;
     }
 
     if (Date.now() - (vivante.debutAttente ?? Date.now()) > DELAI_ATTENTE_MAX_MS) {
-      if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
-      vivante.pollingInterval = null;
+      arreter();
       console.log(`[ivr] attente expirée (5 min) — appel ${vivante.callId}`);
       // ⚠️ 15/08/2026 : sans cet appel, la ligne restait fantôme dans `file` —
       // `ivrRetourAuMenu` fait passer la session en "menu", et l'abandon sur
@@ -2294,8 +2360,8 @@ function armerQueuePolling(session, option, touche) {
     const agentLibreId = await choisirAgentIvrLibre(prisma, option.agentIds, vivante.centreId);
     if (!agentLibreId) return;
 
-    if (vivante.pollingInterval) clearInterval(vivante.pollingInterval);
-    vivante.pollingInterval = null;
+    // Un agent est trouvé : plus rien à attendre, ni la boucle ni le bus.
+    arreter();
 
     vivante.agentId = agentLibreId;
     vivante.agentLabel = option.label;
@@ -2324,7 +2390,19 @@ function armerQueuePolling(session, option, touche) {
     }
     armerMinuteurAgent(vivante);
     console.log(`[ivr] file d'attente : agent ${agentLibreId} attribué automatiquement à l'appel ${vivante.callId}`);
-  }, 4000);
+  }
+
+  /*
+   * LA BOUCLE RESTE, ET RESTE À QUATRE SECONDES.
+   *
+   * Elle n'est plus le chemin habituel — le bus arrive presque toujours avant —
+   * mais elle demeure celui qui GARANTIT l'attribution. Elle couvre tout ce que
+   * le bus ne peut pas voir : Redis coupé, annonce émise pendant un
+   * redémarrage, agent qui se libère sans raccrocher, ou simplement un agent
+   * déjà libre au moment où la file se forme — cas où aucune annonce n'est
+   * jamais émise, puisque rien ne change.
+   */
+  session.pollingInterval = setInterval(() => void tenter(), 4000);
 }
 
 /**
@@ -3178,6 +3256,24 @@ async function handleCallState(ws, msg) {
         idHist: sessionAvantFermeture.idHist,
       });
     }
+    /*
+     * L'AGENT QUI RACCROCHE VIENT DE SE LIBÉRER : on l'annonce.
+     *
+     * Sans cette ligne, celui qui patiente dans la file l'apprend au prochain
+     * tour de sa boucle — jusqu'à quatre secondes d'attente pour rien, pendant
+     * lesquelles l'agent est disponible et le client écoute de la musique.
+     *
+     * ⚠️ L'ANNONCE NE REMPLACE PAS LA BOUCLE, elle la devance. Le bus ne
+     * conserve rien : si personne n'écoute à cet instant — Redis coupé, le
+     * processus qui tient la file vient de redémarrer — le message est perdu, et
+     * c'est la boucle de secours qui fait le travail comme avant.
+     */
+    if (sessionAvantFermeture?.centreId) {
+      void publier(canaux.agentLibre(sessionAvantFermeture.centreId), {
+        centreId: sessionAvantFermeture.centreId,
+      });
+    }
+
     fermerSessionIvr(callId);
   }
 
@@ -4791,5 +4887,9 @@ process.on("SIGINT", async () => {
   // client cote serveur jusqu'a son delai d'inactivite, et un redemarrage en
   // boucle en accumulerait.
   await fermerRedis();
+  // Le bus a ses PROPRES connexions — un client abonne ne peut rien faire
+  // d'autre, elles ne peuvent donc pas etre celles du cache. Les oublier ici
+  // laisserait deux clients ouverts par redemarrage.
+  await fermerBus();
   process.exit(0);
 });
