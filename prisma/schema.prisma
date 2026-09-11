@@ -90,6 +90,24 @@ model User {
   // --- Confidentialité (Phase 3.1) ---
   // readReceipts : 1 = envoie/reçoit les confirmations de lecture, 0 = off.
   // lastSeenVisibility : 0 = personne, 1 = mes contacts, 2 = tout le monde.
+  /// 1 = le répondeur prend les appels sans réponse, 0 = non. Inactif par défaut.
+  ///
+  /// 🔴 PORTÉ PAR LE COMPTE, ET NON PAR UNE TABLE avec un drapeau « actif ».
+  /// « Un seul accueil actif par utilisateur » serait alors une RÈGLE à faire
+  /// respecter — donc à oublier un jour, laissant deux accueils actifs et un
+  /// comportement qui dépend de l'ordre de lecture. Ici la question ne se pose
+  /// pas : il y a une colonne, donc un accueil. Même choix que `avatarUrl` ou
+  /// `readReceipts`, pour la même raison.
+  repondeurActif Int @default(0) @map("repondeur_actif") @db.SmallInt
+
+  /// Média du message d'accueil, ou `null` si aucun n'a été enregistré.
+  ///
+  /// ⚠️ RÉFÉRENCÉ, PAS RECOPIÉ : la durée, le type MIME, la taille et le chemin
+  /// de stockage vivent déjà dans `media_files`. Les redoubler ici aurait créé
+  /// deux vérités, et celle-ci aurait vieilli la première.
+  repondeurMediaId String?    @map("repondeur_media_id") @db.Uuid
+  repondeurMedia   MediaFile? @relation("AccueilRepondeur", fields: [repondeurMediaId], references: [id], onDelete: SetNull)
+
   readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
   lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
 
@@ -916,6 +934,27 @@ model Message {
   stars      MessageStar[]
   mentions   MessageMention[]
 
+  /// Appel que ce message PROLONGE : renseigné, c'est une messagerie vocale
+  /// laissée après un appel sans réponse. `null` pour un message ordinaire.
+  ///
+  /// 🔴 UN MESSAGE VOCAL EST UN MESSAGE, ET PAS UNE TABLE À PART. Une table
+  /// dédiée aurait obligé à reconstruire un chemin de livraison, un état
+  /// lu/non-lu, une poussée de notification, un rendu, une synchronisation
+  /// multi-appareils, une suppression et une recherche — sept mécanismes que
+  /// cette table porte déjà, éprouvés. Ce qui distingue une messagerie vocale
+  /// d'un vocal ordinaire tient dans cette seule colonne.
+  ///
+  /// ⚠️ LE TYPE RESTE `AUDIO`. Un `VOICEMAIL` aurait été plus explicite mais se
+  /// dégrade mal : les clients qui ne le connaissent pas font retomber un type
+  /// inconnu sur « texte » et n'afficheraient rien d'écoutable. En `AUDIO`, ils
+  /// affichent un message vocal ordinaire — ce dont il s'agit.
+  ///
+  /// ⚠️ `SetNull` et non `Cascade` : supprimer un appel de l'historique ne doit
+  /// pas effacer le message qu'il a laissé. Le vocal appartient à son
+  /// destinataire ; l'appel n'est que le contexte où il est né.
+  callId String? @map("callID") @db.Uuid
+  call   Call?   @relation("MessagerieVocale", fields: [callId], references: [id], onDelete: SetNull)
+
   /// Le message mentionne TOUT le groupe (« @all », « @tous »…).
   ///
   /// ⚠️ Un booleen, et NON trente lignes dans `MessageMention` : une liste figee
@@ -1081,6 +1120,8 @@ model MediaFile {
   enregistrementPisteAgent  CallRecording[] @relation("enregistrementPisteAgent")
   enregistrementPisteClient CallRecording[] @relation("enregistrementPisteClient")
   enregistrementMelange     CallRecording[] @relation("enregistrementMelange")
+  /// Comptes dont ce média est le message d'accueil du répondeur.
+  accueilRepondeur          User[]          @relation("AccueilRepondeur")
 
   @@index([ownerId])
   @@index([messageId])
@@ -1246,6 +1287,9 @@ enum CallStatus {
 
 model Call {
   id          String     @id @default(uuid()) @db.Uuid
+  /// La messagerie vocale laissée après cet appel, s'il en a une. Au plus une :
+  /// un index unique partiel le garantit côté base.
+  messagerieVocale Message[] @relation("MessagerieVocale")
   initiatorId String     @db.Uuid
   initiator   User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
   convId      String?    @db.Uuid

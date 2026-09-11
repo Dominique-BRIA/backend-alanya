@@ -126,6 +126,14 @@ export async function creerMessage(params: {
   mentionneTous?: boolean;
   /// Le texte tapé après le « @ », sans le « @ ». Sert au surlignage.
   mentionTousLibelle?: string;
+  /// L'appel que ce message PROLONGE : une messagerie vocale laissée après un
+  /// appel sans réponse.
+  ///
+  /// ⚠️ LES CONTRÔLES N'ONT PAS LIEU ICI mais chez l'appelant — la route de
+  /// dépôt — qui seule peut vérifier que l'appel existe, qu'il n'a pas été
+  /// décroché, que le déposant en est bien l'appelant et qu'aucun message ne
+  /// l'a déjà prolongé. Cette fonction ne fait qu'écrire ce qu'on lui donne.
+  callId?: string;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
 
@@ -233,6 +241,7 @@ export async function creerMessage(params: {
     replyToId,
     status: "SENT",
     expiresAt,
+    ...(params.callId ? { callId: params.callId } : {}),
     ...(idsMedias.length > 0 ? { media: { connect: idsMedias.map((id) => ({ id })) } } : {}),
     ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
     /*
