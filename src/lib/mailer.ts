@@ -1,10 +1,15 @@
 import nodemailer from "nodemailer";
 import { env } from "./env";
+import { choisirFournisseur, envoyerParPostmark } from "./courriel.mjs";
 
 let transporter: nodemailer.Transporter | null = null;
 
+function smtpConfigure(): boolean {
+  return Boolean(env.mail.host && env.mail.user && env.mail.pass);
+}
+
 function getTransporter(): nodemailer.Transporter | null {
-  if (!env.mail.host || !env.mail.user || !env.mail.pass) return null;
+  if (!smtpConfigure()) return null;
   if (!transporter) {
     transporter = nodemailer.createTransport({
       host: env.mail.host,
@@ -14,6 +19,23 @@ function getTransporter(): nodemailer.Transporter | null {
     });
   }
   return transporter;
+}
+
+// Une valeur inconnue de MAIL_PROVIDER ne se signale qu'une fois par process :
+// la répéter à chaque code noierait les journaux sans rien apprendre de plus.
+let valeurInconnueSignalee = false;
+
+function fournisseur() {
+  const choix = choisirFournisseur({
+    provider: env.mail.provider(),
+    jetonPostmark: env.mail.postmark.serverToken(),
+    smtpConfigure: smtpConfigure(),
+  });
+  if (choix.inconnu && !valeurInconnueSignalee) {
+    valeurInconnueSignalee = true;
+    console.warn(`[mailer] MAIL_PROVIDER="${env.mail.provider()}" inconnu : traité comme "auto".`);
+  }
+  return choix;
 }
 
 function otpContent(code: string, dureeMinutes: number) {
@@ -36,7 +58,8 @@ function otpContent(code: string, dureeMinutes: number) {
 export type ResultatEnvoi = { remis: boolean; detail?: string };
 
 /**
- * Envoie un code par courriel.
+ * Envoie un code par courriel, par Postmark ou par le relais SMTP selon
+ * `MAIL_PROVIDER` (voir `choisirFournisseur`, src/lib/courriel.mjs).
  *
  * 🔴 DEUX DÉFAUTS CORRIGÉS ICI LE 18/08/2026, tous deux devenus critiques du
  * jour où ce code garde une DOUBLE AUTHENTIFICATION.
@@ -58,6 +81,8 @@ export type ResultatEnvoi = { remis: boolean; detail?: string };
  * ⚠️ Le paramètre `dureeMinutes` : la durée dépend désormais de la finalité
  * (5 min pour une connexion, 15 pour une création de compte). La lire depuis
  * `env.otp.ttlMinutes` afficherait un délai faux dans le message.
+ *
+ * ⚠️ Un échec Postmark NE retombe PAS sur SMTP : voir `choisirFournisseur`.
  */
 export async function sendOtpEmail(
   to: string,
@@ -65,13 +90,30 @@ export async function sendOtpEmail(
   dureeMinutes: number = env.otp.ttlMinutes,
 ): Promise<ResultatEnvoi> {
   const { subject, text, html } = otpContent(code, dureeMinutes);
-  const tx = getTransporter();
+  const choix = fournisseur();
 
+  if (choix.fournisseur === "postmark") {
+    const resultat = await envoyerParPostmark(
+      { to, subject, text, html, tag: "code-verification" },
+      {
+        jeton: env.mail.postmark.serverToken(),
+        expediteur: env.mail.postmark.from(),
+        flux: env.mail.postmark.messageStream(),
+      },
+    );
+    // Le destinataire, jamais le code.
+    if (resultat.remis) console.log(`[mailer] code envoyé par Postmark à ${to}`);
+    else console.error("[mailer] échec Postmark :", resultat.detail);
+    return resultat;
+  }
+
+  const tx = choix.fournisseur === "smtp" ? getTransporter() : null;
   if (!tx) {
-    // Aucun SMTP configuré. On le dit, et on ne livre pas — plutôt que de
-    // publier le code dans les journaux en prétendant que c'est un repli.
-    console.error("[mailer] SMTP non configuré : aucun envoi possible.");
-    return { remis: false, detail: "SMTP non configuré" };
+    // Aucun fournisseur utilisable. On le dit, et on ne livre pas — plutôt que
+    // de publier le code dans les journaux en prétendant que c'est un repli.
+    const raison = choix.raison ?? "SMTP non configuré";
+    console.error(`[mailer] ${raison} : aucun envoi possible.`);
+    return { remis: false, detail: raison };
   }
 
   try {

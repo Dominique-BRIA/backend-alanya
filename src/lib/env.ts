@@ -37,14 +37,30 @@ export const env = {
     ttlMinutes: Number(optional("OTP_TTL_MINUTES", "10")),
   },
 
+  /// Courrier sortant. Qui envoie : `choisirFournisseur` (src/lib/courriel.mjs).
   mail: {
-    // auto | firebase | smtp | console
-    provider: () => optional("MAIL_PROVIDER", "smtp").toLowerCase(),
+    // postmark | smtp | auto. Absent = auto : Postmark dès que son jeton est
+    // posé, sinon SMTP. `smtp` force l'ancien relais — c'est le retour arrière.
+    provider: () => optional("MAIL_PROVIDER", "auto"),
     host: optional("SMTP_HOST"),
     port: Number(optional("SMTP_PORT", "587")),
     user: optional("SMTP_USER"),
     pass: optional("SMTP_PASS"),
+    // Expéditeur du relais SMTP. Gmail réécrit tout autre expéditeur que le
+    // compte lui-même : il reste donc distinct de celui de Postmark, et revenir
+    // en arrière ne demande de toucher qu'à MAIL_PROVIDER.
     from: optional("MAIL_FROM", "Alanya <no-reply@alanya.app>"),
+
+    postmark: {
+      // Jeton du SERVEUR Postmark (onglet API Tokens du serveur), pas celui du
+      // compte. Il ne sait qu'envoyer — contrairement au mot de passe Gmail.
+      serverToken: () => optional("POSTMARK_SERVER_TOKEN"),
+      // Doit appartenir à un domaine VÉRIFIÉ dans Postmark (DKIM posé), sinon
+      // chaque envoi est refusé (ErrorCode 400).
+      from: () => optional("POSTMARK_FROM", "Alanya <no-reply@alanyavox.com>"),
+      // Flux transactionnel créé d'office avec chaque serveur Postmark.
+      messageStream: () => optional("POSTMARK_MESSAGE_STREAM", "outbound"),
+    },
   },
 
   push: {

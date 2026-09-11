@@ -132,12 +132,18 @@ FIREBASE_CLIENT_EMAIL="..."
 # Google Gemini
 GEMINI_API_KEY="..."
 
-# Email (SMTP)
+# Email — voir docs/2026-09-11-postmark.md
+# postmark | smtp | auto (défaut : Postmark si son jeton est posé, sinon SMTP)
+MAIL_PROVIDER="postmark"
+POSTMARK_SERVER_TOKEN="..."
+POSTMARK_FROM="Alanya <no-reply@alanyavox.com>"
+POSTMARK_MESSAGE_STREAM="outbound"
+# Ancien relais, gardé pour le retour arrière (MAIL_PROVIDER=smtp)
 SMTP_HOST="smtp.example.com"
 SMTP_PORT="587"
 SMTP_USER="..."
 SMTP_PASS="..."
-SMTP_FROM="Alanya <noreply@alanya.app>"
+MAIL_FROM="Alanya <noreply@alanya.app>"
 
 # CORS
 ALLOWED_ORIGINS="http://localhost:3000,https://votre-app.web.app"
@@ -310,7 +316,8 @@ FIREBASE_PROJECT_ID
 FIREBASE_PRIVATE_KEY
 FIREBASE_CLIENT_EMAIL
 GEMINI_API_KEY
-SMTP_HOST / SMTP_USER / SMTP_PASS / SMTP_FROM
+MAIL_PROVIDER / POSTMARK_SERVER_TOKEN / POSTMARK_FROM
+SMTP_HOST / SMTP_USER / SMTP_PASS / MAIL_FROM   (retour arrière seulement)
 ```
 
 ---
