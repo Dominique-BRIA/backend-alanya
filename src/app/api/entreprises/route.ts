@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import {
   centresDeLEntreprise,
   chercherEntreprises,
+  entreprisesDuPays,
   entreprisesDuType,
   paysAvecEntreprises,
   typesDEntreprise,
@@ -115,6 +116,22 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       recherche: requete,
       entreprises: await chercherEntreprises(requete, idPays),
     });
+  }
+
+  /*
+   * ── Toutes les entreprises d'un pays ─────────────────────────────────
+   *
+   * 🔴 SANS TYPE, et c'est tout l'intérêt. La navigation demande sinon
+   * « quel type ? » avant de répondre, alors que l'écran doit aussi savoir
+   * répondre à « qu'y a-t-il dans ce pays ? » — ce qu'il fait quand on saisit un
+   * nom de pays dans la recherche.
+   *
+   * Placée AVANT la branche des types : sans quoi une requête sans `type` y
+   * tomberait et renverrait la liste des types au lieu des entreprises.
+   */
+  if (params.get("toutes") !== null) {
+    if (idPays === null) return ok({ entreprises: [] });
+    return ok({ idPays, entreprises: await entreprisesDuPays(idPays) });
   }
 
   // ── Les entreprises d'un type ──────────────────────────────────────────

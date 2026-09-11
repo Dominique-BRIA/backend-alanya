@@ -92,6 +92,29 @@ function filtrePays(idPays: number | null) {
 }
 
 /** Les entreprises d'un type, dans MON pays. */
+/**
+ * TOUTES LES ENTREPRISES D'UN PAYS, tous types confondus.
+ *
+ * 🔴 POURQUOI CETTE FONCTION EXISTE. La navigation demandait forcément un
+ * TYPE : « les banques au Cameroun ». Or on veut aussi pouvoir poser la seule
+ * question « qu'y a-t-il au Cameroun ? » — c'est ce que fait l'écran quand on
+ * saisit un nom de pays dans la recherche. Passer par la recherche textuelle
+ * n'aurait pas marché : elle fouille les raisons sociales et les mots-clés, pas
+ * les pays, et « Cameroun » n'y aurait trouvé que les entreprises qui portent ce
+ * mot dans leur nom.
+ *
+ * Même borne que la recherche : l'annuaire reste petit, la borne protège du jour
+ * où il ne le serait plus.
+ */
+export async function entreprisesDuPays(idPays: number) {
+  return prisma.company.findMany({
+    where: { ...ACTIVE, idPays },
+    orderBy: { libelle: "asc" },
+    take: 200,
+    select: selectionEntreprise,
+  });
+}
+
 export async function entreprisesDuType(idTypeCompany: number, idPaysUtilisateur: number | null) {
   return prisma.company.findMany({
     where: { ...ACTIVE, idTypeCompany, ...filtrePays(idPaysUtilisateur) },
