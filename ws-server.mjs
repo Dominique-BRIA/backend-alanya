@@ -608,6 +608,10 @@ async function serializeMessage(m, media) {
     content: m.content,
     type: m.type,
     status: m.status,
+    // Jumeau du champ rendu par l'API : une messagerie vocale qui arrive EN
+    // DIRECT doit se reconnaitre tout de suite, et non au prochain
+    // rechargement de la conversation.
+    callId: m.callId ?? null,
     replyToId: m.replyToId,
     media: (media ?? []).map((f) => ({
       id: f.id,

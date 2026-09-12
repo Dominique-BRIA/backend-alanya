@@ -151,6 +151,15 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         content: m.content,
         type: m.type,
         status: m.status,
+        // 🐛 LE MESSAGE PORTAIT SON APPEL EN BASE, ET NE LE DISAIT PAS.
+        // `creerMessage` ecrit bien `callId` pour une messagerie vocale — mais
+        // aucun des trois serialiseurs ne le rendait. Cote client, une
+        // messagerie etait donc indiscernable d'un fichier audio ordinaire :
+        // elle s'affichait avec son nom de fichier et sa taille, et le bloc qui
+        // devait la coller a son appel manque ne se formait jamais.
+        // Meme classe de defaut que l'URL de l'accueil : la donnee est ecrite,
+        // et le chemin qui la rend l'oublie.
+        callId: m.callId ?? null,
         replyToId: m.replyToId,
         replyTo,
         statutCite: (() => {

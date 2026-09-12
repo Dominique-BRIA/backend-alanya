@@ -331,6 +331,9 @@ export function serialiserMessage(message: Awaited<ReturnType<typeof creerLigneM
     senderId: message.senderId,
     content: message.content,
     type: message.type,
+    // Une messagerie vocale se reconnait a son appel, pas a son nom de
+    // fichier : sans ce champ elle arrive comme une piece jointe audio.
+    callId: message.callId ?? null,
     status: message.status,
     replyToId: message.replyToId,
     media: message.media.map((f) => ({
