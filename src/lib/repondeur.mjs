@@ -68,3 +68,49 @@ export async function accueilPourAppelant(prisma, userId) {
     media: { ...ligne.media, url: `/api/media/${ligne.media.id}` },
   };
 }
+
+/** Fenêtre pendant laquelle un appel donne droit à entendre l'accueil. */
+export const FENETRE_APPEL_MS = 10 * 60 * 1000;
+
+/**
+ * AI-JE LE DROIT D'ENTENDRE CE MESSAGE D'ACCUEIL ?
+ *
+ * 🐛 L'ACCUEIL NE S'EST JAMAIS JOUÉ POUR PERSONNE, ET VOICI POURQUOI.
+ *
+ * Le fichier appartient à la personne APPELÉE. L'appelant n'en est ni le
+ * propriétaire, ni participant d'une conversation où il serait attaché — il
+ * n'est attaché à aucun message — ni un avatar, ni un statut. `/api/media/:id`
+ * lui répondait donc « Accès refusé ». La route du répondeur servait fidèlement
+ * une adresse que le serveur refusait ensuite de délivrer.
+ *
+ * Rien ne le disait : une balise `<audio>` dont la source répond 403 reste là,
+ * muette. On a cherché du côté de la lecture automatique, des permissions du
+ * navigateur, du bouton — alors que le son n'arrivait jamais.
+ *
+ * ⚠️ LA RÈGLE EST LA MÊME QUE CELLE DE `?appel=`, et il faut qu'elle le reste :
+ * un appel RÉCENT, que J'AI INITIÉ, resté SANS RÉPONSE, vers la personne dont
+ * c'est l'accueil. Sans ces quatre conditions, il suffirait de demander un
+ * identifiant de média pour moissonner la voix de n'importe qui.
+ */
+export async function peutEntendreAccueil(prisma, userId, mediaId) {
+  // De qui est-ce l'accueil ACTIF ? Un accueil qui n'est plus actif ne se joue
+  // à personne, et n'a donc aucune raison de s'ouvrir.
+  const accueil = await prisma.repondeurAccueil.findFirst({
+    where: { mediaId, actif: 1 },
+    select: { userId: true },
+  });
+  if (!accueil) return false;
+  // On ne s'entend pas soi-même par ce chemin — le propriétaire passe déjà.
+  if (accueil.userId === userId) return true;
+
+  const appel = await prisma.call.findFirst({
+    where: {
+      initiatorId: userId,
+      answeredAt: null,
+      startedAt: { gt: new Date(Date.now() - FENETRE_APPEL_MS) },
+      participants: { some: { userId: accueil.userId } },
+    },
+    select: { id: true },
+  });
+  return appel !== null;
+}

@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { fail, handleError, HttpError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
+import { peutEntendreAccueil } from "@/lib/repondeur.mjs";
 import { withAuth, requireUser, UnauthorizedError } from "@/lib/auth-context";
 import { formesStockeesPour } from "@/lib/avatar";
 import { verifyAccessToken } from "@/lib/jwt";
@@ -59,7 +60,8 @@ async function peutVoirStatutDuMedia(userId: string, mediaId: string): Promise<b
 
 // GET /api/media/:id — sert le binaire à un utilisateur autorisé.
 // Autorisé si : propriétaire du média, participant d'une conversation où il est
-// attaché, avatar d'un profil, ou média d'un statut visible par le demandeur.
+// attaché, avatar d'un profil, média d'un statut visible par le demandeur, ou
+// message d'accueil de quelqu'un qu'on vient d'appeler sans réponse.
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const userId = resolveUserId(req);
@@ -89,7 +91,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       ? await peutVoirStatutDuMedia(userId, id)
       : false;
 
-    if (!isOwner && !isParticipant && !isAvatar && !isStatus) {
+    /*
+     * 🐛 LE MESSAGE D'ACCUEIL D'UN RÉPONDEUR N'ENTRAIT DANS AUCUN DES CAS
+     * CI-DESSUS, et c'est pourquoi il ne s'est jamais joué pour personne.
+     *
+     * Il appartient à la personne APPELÉE. L'appelant n'en est pas le
+     * propriétaire ; le fichier n'est attaché à aucun message, donc il n'est
+     * participant de rien ; ce n'est ni un avatar ni un statut. Cette route lui
+     * répondait « Accès refusé », en silence pour une balise `<audio>`.
+     *
+     * On a cherché du côté de la lecture automatique et des permissions du
+     * navigateur. Le son n'arrivait simplement jamais.
+     */
+    const isAccueil = !isOwner && !isParticipant && !isAvatar && !isStatus
+      ? await peutEntendreAccueil(prisma, userId, id)
+      : false;
+
+    if (!isOwner && !isParticipant && !isAvatar && !isStatus && !isAccueil) {
       return fail("Accès refusé", 403, "FORBIDDEN");
     }
 
