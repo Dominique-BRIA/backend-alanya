@@ -124,6 +124,20 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   }
 
   /*
+   * 🐛 LE TYPE ETAIT ECRIT EN DUR : « AUDIO », quoi qu'on ait deposé.
+   *
+   * Un appel vidéo sans réponse laisse une messagerie VIDÉO — on avait appelé
+   * en vidéo, et répondre par la voix seule perdrait ce qu'on voulait montrer.
+   * Le média passait donc le contrôle juste au-dessus, puis se voyait étiqueter
+   * comme un son : les clients lui donnaient un lecteur audio, et l'image ne
+   * s'affichait nulle part alors que le fichier la contenait bel et bien.
+   *
+   * ⚠️ C'EST LE TYPE MIME QUI TRANCHE, et non ce que le client a annoncé : lui
+   * seul décrit le fichier réellement stocké.
+   */
+  const estVideo = media.mimeType.startsWith("video/");
+
+  /*
    * LA CONVERSATION D'ACCUEIL.
    *
    * ⚠️ `convId` PEUT ÊTRE NUL : un appel lancé depuis le clavier, sans
@@ -140,7 +154,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const resultat = await creerMessage({
     convId,
     expediteurId: userId,
-    type: "AUDIO",
+    type: estVideo ? "VIDEO" : "AUDIO",
     mediaId,
     callId: appel.id,
   });
@@ -176,7 +190,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       convId,
       convTitle: (expediteur ? nomAffichage(expediteur) : null) ?? "Quelqu'un",
       preview: null,
-      messageType: "AUDIO",
+      messageType: estVideo ? "VIDEO" : "AUDIO",
     });
   } catch {
     // Une notification perdue ne perd pas le message : il est enregistré, et
