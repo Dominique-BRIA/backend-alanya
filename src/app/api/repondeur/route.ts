@@ -26,6 +26,25 @@ const MEDIA = {
   select: { id: true, url: true, mimeType: true, durationMs: true, filename: true },
 } as const;
 
+/**
+ * L'ADRESSE PUBLIQUE D'UN MÉDIA — et non la colonne `url` telle quelle.
+ *
+ * 🐛 LES ACCUEILS NE SE JOUAIENT PAS. `MediaFile.url` est le CHEMIN DE STOCKAGE
+ * (« uploads/2026/09/… »), pas une adresse servie : c'est `/api/media/<id>` qui
+ * l'est, et c'est ce que construisent toutes les autres routes — les messages,
+ * les statuts, l'API v1. Celle-ci rendait la colonne brute. Le client la
+ * transformait donc en une adresse qui ne menait nulle part, la balise `<audio>`
+ * échouait, et comme une balise `<audio>` échoue EN SILENCE, cliquer sur
+ * « écouter » ne faisait rien du tout.
+ *
+ * ⚠️ LE MÊME DÉFAUT RENDAIT LE RÉPONDEUR MUET POUR L'APPELANT : `?appel=` sert
+ * le même média. L'écran annonçait « Message d'accueil… » devant un haut-parleur
+ * silencieux — un seul défaut, deux symptômes qui semblaient sans rapport.
+ */
+function mediaPublic<T extends { id: string }>(media: T): T {
+  return { ...media, url: `/api/media/${media.id}` };
+}
+
 const ACCUEIL = {
   id: true,
   libelle: true,
@@ -33,6 +52,11 @@ const ACCUEIL = {
   createdAt: true,
   media: MEDIA,
 } as const;
+
+/** Une ligne d'accueil dont le média porte son adresse servie. */
+function avecMediaPublic<T extends { media: { id: string } }>(accueil: T): T {
+  return { ...accueil, media: mediaPublic(accueil.media) };
+}
 
 /** Fenêtre pendant laquelle un appel donne droit à entendre l'accueil. */
 const FENETRE_APPEL_MS = 10 * 60 * 1000;
@@ -85,7 +109,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       select: { media: MEDIA },
     });
     if (!accueil) return fail("Aucun répondeur pour cet appel", 404, "NOT_FOUND");
-    return ok({ accueil: accueil.media });
+    return ok({ accueil: mediaPublic(accueil.media) });
   }
 
   const [moi, accueils] = await Promise.all([
@@ -98,7 +122,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       select: ACCUEIL,
     }),
   ]);
-  return ok({ actif: moi?.repondeurActif === 1, accueils });
+  return ok({ actif: moi?.repondeurActif === 1, accueils: accueils.map(avecMediaPublic) });
 });
 
 /**
@@ -144,7 +168,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       where: { id: userId },
       select: { repondeurActif: true },
     });
-    return ok({ actif: moi?.repondeurActif === 1, accueils });
+    return ok({ actif: moi?.repondeurActif === 1, accueils: accueils.map(avecMediaPublic) });
   }
 
   let corps: unknown;
@@ -169,7 +193,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       orderBy: { createdAt: "desc" },
       select: ACCUEIL,
     });
-    return ok({ actif: recu.actif, accueils });
+    return ok({ actif: recu.actif, accueils: accueils.map(avecMediaPublic) });
   }
 
   // ── Ajouter un accueil ────────────────────────────────────────────────
@@ -216,7 +240,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     orderBy: { createdAt: "desc" },
     select: ACCUEIL,
   });
-  return ok({ actif: true, accueils }, 201);
+  return ok({ actif: true, accueils: accueils.map(avecMediaPublic) }, 201);
 });
 
 /**
@@ -253,5 +277,5 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
     where: { id: userId },
     select: { repondeurActif: true },
   });
-  return ok({ actif: moi?.repondeurActif === 1, accueils });
+  return ok({ actif: moi?.repondeurActif === 1, accueils: accueils.map(avecMediaPublic) });
 });
