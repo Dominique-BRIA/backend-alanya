@@ -11,7 +11,6 @@ import { accueilPourAppelant, enAbsence } from "@/lib/repondeur.mjs";
  * `GET  /api/repondeur?appel=<id>`    → l'accueil ACTIF de la personne appelée
  * `POST /api/repondeur`               → ajouter un accueil, ou allumer/éteindre
  * `POST /api/repondeur?actif=<id>`    → désigner l'accueil actif
- * `POST /api/repondeur?absence=<id>`  → désigner l'accueil du mode absence
  * `POST /api/repondeur` `{minutes}`   → poser (ou lever) une absence
  * `DELETE /api/repondeur?accueil=<id>` → retirer un accueil
  *
@@ -52,7 +51,6 @@ const ACCUEIL = {
   id: true,
   libelle: true,
   actif: true,
-  absence: true,
   createdAt: true,
   media: MEDIA,
 } as const;
@@ -162,18 +160,14 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
  *   `{ "actif": true | false }`               → allume ou éteint le répondeur
  *   `{ "absenceMinutes": 90 }`                → absence de 90 min (0 = lever)
  * Ou `?actif=<idAccueil>`                     → désigne celui qu'on entend
- * Ou `?absence=<idAccueil>`                   → désigne celui du mode absence
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const choisi = req.nextUrl.searchParams.get("actif");
-  const choisiAbsence = req.nextUrl.searchParams.get("absence");
 
-  // ── Désigner l'accueil actif, ou celui de l'absence ───────────────────
-  const aDesigner = choisi ?? choisiAbsence;
-  if (aDesigner !== null) {
-    const colonne = choisi !== null ? "actif" : "absence";
+  // ── Désigner l'accueil actif ──────────────────────────────────────────
+  if (choisi !== null) {
     const accueil = await prisma.repondeurAccueil.findUnique({
-      where: { id: aDesigner },
+      where: { id: choisi },
       select: { userId: true },
     });
     if (!accueil || accueil.userId !== userId) {
@@ -188,13 +182,10 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
      */
     await prisma.$transaction([
       prisma.repondeurAccueil.updateMany({
-        where: { userId, [colonne]: 1 },
-        data: { [colonne]: 0 },
+        where: { userId, actif: 1 },
+        data: { actif: 0 },
       }),
-      prisma.repondeurAccueil.update({
-        where: { id: aDesigner },
-        data: { [colonne]: 1 },
-      }),
+      prisma.repondeurAccueil.update({ where: { id: choisi }, data: { actif: 1 } }),
     ]);
     return ok(await etatRepondeur(userId));
   }
@@ -249,7 +240,18 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     }
     await prisma.user.update({
       where: { id: userId },
-      data: { repondeurActif: recu.actif ? 1 : 0 },
+      data: {
+        repondeurActif: recu.actif ? 1 : 0,
+        /*
+         * ⚠️ ÉTEINDRE ÉTEINT TOUT, ABSENCE COMPRISE. L'absence passe outre
+         * l'interrupteur — c'est voulu, poser une absence est une demande plus
+         * récente et plus explicite qu'une case cochée. Mais alors un
+         * interrupteur éteint pendant une absence ne changeait RIEN : les appels
+         * continuaient d'aller au répondeur, et plus rien à l'écran ne disait
+         * pourquoi. « Éteint » doit vouloir dire éteint.
+         */
+        ...(recu.actif ? {} : { repondeurJusquA: null }),
+      },
     });
   return ok(await etatRepondeur(userId));
   }

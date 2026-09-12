@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { accueilPourAppelant } from "@/lib/repondeur.mjs";
 import { creerMessage } from "@/modules/messaging/envoi";
 import { pushNewMessage } from "@/../push.mjs";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
@@ -102,11 +103,20 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   }
   const destinataireId = destinataires[0];
 
-  const destinataire = await prisma.user.findUnique({
-    where: { id: destinataireId },
-    select: { repondeurActif: true },
-  });
-  if (destinataire?.repondeurActif !== 1) {
+  /*
+   * 🔴 LA MÊME RÈGLE QUE CELLE QUI A JOUÉ L'ACCUEIL, et pas une deuxième.
+   *
+   * Ce contrôle lisait `repondeurActif` tout seul, là où `accueilPourAppelant`
+   * regarde AUSSI l'absence en cours. Les deux pouvaient donc se contredire :
+   * quelqu'un qui éteint l'interrupteur pendant une absence faisait entendre son
+   * accueil — l'absence l'emporte — mais le dépôt du message était refusé juste
+   * après. L'appelant parlait deux minutes pour s'entendre dire non.
+   *
+   * Une seule question, posée au même endroit : « cette personne a-t-elle un
+   * accueil à faire entendre ? » Si oui, elle peut recevoir le message.
+   */
+  const repondeur = await accueilPourAppelant(prisma, destinataireId);
+  if (!repondeur) {
     return fail("Le répondeur n'est pas actif", 409, "NO_ANSWERING_MACHINE");
   }
 

@@ -33,10 +33,14 @@ const MEDIA = {
  * Rend aussi le mode, dont l'appelant a besoin : en absence, il n'attend pas
  * trente secondes, et son écran ne dit pas la même chose.
  *
- * ⚠️ L'ACCUEIL D'ABSENCE RETOMBE SUR CELUI DE TOUS LES JOURS quand aucun n'a été
- * désigné. Le contraire — poser une absence et n'avoir aucun son à jouer — ferait
- * tomber l'appelant sur un silence, ce qui est pire qu'une sonnerie sans fin :
- * il ne saurait même pas qu'il est tombé sur un répondeur.
+ * 🔴 UN SEUL ACCUEIL, DANS LES DEUX MODES — et c'était une complication de trop.
+ *
+ * Une version précédente permettait d'en désigner un second, réservé à
+ * l'absence. L'idée se défendait sur le papier — « je suis en réunion » ne dit
+ * pas ce que dit « laissez un message » — mais à l'écran elle donnait un bouton
+ * de plus par accueil, dont personne ne pouvait deviner l'effet : le répondeur
+ * n'a qu'un message actif, et c'est celui-là qu'on entend. Le mode change QUAND
+ * on l'entend, pas LEQUEL. Changer de message, c'est changer l'accueil actif.
  */
 export async function accueilPourAppelant(prisma, userId) {
   const compte = await prisma.user.findUnique({
@@ -53,19 +57,10 @@ export async function accueilPourAppelant(prisma, userId) {
   // qui vient de dire qu'il ne répondrait pas.
   if (!absence && compte.repondeurActif !== 1) return null;
 
-  let ligne = null;
-  if (absence) {
-    ligne = await prisma.repondeurAccueil.findFirst({
-      where: { userId, absence: 1 },
-      select: { media: MEDIA },
-    });
-  }
-  if (!ligne) {
-    ligne = await prisma.repondeurAccueil.findFirst({
-      where: { userId, actif: 1 },
-      select: { media: MEDIA },
-    });
-  }
+  const ligne = await prisma.repondeurAccueil.findFirst({
+    where: { userId, actif: 1 },
+    select: { media: MEDIA },
+  });
   if (!ligne) return null;
 
   return {

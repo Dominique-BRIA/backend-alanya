@@ -669,13 +669,6 @@ model RepondeurAccueil {
   /// lui, cinq accueils se ressemblent tous et il faut les écouter un par un.
   libelle  String? @db.VarChar(60)
 
-  /// 1 = accueil joué pendant le mode absence, au plus un par compte.
-  ///
-  /// ⚠️ UNE COLONNE À PART, ET NON UNE VALEUR DE PLUS SUR `actif` : le même
-  /// accueil peut servir dans les deux cas, et un « type » unique obligerait à
-  /// le dupliquer. Unicité tenue par un index partiel, comme `actif`.
-  absence  Int @default(0) @db.SmallInt
-
   /// 1 = celui que les appelants entendent.
   ///
   /// ⚠️ L'UNICITÉ EST TENUE PAR UN INDEX PARTIEL en base, pas par le code :
