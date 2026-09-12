@@ -68,6 +68,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
         userId,
         name: data.name,
         ringtone: data.ringtone ?? null,
+        ringtoneMessage: data.ringtoneMessage ?? null,
         color: data.color ?? null,
         // Creation imbriquee : la liste et ses membres arrivent dans la meme
         // transaction, sinon un echec a mi-chemin laisserait une liste vide que

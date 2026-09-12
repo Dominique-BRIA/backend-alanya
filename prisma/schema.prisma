@@ -691,6 +691,36 @@ model ContactList {
   /// verites a maintenir.
   ringtone String? @db.VarChar(300)
 
+  /// Son court joue a l'arrivee d'un MESSAGE de quelqu'un de cette liste.
+  ///
+  /// ⚠️ `ringtone` N'A PAS ETE RENOMME, et c'est deliberé : il porte la sonnerie
+  /// d'APPEL depuis l'origine, il est lu par les trois clients et par
+  /// `RingtoneService`. Le renommer en `ringtoneAppel` aurait ete plus clair sur
+  /// le papier et aurait casse tous les APK deja installes, pour un gain nul.
+  /// Le champ neuf est donc celui qui porte le qualificatif.
+  ///
+  /// Meme espace de noms que `ringtone` : nom de fichier livre ou URL de media.
+  ringtoneMessage String? @map("ringtone_message") @db.VarChar(300)
+
+  /// Rang de cette liste dans l'ORDRE DE PRIORITE du compte.
+  ///
+  /// 🔴 IL TRANCHE UN CONFLIT REEL. Une meme personne peut appartenir a
+  /// plusieurs listes, qui ne portent pas la meme sonnerie : il faut bien
+  /// choisir laquelle sonne. La regle etait « LA PLUS ANCIENNEMENT CREEE
+  /// GAGNE » — voir `ORDRE_LISTES` dans `src/lib/contact-lists.ts`. Elle est
+  /// stable, mais elle n'est le choix de personne : on ne peut pas la changer
+  /// sans supprimer puis recreer une liste, et l'ordre obtenu ne s'explique
+  /// pas a l'ecran.
+  ///
+  /// ⚠️ `null` EST UN ETAT NORMAL, celui de toutes les lignes existantes : le
+  /// client retombe alors sur l'ordre alphabetique d'avant. Une valeur par
+  /// defaut a 0 aurait au contraire declare que TOUTES les listes sont
+  /// premieres, ce qui est un conflit, pas une absence de choix.
+  ///
+  /// Pas d'unicite posee : deux listes au meme rang se departagent par le nom,
+  /// et une contrainte ferait echouer un reordonnancement a mi-chemin.
+  ordre Int? @map("ordre")
+
   /// Pastille de couleur telle que le client l'ecrit («#FF7A00»). Non validee,
   /// pour la meme raison que la sonnerie : la palette appartient au client.
   color String? @db.VarChar(20)

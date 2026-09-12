@@ -28,6 +28,23 @@ export interface ListeJson {
   id: string;
   name: string;
   ringtone: string | null;
+  /**
+   * Son court des MESSAGES venant de cette liste.
+   *
+   * ⚠️ `ringtone` RESTE LA SONNERIE D'APPEL, sous son nom d'origine : les APK
+   * deja installes le lisent, et le renommer les aurait tous casses. C'est donc
+   * le champ neuf qui porte le qualificatif, pas l'ancien.
+   */
+  ringtoneMessage: string | null;
+  /**
+   * Rang dans l'ordre de priorite du compte, ou `null` si l'utilisateur n'a
+   * rien ordonne.
+   *
+   * ⚠️ `null` N'EST PAS ZERO. Il dit « pas de choix », et le client retombe
+   * alors sur l'ordre rendu par le serveur. Le confondre avec 0 ferait croire
+   * que toutes les listes sont premieres.
+   */
+  ordre: number | null;
   color: string | null;
   createdAt: string;
   members: MembreJson[];
@@ -46,6 +63,8 @@ interface LigneListe {
   id: string;
   name: string;
   ringtone: string | null;
+  ringtoneMessage: string | null;
+  ordre: number | null;
   color: string | null;
   cle: string | null;
   createdAt: Date;
@@ -66,7 +85,19 @@ interface LigneListe {
 /// `id` en second rang parce que `created_at` seul n'est pas un ordre TOTAL :
 /// deux listes creees dans la meme milliseconde se departageraient au hasard, et
 /// deux lectures successives pourraient les rendre dans l'ordre inverse.
+/// ⚠️ L'ORDRE CHOISI PASSE DEVANT, ET LES NULS TOMBENT EN DERNIER.
+///
+/// `nulls: "last"` n'est PAS une precaution de style : sous PostgreSQL, un
+/// `ORDER BY ... ASC` place les NULL EN TETE par defaut. Sans ce reglage, les
+/// listes que l'utilisateur n'a pas ordonnees passeraient devant celles qu'il a
+/// explicitement mises en premier — l'exact contraire de ce qu'il a demande.
+///
+/// Tant que personne n'a rien ordonne — l'etat de toutes les lignes le jour de
+/// la migration — `ordre` vaut NULL partout, et l'ordre rendu reste EXACTEMENT
+/// celui d'avant : anciennete, puis id. La bascule est donc invisible jusqu'au
+/// premier reordonnancement, et c'est ce qui la rend sure a deployer.
 const ORDRE_LISTES: Prisma.ContactListOrderByWithRelationInput[] = [
+  { ordre: { sort: "asc", nulls: "last" } },
   { createdAt: "asc" },
   { id: "asc" },
 ];
@@ -188,6 +219,8 @@ export function jsonListe(
     id: liste.id,
     name: liste.name,
     ringtone: liste.ringtone,
+    ringtoneMessage: liste.ringtoneMessage,
+    ordre: liste.ordre,
     color: liste.color,
     cle: liste.cle,
     createdAt: liste.createdAt.toISOString(),

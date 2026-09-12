@@ -430,6 +430,9 @@ const numerosListeSchema = z
 export const createContactListSchema = z.object({
   name: nomListeSchema,
   ringtone: sonnerieListeSchema.nullable().optional(),
+  // Le son des MESSAGES. Meme forme et meme validation que la sonnerie
+  // d appel : nom de fichier livre, ou url de media relative.
+  ringtoneMessage: sonnerieListeSchema.nullable().optional(),
   color: couleurListeSchema.nullable().optional(),
   memberIds: membresListeSchema.optional(),
   memberNumbers: numerosListeSchema.optional(),
@@ -441,9 +444,25 @@ export const createContactListSchema = z.object({
 export const updateContactListSchema = z.object({
   name: nomListeSchema.optional(),
   ringtone: sonnerieListeSchema.nullable().optional(),
+  // Le son des MESSAGES. Meme forme et meme validation que la sonnerie
+  // d appel : nom de fichier livre, ou url de media relative.
+  ringtoneMessage: sonnerieListeSchema.nullable().optional(),
   color: couleurListeSchema.nullable().optional(),
   memberIds: membresListeSchema.optional(),
   memberNumbers: numerosListeSchema.optional(),
+});
+
+/// L ordre de priorite des listes, tel que le client le glisse.
+///
+/// ⚠️ DES IDENTIFIANTS, ET NON DES COUPLES (id, rang). Le rang est la POSITION
+/// dans le tableau : il ne peut donc etre ni manquant, ni double, ni negatif,
+/// et il n y a rien a valider. Laisser le client nommer les rangs aurait ouvert
+/// tous ces cas, chacun a refuser separement.
+///
+/// 512, comme les membres : c est la meme borne de bon sens, et un compte qui
+/// aurait plus de listes que cela a un autre probleme.
+export const ordreContactListsSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(512),
 });
 
 /// --- Catalogue de sonneries importees ---

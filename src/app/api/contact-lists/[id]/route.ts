@@ -77,6 +77,7 @@ export const PUT = withAuth(async (req: NextRequest, userId: string, ctx) => {
         data: {
           name: data.name,
           ringtone: data.ringtone,
+          ringtoneMessage: data.ringtoneMessage,
           color: data.color,
         },
         include: AVEC_MEMBRES,
