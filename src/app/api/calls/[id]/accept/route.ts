@@ -98,6 +98,23 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     answeredAt: now,
     isGroup: meta.isGroup,
     groupName: meta.groupName,
+    /*
+     * 🔴 SANS CE CHAMP, QUI REJOINT UN APPEL VIDEO ARRIVE EN AUDIO.
+     *
+     * Le client apprend le type d'un appel par la trame `incoming_call`. Or il
+     * existe un chemin qui ne la voit jamais : application fermee, l'appel est
+     * annonce par le push, et l'on decroche depuis l'ecran natif. Le client
+     * n'a alors que l'identifiant, appelle `/accept`, et son `activeType`
+     * restait sur sa valeur par defaut — AUDIO. La camera ne s'ouvrait pas.
+     *
+     * C'est le cas ORDINAIRE d'un invite : on l'ajoute a un appel en cours
+     * pendant qu'il fait autre chose, son application n'est pas au premier
+     * plan, et il arrive donc en audio dans un appel video.
+     *
+     * La reponse d'`/accept` est le seul endroit ou le serveur parle a ce
+     * chemin-la : c'est ici que le type doit etre dit.
+     */
+    type: part.call.type,
     activeParticipants,
     /// Le client n'enregistre que si le serveur le lui dit. Absent ou faux chez
     /// un client plus ancien : il ignorera simplement le champ.
