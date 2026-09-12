@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { accueilPourAppelant, enAbsence } from "@/lib/repondeur.mjs";
 
 /**
  * LES MESSAGES D'ACCUEIL DU RÉPONDEUR.
@@ -10,6 +11,8 @@ import { withAuth } from "@/lib/auth-context";
  * `GET  /api/repondeur?appel=<id>`    → l'accueil ACTIF de la personne appelée
  * `POST /api/repondeur`               → ajouter un accueil, ou allumer/éteindre
  * `POST /api/repondeur?actif=<id>`    → désigner l'accueil actif
+ * `POST /api/repondeur?absence=<id>`  → désigner l'accueil du mode absence
+ * `POST /api/repondeur` `{minutes}`   → poser (ou lever) une absence
  * `DELETE /api/repondeur?accueil=<id>` → retirer un accueil
  *
  * 🔴 LE RÉPONDEUR EST JOUÉ PAR LE CLIENT DE L'APPELANT, faute de quoi il
@@ -49,9 +52,42 @@ const ACCUEIL = {
   id: true,
   libelle: true,
   actif: true,
+  absence: true,
   createdAt: true,
   media: MEDIA,
 } as const;
+
+/** Durée maximale d'une absence : au-delà, ce n'est plus une absence. */
+const ABSENCE_MAX_MINUTES = 24 * 60;
+
+/**
+ * L'état complet du répondeur, tel qu'il part au client.
+ *
+ * Un seul endroit le compose : les six retours de ce fichier rendaient la même
+ * chose à la main, et le jour où un champ s'ajoute il en manque toujours un.
+ */
+async function etatRepondeur(userId: string) {
+  const [moi, accueils] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { repondeurActif: true, repondeurJusquA: true },
+    }),
+    prisma.repondeurAccueil.findMany({
+      where: { userId },
+      // Le plus récent en tête : c'est celui qu'on vient d'enregistrer, donc
+      // celui qu'on cherche.
+      orderBy: { createdAt: "desc" },
+      select: ACCUEIL,
+    }),
+  ]);
+  return {
+    actif: moi?.repondeurActif === 1,
+    // ⚠️ RENDUE SEULEMENT SI ELLE EST ENCORE DEVANT NOUS : une date passée n'est
+    // pas une absence, et l'écran afficherait « actif jusqu'à 9 h » à midi.
+    jusquA: enAbsence(moi?.repondeurJusquA) ? moi?.repondeurJusquA : null,
+    accueils: accueils.map(avecMediaPublic),
+  };
+}
 
 /** Une ligne d'accueil dont le média porte son adresse servie. */
 function avecMediaPublic<T extends { media: { id: string } }>(accueil: T): T {
@@ -97,19 +133,12 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     // compte existe et qu'il a un accueil. « Il n'y a rien ici » suffit.
     if (!cibleId) return fail("Aucun répondeur pour cet appel", 404, "NOT_FOUND");
 
-    const cible = await prisma.user.findUnique({
-      where: { id: cibleId },
-      select: { repondeurActif: true },
-    });
-    if (cible?.repondeurActif !== 1) {
-      return fail("Aucun répondeur pour cet appel", 404, "NOT_FOUND");
-    }
-    const accueil = await prisma.repondeurAccueil.findFirst({
-      where: { userId: cibleId, actif: 1 },
-      select: { media: MEDIA },
-    });
+    // ⚠️ LA REGLE VIT DANS `@/lib/repondeur.mjs` ET NON ICI : `ws-server.mjs` se
+    // pose exactement la même question, avant de faire sonner. Deux copies se
+    // contrediraient le jour où l'une des deux évoluerait seule.
+    const accueil = await accueilPourAppelant(prisma, cibleId);
     if (!accueil) return fail("Aucun répondeur pour cet appel", 404, "NOT_FOUND");
-    return ok({ accueil: mediaPublic(accueil.media) });
+    return ok({ accueil: accueil.media, absence: accueil.absence });
   }
 
   const [moi, accueils] = await Promise.all([
@@ -126,20 +155,25 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
 });
 
 /**
- * Ajoute un accueil, en désigne un comme actif, ou allume l'interrupteur.
+ * Ajoute un accueil, en désigne un, allume l'interrupteur, ou pose une absence.
  *
  * Corps possibles, indépendants :
  *   `{ "mediaId": "…", "libelle": "Congés" }` → ajoute, et l'active
  *   `{ "actif": true | false }`               → allume ou éteint le répondeur
+ *   `{ "absenceMinutes": 90 }`                → absence de 90 min (0 = lever)
  * Ou `?actif=<idAccueil>`                     → désigne celui qu'on entend
+ * Ou `?absence=<idAccueil>`                   → désigne celui du mode absence
  */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const choisi = req.nextUrl.searchParams.get("actif");
+  const choisiAbsence = req.nextUrl.searchParams.get("absence");
 
-  // ── Désigner l'accueil actif ──────────────────────────────────────────
-  if (choisi !== null) {
+  // ── Désigner l'accueil actif, ou celui de l'absence ───────────────────
+  const aDesigner = choisi ?? choisiAbsence;
+  if (aDesigner !== null) {
+    const colonne = choisi !== null ? "actif" : "absence";
     const accueil = await prisma.repondeurAccueil.findUnique({
-      where: { id: choisi },
+      where: { id: aDesigner },
       select: { userId: true },
     });
     if (!accueil || accueil.userId !== userId) {
@@ -150,25 +184,19 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
      *
      * L'index unique partiel refuse deux actifs : allumer avant d'éteindre
      * échouerait. Et sans transaction, une panne entre les deux laisserait le
-     * compte SANS aucun accueil actif — un répondeur muet qui se déclare prêt.
+     * compte SANS aucun accueil désigné — un répondeur muet qui se déclare prêt.
      */
     await prisma.$transaction([
       prisma.repondeurAccueil.updateMany({
-        where: { userId, actif: 1 },
-        data: { actif: 0 },
+        where: { userId, [colonne]: 1 },
+        data: { [colonne]: 0 },
       }),
-      prisma.repondeurAccueil.update({ where: { id: choisi }, data: { actif: 1 } }),
+      prisma.repondeurAccueil.update({
+        where: { id: aDesigner },
+        data: { [colonne]: 1 },
+      }),
     ]);
-    const accueils = await prisma.repondeurAccueil.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      select: ACCUEIL,
-    });
-    const moi = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { repondeurActif: true },
-    });
-    return ok({ actif: moi?.repondeurActif === 1, accueils: accueils.map(avecMediaPublic) });
+    return ok(await etatRepondeur(userId));
   }
 
   let corps: unknown;
@@ -177,7 +205,42 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   } catch {
     return fail("Corps JSON invalide", 400, "BAD_JSON");
   }
-  const recu = (corps ?? {}) as { mediaId?: unknown; libelle?: unknown; actif?: unknown };
+  const recu = (corps ?? {}) as {
+    mediaId?: unknown;
+    libelle?: unknown;
+    actif?: unknown;
+    absenceMinutes?: unknown;
+  };
+
+  // ── Poser ou lever une absence ────────────────────────────────────────
+  if ("absenceMinutes" in recu) {
+    const minutes = recu.absenceMinutes;
+    if (typeof minutes !== "number" || !Number.isFinite(minutes)) {
+      return fail("« absenceMinutes » doit être un nombre", 400, "BAD_BODY");
+    }
+    /*
+     * ⚠️ LA BORNE EST ICI, ET NON SEULEMENT DANS L'ÉCRAN. Une absence de mille
+     * heures n'est plus une absence : c'est un compte devenu injoignable dont
+     * personne ne se souvient, et l'écran qui l'aurait posée n'est pas le seul
+     * chemin vers cette route.
+     */
+    if (minutes < 0 || minutes > ABSENCE_MAX_MINUTES) {
+      return fail(`« absenceMinutes » doit aller de 0 à ${ABSENCE_MAX_MINUTES}`, 400, "BAD_BODY");
+    }
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        // 0 lève l'absence. On efface au lieu de poser une date passée : une
+        // colonne vide se lit sans calcul, et l'index partiel s'allège d'autant.
+        repondeurJusquA: minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null,
+        // Poser une absence allume le répondeur : demander qu'on réponde à sa
+        // place en laissant l'interrupteur éteint n'aurait aucun sens, et le
+        // retour au mode par défaut trouverait le répondeur inerte.
+        ...(minutes > 0 ? { repondeurActif: 1 } : {}),
+      },
+    });
+    return ok(await etatRepondeur(userId));
+  }
 
   // ── Allumer ou éteindre le répondeur ──────────────────────────────────
   if ("actif" in recu && !("mediaId" in recu)) {
@@ -188,12 +251,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       where: { id: userId },
       data: { repondeurActif: recu.actif ? 1 : 0 },
     });
-    const accueils = await prisma.repondeurAccueil.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-      select: ACCUEIL,
-    });
-    return ok({ actif: recu.actif, accueils: accueils.map(avecMediaPublic) });
+  return ok(await etatRepondeur(userId));
   }
 
   // ── Ajouter un accueil ────────────────────────────────────────────────
@@ -234,13 +292,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     }),
     prisma.user.update({ where: { id: userId }, data: { repondeurActif: 1 } }),
   ]);
-
-  const accueils = await prisma.repondeurAccueil.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    select: ACCUEIL,
-  });
-  return ok({ actif: true, accueils: accueils.map(avecMediaPublic) }, 201);
+  return ok(await etatRepondeur(userId), 201);
 });
 
 /**
@@ -267,15 +319,5 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
   if (accueil.actif === 1) {
     await prisma.user.update({ where: { id: userId }, data: { repondeurActif: 0 } });
   }
-
-  const accueils = await prisma.repondeurAccueil.findMany({
-    where: { userId },
-    orderBy: { createdAt: "desc" },
-    select: ACCUEIL,
-  });
-  const moi = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { repondeurActif: true },
-  });
-  return ok({ actif: moi?.repondeurActif === 1, accueils: accueils.map(avecMediaPublic) });
+  return ok(await etatRepondeur(userId));
 });

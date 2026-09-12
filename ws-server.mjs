@@ -12,7 +12,8 @@ import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled, pushMeetingReminder } from "./push.mjs";
+import { isPushEnabled, pushIncomingCall, pushNewMessage, pushCallCancelled, pushCallMissed, pushMeetingReminder } from "./push.mjs";
+import { accueilPourAppelant } from "./src/lib/repondeur.mjs";
 // Mêmes règles de libellé que l'API HTTP — voir l'en-tête de ce fichier pour la
 // raison du JavaScript plutôt que du TypeScript.
 import {
@@ -2880,6 +2881,67 @@ async function handleCallRing(ws, msg) {
     groupName = conv?.name ?? null;
     memberCount = conv?.participants.length ?? 0;
   }
+  /**
+   * MODE ABSENCE — on répond à la place de la sonnerie.
+   *
+   * 🔴 C'EST ICI QUE LA DÉCISION SE PREND, et nulle part ailleurs. Le
+   * destinataire a posé une absence : son téléphone ne doit pas sonner, et
+   * aucun client ne peut le garantir à sa place — il suffirait qu'il ait fermé
+   * son onglet pour que plus personne ne refuse l'appel. Une date en base
+   * continue de répondre quand tous ses appareils sont éteints.
+   *
+   * Le chemin n'est pas neuf : c'est celui d'`ivr_menu`. Quand le numéro appelé
+   * est un centre d'appels, le serveur répond déjà l'invite À L'APPELANT sans
+   * faire sonner qui que ce soit. `repondeur_direct` en est le jumeau.
+   *
+   * ⚠️ APPELS À DEUX SEULEMENT. Dans un groupe, l'absence d'UNE personne ne doit
+   * pas priver les autres de l'appel : les absents ne sonnent pas, les présents
+   * sonnent, et c'est la boucle ordinaire qui s'en charge.
+   */
+  const autres = targets.filter((uid) => uid !== ws.userId);
+  if (autres.length === 1) {
+    const cible = autres[0];
+    const accueil = await accueilPourAppelant(prisma, cible).catch(() => null);
+    if (accueil?.absence && !(await areBlocked(ws.userId, cible))) {
+      /*
+       * ⚠️ L'APPEL EST CLOS TOUT DE SUITE, et non laissé à sonner dans le vide.
+       * Il n'a jamais sonné : le laisser en RINGING le ferait balayer trente
+       * secondes plus tard, et le destinataire verrait apparaître un appel
+       * manqué avec une demi-minute de retard sur le message qui l'accompagne.
+       */
+      await prisma.call.update({
+        where: { id: callId },
+        data: { status: "NO_ANSWER", endedAt: new Date() },
+      }).catch(() => {});
+
+      sendTo(ws.userId, {
+        type: "repondeur_direct",
+        callId,
+        convId: call.convId,
+        callType: call.type,
+        peerId: cible,
+        // Les champs que `nomAffichage` lit, et eux seuls : `nom`, `pseudo`,
+        // `publicNumber`. Un select approximatif rendrait un nom vide.
+        peerName: nomAffichage(await prisma.user.findUnique({
+          where: { id: cible },
+          select: { nom: true, pseudo: true, publicNumber: true },
+        }) ?? {}),
+        accueil: accueil.media,
+      });
+
+      // Une notification, jamais une sonnerie : être injoignable n'est pas la
+      // même chose qu'être tenu dans l'ignorance.
+      pushCallMissed(prisma, {
+        recipientId: cible,
+        callId,
+        convId: call.convId,
+        callerName,
+        callType: call.type,
+      }).catch(() => {});
+      return;
+    }
+  }
+
   for (const uid of targets) {
     if (uid === ws.userId) continue;
     // Blocage : ne fait pas sonner une personne bloquée (ou qui a bloqué l'appelant).

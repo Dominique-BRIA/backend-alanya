@@ -100,6 +100,14 @@ model User {
   /// `readReceipts`, pour la même raison.
   repondeurActif Int @default(0) @map("repondeur_actif") @db.SmallInt
 
+  /// Fin du mode absence — `null` ou passée = mode par défaut.
+  ///
+  /// ⚠️ UNE DATE DE FIN, ET NON UNE DURÉE. Une durée obligerait à retenir quand
+  /// elle a commencé, donc à tenir deux champs d'accord. Une date se compare à
+  /// `now()` et se périme toute seule : le retour au mode par défaut n'est pas
+  /// un évènement à déclencher, c'est l'absence d'un fait.
+  repondeurJusquA DateTime? @map("repondeur_jusqu_a") @db.Timestamptz(6)
+
   /// Les messages d'accueil de ce compte. Au plus un porte `actif = 1`, ce que
   /// la base garantit par un index unique partiel.
   ///
@@ -660,6 +668,13 @@ model RepondeurAccueil {
   /// Nom donné par l'utilisateur. C'est ce qui rend la liste utilisable : sans
   /// lui, cinq accueils se ressemblent tous et il faut les écouter un par un.
   libelle  String? @db.VarChar(60)
+
+  /// 1 = accueil joué pendant le mode absence, au plus un par compte.
+  ///
+  /// ⚠️ UNE COLONNE À PART, ET NON UNE VALEUR DE PLUS SUR `actif` : le même
+  /// accueil peut servir dans les deux cas, et un « type » unique obligerait à
+  /// le dupliquer. Unicité tenue par un index partiel, comme `actif`.
+  absence  Int @default(0) @db.SmallInt
 
   /// 1 = celui que les appelants entendent.
   ///

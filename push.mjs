@@ -346,6 +346,35 @@ export async function pushMeetingRequestDecided(prisma, {
 
 /** Notifie (data-only) que l'appel est terminé/annulé → le client retire la
  *  notif d'appel plein écran, même app fermée. Ciblé par le callId partagé. */
+/**
+ * APPEL REÇU PENDANT UNE ABSENCE — une notification, jamais une sonnerie.
+ *
+ * 🔴 CE N'EST PAS `pushIncomingCall`. Celle-là fait sonner le téléphone et
+ * ouvre l'écran d'appel plein cadre : exactement ce que quelqu'un qui a posé une
+ * absence a demandé à ne PAS subir. Celle-ci se pose dans la liste comme un
+ * message, sans bruit et sans plein écran.
+ *
+ * ⚠️ ELLE PART QUAND MÊME, et c'est un choix : le silence complet ferait
+ * découvrir dix appels manqués d'un coup en rouvrant l'application. Être
+ * injoignable n'est pas la même chose qu'être tenu dans l'ignorance.
+ */
+export async function pushCallMissed(prisma, { recipientId, callId, convId, callerName, callType }) {
+  if (!isPushEnabled()) return;
+  const qui = callerName || "Quelqu'un";
+  await sendPushToUser(prisma, recipientId, {
+    title: qui,
+    body: callType === "VIDEO" ? "Appel vidéo manqué" : "Appel manqué",
+    data: {
+      // `message` et non `call` : le type dicte le comportement du client, et
+      // « call » rouvrirait l'écran d'appel d'un appel qui n'existe plus.
+      type: "message",
+      convId: convId ?? "",
+      callId: callId ?? "",
+      title: qui,
+    },
+  });
+}
+
 export async function pushCallCancelled(prisma, { recipientId, callId }) {
   if (!isPushEnabled()) return;
   await sendPushToUser(prisma, recipientId, {
