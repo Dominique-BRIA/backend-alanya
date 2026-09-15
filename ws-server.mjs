@@ -1288,6 +1288,9 @@ async function handleSend(ws, msg) {
       await pushNewMessage(prisma, {
         recipientId: uid,
         senderName,
+        // Sert au SON de la notification : c'est la liste du destinataire qui
+        // contient cet expediteur qui decide du canal Android.
+        senderId: ws.userId,
         convId,
         convTitle: convTitle ?? senderName,
         // « Vous a mentionne : … » — la notification dit POURQUOI elle mérite
