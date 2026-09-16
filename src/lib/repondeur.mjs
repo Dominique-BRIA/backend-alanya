@@ -50,12 +50,17 @@ export async function accueilPourAppelant(prisma, userId) {
   if (!compte) return null;
 
   const absence = enAbsence(compte.repondeurJusquA);
+  const maintenant = new Date();
+  const heure = `${String(maintenant.getHours()).padStart(2, "0")}:${String(maintenant.getMinutes()).padStart(2, "0")}`;
+  const programmes = await prisma.repondeurProgramme.findMany({ where: { userId, actif: 1, expireLe: { gt: maintenant } }, select: { jour: true, heureDebut: true, heureFin: true } });
+  const programmeActif = programmes.some((p) => p.jour === maintenant.getDay() && p.heureDebut <= heure && heure < p.heureFin);
+  const repondeurEnCours = absence || programmeActif;
 
   // ⚠️ L'ABSENCE PASSE OUTRE L'INTERRUPTEUR. Poser une absence EST une demande
   // explicite, et plus récente que l'état de l'interrupteur : refuser de la
   // servir parce qu'une case est décochée quelque part ferait sonner quelqu'un
   // qui vient de dire qu'il ne répondrait pas.
-  if (!absence && compte.repondeurActif !== 1) return null;
+  if (!repondeurEnCours && compte.repondeurActif !== 1) return null;
 
   const ligne = await prisma.repondeurAccueil.findFirst({
     where: { userId, actif: 1 },
@@ -64,7 +69,7 @@ export async function accueilPourAppelant(prisma, userId) {
   if (!ligne) return null;
 
   return {
-    absence,
+    absence: repondeurEnCours,
     media: { ...ligne.media, url: `/api/media/${ligne.media.id}` },
   };
 }

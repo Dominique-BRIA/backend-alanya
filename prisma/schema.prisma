@@ -117,6 +117,7 @@ model User {
   /// contexte. La garantie n'est pas perdue pour autant : elle est descendue
   /// dans l'index, donc toujours pas a la charge du code.
   repondeurAccueils RepondeurAccueil[]
+  repondeurProgrammes RepondeurProgramme[]
 
   readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
   lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
@@ -655,6 +656,20 @@ model Contact {
 /// 🔴 PLUSIEURS PAR COMPTE, UN SEUL ACTIF. Le besoin est d'en garder quelques-uns
 /// et d'en choisir un selon le contexte — congés, bureau, week-end — plutôt que
 /// de réenregistrer à chaque fois celui qu'on avait déjà.
+model RepondeurProgramme {
+  id Int @id @default(autoincrement())
+  userId String @db.Uuid @map("user_id")
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  jour Int @db.SmallInt
+  heureDebut String @db.VarChar(5)
+  heureFin String @db.VarChar(5)
+  actif Int @default(1) @db.SmallInt
+  creeLe DateTime @default(now()) @db.Timestamptz @map("created_at")
+  expireLe DateTime @db.Timestamptz @map("expires_at")
+  @@index([userId,actif,expireLe])
+  @@map("repondeur_programme")
+}
+
 model RepondeurAccueil {
   id       String @id @default(uuid()) @db.Uuid
   userId   String @map("alanyaID") @db.Uuid

@@ -1,0 +1,3 @@
+import {NextRequest} from"next/server";import{prisma}from"@/lib/prisma";import{withAuth}from"@/lib/auth-context";import{ok,fail}from"@/lib/http";
+export const PATCH=withAuth(async(r,u,c)=>{const id=Number((await c.params).id),b=await r.json();const p=await prisma.repondeurProgramme.updateMany({where:{id,userId:u},data:{actif:b.actif===false?0:1}});if(!p.count)return fail("Programme introuvable",404,"NOT_FOUND");return ok({updated:true})});
+export const DELETE=withAuth(async(_r,u,c)=>{const id=Number((await c.params).id);const p=await prisma.repondeurProgramme.deleteMany({where:{id,userId:u}});if(!p.count)return fail("Programme introuvable",404,"NOT_FOUND");return ok({deleted:true})});

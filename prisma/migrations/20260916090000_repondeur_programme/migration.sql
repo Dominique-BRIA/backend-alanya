@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS "repondeur_programme" ("id" SERIAL PRIMARY KEY,"user_id" UUID NOT NULL,"jour" SMALLINT NOT NULL,"heureDebut" VARCHAR(5) NOT NULL,"heureFin" VARCHAR(5) NOT NULL,"actif" SMALLINT NOT NULL DEFAULT 1,"created_at" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,"expires_at" TIMESTAMPTZ NOT NULL);
+CREATE INDEX IF NOT EXISTS "repondeur_programme_user_id_actif_expireLe_idx" ON "repondeur_programme"("user_id","actif","expires_at");
+ALTER TABLE "repondeur_programme" ADD CONSTRAINT "repondeur_programme_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("alanyaID") ON DELETE CASCADE;
