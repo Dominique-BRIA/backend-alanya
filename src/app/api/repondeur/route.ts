@@ -96,6 +96,28 @@ function avecMediaPublic<T extends { media: { id: string } }>(accueil: T): T {
 const FENETRE_APPEL_MS = 10 * 60 * 1000;
 
 /**
+ * Ce compte a-t-il un accueil à faire entendre ?
+ *
+ * 🔴 ALLUMER UN RÉPONDEUR MUET EST LE PIÈGE QUI SE LIT COMME UNE PANNE. Depuis
+ * que le répondeur COUPE LA SONNERIE, `accueilPourAppelant` ne rend quelque
+ * chose que s'il a un accueil actif à servir : sans lui, il rend `null`, le
+ * téléphone sonne comme avant, et l'utilisateur qui vient de cocher la case
+ * conclut que la fonction ne marche pas. Elle marche — elle n'a simplement rien
+ * à dire.
+ *
+ * On refuse donc l'allumage plutôt que de le servir à moitié. Le repli côté
+ * appel reste le bon (mieux vaut sonner que servir un silence) ; c'est ICI
+ * qu'il faut empêcher d'y tomber.
+ */
+async function aUnAccueil(userId: string) {
+  const accueil = await prisma.repondeurAccueil.findFirst({
+    where: { userId, actif: 1 },
+    select: { id: true },
+  });
+  return accueil !== null;
+}
+
+/**
  * Un appel récent me donne-t-il le droit d'entendre l'accueil de sa cible ?
  *
  * ⚠️ QUATRE CONDITIONS, ET AUCUNE N'EST DÉCORATIVE : l'appel existe et je l'ai
@@ -218,6 +240,15 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     if (minutes < 0 || minutes > ABSENCE_MAX_MINUTES) {
       return fail(`« absenceMinutes » doit aller de 0 à ${ABSENCE_MAX_MINUTES}`, 400, "BAD_BODY");
     }
+    // ⚠️ SEULEMENT QUAND ON EN POSE UNE : lever une absence (`0`) doit rester
+    // possible même sans accueil, sans quoi un compte resterait coincé.
+    if (minutes > 0 && !(await aUnAccueil(userId))) {
+      return fail(
+        "Enregistrez d'abord un message d'accueil : sans lui, les appels sonneraient comme d'habitude.",
+        400,
+        "NO_GREETING",
+      );
+    }
     await prisma.user.update({
       where: { id: userId },
       data: {
@@ -237,6 +268,15 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   if ("actif" in recu && !("mediaId" in recu)) {
     if (typeof recu.actif !== "boolean") {
       return fail("« actif » doit être un booléen", 400, "BAD_BODY");
+    }
+    // ⚠️ SEULEMENT À L'ALLUMAGE. Éteindre doit toujours passer : refuser
+    // d'éteindre un répondeur sans accueil enfermerait le compte.
+    if (recu.actif && !(await aUnAccueil(userId))) {
+      return fail(
+        "Enregistrez d'abord un message d'accueil : sans lui, les appels sonneraient comme d'habitude.",
+        400,
+        "NO_GREETING",
+      );
     }
     await prisma.user.update({
       where: { id: userId },
