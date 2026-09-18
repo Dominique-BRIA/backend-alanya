@@ -117,6 +117,7 @@ model User {
   /// contexte. La garantie n'est pas perdue pour autant : elle est descendue
   /// dans l'index, donc toujours pas a la charge du code.
   repondeurAccueils RepondeurAccueil[]
+  repondeurPlages   RepondeurPlage[]
 
   readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
   lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
@@ -680,6 +681,8 @@ model RepondeurAccueil {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([userId])
+  plages   RepondeurPlage[]
+
   @@map("repondeur_accueil")
 }
 
@@ -2851,4 +2854,47 @@ model QueueFileHistorique {
   @@index([idAgent, joinedAt(sort: Desc)], map: "queue_hist_agent_joined_idx")
   @@index([statut], map: "queue_hist_statut_idx")
   @@map("file_historique")
+}
+
+/// UNE PLAGE PROGRAMMÉE — « tous les lundis de 10 h à 12 h ».
+///
+/// ⚠️ UNE LIGNE PAR JOUR. « Du lundi au vendredi » s'écrit en cinq lignes :
+/// les plages diffèrent d'un jour à l'autre, et un masque de jours obligerait à
+/// créer plusieurs entrées de toute façon, avec deux façons d'exprimer la même
+/// chose. Supprimer le mardi ne touche pas au lundi.
+model RepondeurPlage {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 0 = dimanche … 6 = samedi — la convention de `Date.getDay()`, des deux côtés.
+  jour     Int @db.SmallInt
+  /// Minutes depuis minuit DANS `fuseau`. 600 = 10 h 00.
+  debutMin Int @map("debut_min") @db.SmallInt
+  finMin   Int @map("fin_min") @db.SmallInt
+
+  /// Nom IANA de la zone (« Africa/Douala »), et non un décalage : un décalage
+  /// fige l'heure d'été du jour où la plage a été créée.
+  fuseau String @default("UTC") @db.VarChar(64)
+
+  /// L'accueil de cette plage. `null` = celui qui est actif au moment de l'appel.
+  ///
+  /// ⚠️ `SetNull` : supprimer un accueil ne doit pas faire disparaître la
+  /// programmation qui s'y référait — on se retrouverait joignable un lundi
+  /// matin sans l'avoir demandé.
+  accueilId String?           @map("accueilID") @db.Uuid
+  accueil   RepondeurAccueil? @relation(fields: [accueilId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// Fin de validité — deux semaines après la création.
+  ///
+  /// 🔴 UNE DATE, PAS UNE TÂCHE PLANIFIÉE. Une programmation oubliée bloquerait
+  /// les appels indéfiniment, et sans que personne ne s'en aperçoive puisque le
+  /// téléphone ne sonne plus. Une date dépassée répond « non » sans qu'aucun
+  /// code ne tourne, et la ligne reste visible donc relançable d'un clic.
+  expireLe DateTime @map("expire_le") @db.Timestamptz(6)
+
+  @@index([userId, expireLe], map: "repondeur_plage_compte_idx")
+  @@map("repondeur_plage")
 }

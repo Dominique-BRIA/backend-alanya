@@ -10,6 +10,68 @@
  */
 
 /**
+ * OÙ EN EST-ON, DANS LE FUSEAU DE QUELQU'UN D'AUTRE ?
+ *
+ * Rend le jour de la semaine (0 = dimanche) et les minutes depuis minuit, tels
+ * que les vit la personne appelée — pas tels que les vit le serveur.
+ *
+ * ⚠️ `Intl` FAIT LE TRAVAIL, ET LUI SEUL. Calculer un décalage à la main revient
+ * à réimplémenter les fuseaux et les heures d'été, c'est-à-dire à se tromper
+ * deux fois par an dans un sens qui ne se remarque pas tout de suite.
+ *
+ * ⚠️ UN FUSEAU INCONNU NE FAIT PAS TOUT TOMBER. `Intl` lève sur un nom invalide
+ * — une ligne écrite par un client bavard, une zone retirée de la base tzdata —
+ * et cette fonction est appelée AVANT DE FAIRE SONNER : une exception ici ferait
+ * disparaître l'appel. On retombe donc sur UTC, ce qui peut décaler une plage,
+ * là où lever ferait perdre l'appel entier.
+ */
+function maintenantDans(fuseau) {
+  let parties;
+  try {
+    parties = new Intl.DateTimeFormat("en-US", {
+      timeZone: fuseau || "UTC",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+  } catch {
+    parties = new Intl.DateTimeFormat("en-US", {
+      timeZone: "UTC",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+  }
+  const lire = (type) => parties.find((p) => p.type === type)?.value ?? "";
+  const JOURS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  // « 24 » à minuit chez certains moteurs : ramené à 0, sinon une plage qui
+  // commence à 0 h ne s'ouvrirait jamais.
+  const heures = Number(lire("hour")) % 24;
+  return {
+    jour: JOURS[lire("weekday")] ?? 0,
+    minutes: heures * 60 + Number(lire("minute")),
+  };
+}
+
+/**
+ * Une plage programmée couvre-t-elle cet instant ?
+ *
+ * ⚠️ LA PÉREMPTION SE VÉRIFIE ICI, ET NON PAR UN BALAYAGE. Deux semaines après
+ * sa création, la ligne cesse simplement de répondre « oui » — sans qu'aucune
+ * tâche n'ait eu à tourner le bon jour.
+ */
+export function plageCouvreMaintenant(plage) {
+  if (new Date(plage.expireLe).getTime() <= Date.now()) return false;
+  const ici = maintenantDans(plage.fuseau);
+  if (ici.jour !== plage.jour) return false;
+  // Début inclus, fin EXCLUE : sans cela, une plage 10 h-12 h et une autre
+  // 12 h-14 h se disputeraient la minute de midi.
+  return ici.minutes >= plage.debutMin && ici.minutes < plage.finMin;
+}
+
+/**
  * Le compte est-il en mode absence à cet instant ?
  *
  * ⚠️ LA COMPARAISON EST FAITE ICI, PAS EN BASE, et c'est ce qui rend le retour
@@ -43,13 +105,42 @@ const MEDIA = {
  * on l'entend, pas LEQUEL. Changer de message, c'est changer l'accueil actif.
  */
 export async function accueilPourAppelant(prisma, userId) {
-  const compte = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { repondeurActif: true, repondeurJusquA: true },
-  });
+  const [compte, plages] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { repondeurActif: true, repondeurJusquA: true },
+    }),
+    // Seules les lignes encore valables : une programmation périmée n'a pas à
+    // être chargée pour être écartée ensuite.
+    prisma.repondeurPlage.findMany({
+      where: { userId, expireLe: { gt: new Date() } },
+      select: {
+        id: true,
+        jour: true,
+        debutMin: true,
+        finMin: true,
+        fuseau: true,
+        expireLe: true,
+        accueilId: true,
+      },
+    }),
+  ]);
   if (!compte) return null;
 
-  const absence = enAbsence(compte.repondeurJusquA);
+  /*
+   * PRIORITÉ ENTRE LES DEUX RÉGLAGES HORAIRES, ET ELLE EST EXPLICITE.
+   *
+   * 🔴 LA DURÉE FIXE L'EMPORTE SUR LA PROGRAMMATION. Les deux peuvent se
+   * chevaucher — on a programmé « tous les lundis 10 h-12 h », et ce lundi-là on
+   * pose en plus « absent trois heures ». La durée fixe est le geste le plus
+   * RÉCENT et le plus DÉLIBÉRÉ : on vient de la poser, pour maintenant. La
+   * programmation, elle, a été décidée il y a des jours.
+   *
+   * Dans les deux cas l'appel ne sonne pas — le résultat est le même — mais
+   * l'accueil joué peut différer, et c'est là que la priorité compte.
+   */
+  const plageActive = plages.find((p) => plageCouvreMaintenant(p)) ?? null;
+  const absence = enAbsence(compte.repondeurJusquA) || plageActive !== null;
 
   // ⚠️ L'ABSENCE PASSE OUTRE L'INTERRUPTEUR. Poser une absence EST une demande
   // explicite, et plus récente que l'état de l'interrupteur : refuser de la
@@ -57,15 +148,36 @@ export async function accueilPourAppelant(prisma, userId) {
   // qui vient de dire qu'il ne répondrait pas.
   if (!absence && compte.repondeurActif !== 1) return null;
 
-  const ligne = await prisma.repondeurAccueil.findFirst({
-    where: { userId, actif: 1 },
-    select: { media: MEDIA },
-  });
-  if (!ligne) return null;
+  /*
+   * L'ACCUEIL DE LA PLAGE, QUAND ELLE EN DÉSIGNE UN.
+   *
+   * ⚠️ ET SEULEMENT SI LA DURÉE FIXE NE COURT PAS : elle est prioritaire, et
+   * elle joue l'accueil actif. Sans cette condition, une programmation
+   * chevauchant une absence lui volerait sa voix.
+   */
+  const accueilDeLaPlage =
+    plageActive && !enAbsence(compte.repondeurJusquA) ? plageActive.accueilId : null;
+
+  const ligne = accueilDeLaPlage
+    ? await prisma.repondeurAccueil.findFirst({
+        // Le propriétaire est revérifié : l'identifiant vient d'une ligne du
+        // compte, mais rien ne coûte moins qu'une condition de plus ici.
+        where: { id: accueilDeLaPlage, userId },
+        select: { media: MEDIA },
+      })
+    : null;
+
+  const retenu =
+    ligne ??
+    (await prisma.repondeurAccueil.findFirst({
+      where: { userId, actif: 1 },
+      select: { media: MEDIA },
+    }));
+  if (!retenu) return null;
 
   return {
     absence,
-    media: { ...ligne.media, url: `/api/media/${ligne.media.id}` },
+    media: { ...retenu.media, url: `/api/media/${retenu.media.id}` },
   };
 }
 
@@ -95,8 +207,18 @@ export const FENETRE_APPEL_MS = 10 * 60 * 1000;
 export async function peutEntendreAccueil(prisma, userId, mediaId) {
   // De qui est-ce l'accueil ACTIF ? Un accueil qui n'est plus actif ne se joue
   // à personne, et n'a donc aucune raison de s'ouvrir.
+  /*
+   * ⚠️ « ACTIF » NE SUFFIT PLUS : une plage programmée peut désigner un AUTRE
+   * accueil que celui de tous les jours. Il se joue alors à l'appelant, et
+   * devait donc s'ouvrir pour lui — sans cette seconde condition, un lundi
+   * matin, l'accueil programmé répondait 403 pendant que celui de tous les
+   * jours, lui, passait. Un silence un jour sur sept.
+   */
   const accueil = await prisma.repondeurAccueil.findFirst({
-    where: { mediaId, actif: 1 },
+    where: {
+      mediaId,
+      OR: [{ actif: 1 }, { plages: { some: { expireLe: { gt: new Date() } } } }],
+    },
     select: { userId: true },
   });
   if (!accueil) return false;
