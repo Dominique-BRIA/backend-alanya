@@ -2950,6 +2950,17 @@ async function handleCallRing(ws, msg) {
           select: { nom: true, pseudo: true, publicNumber: true },
         }) ?? {}),
         accueil: accueil.media,
+        /*
+         * ⚠️ LE MODE VOYAGE AVEC L'ACCUEIL, il ne se devine pas à l'arrivée.
+         *
+         * Cette trame ne le portait pas, et les clients posaient `absence:
+         * true` en dur — ce qui était juste tant qu'elle ne partait QUE pour
+         * une absence. Maintenant qu'un simple interrupteur la déclenche aussi,
+         * la deviner annoncerait « absent jusqu'à 15 h » pour quelqu'un qui
+         * n'est pas absent du tout. Seul le serveur sait lequel des trois
+         * chemins a décidé, il le dit donc.
+         */
+        absence: accueil.absence,
       });
 
       // Une notification, jamais une sonnerie : être injoignable n'est pas la
