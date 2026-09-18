@@ -123,7 +123,21 @@ if grep -qE '^\s*REDIS_URL\s*=\s*\S' .env; then
   # Deux mensonges dans le même bloc : un service déclaré joignable sans l'être,
   # et une alerte sur un plafond peut-être déjà posé. `-u` porte le mot de passe
   # de l'URL, comme l'application elle-même.
-  URL_REDIS="$(grep -E '^\s*REDIS_URL\s*=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')"
+  #
+  # 🐛 ET L'EXTRACTION ELLE-MEME ETAIT FAUSSE (18/09/2026). La premiere version
+  # faisait `tr -d` sur les guillemets et les espaces : cela les supprime PARTOUT
+  # DANS LA VALEUR, pas seulement autour. Un mot de passe contenant l'un de ces
+  # caracteres partait ampute, et Redis repondait « WRONGPASS » — a juste titre.
+  # Elle ne retirait pas non plus le retour chariot d'un `.env` en fins de ligne
+  # Windows, qui se serait colle a la fin du mot de passe.
+  #
+  # On ne retire donc QUE le `\r` de fin, et QU'UNE paire de guillemets
+  # englobants — jamais rien a l'interieur.
+  URL_REDIS="$(sed -n 's/^[[:space:]]*REDIS_URL[[:space:]]*=[[:space:]]*//p' .env | tail -1 | tr -d '\r')"
+  case "$URL_REDIS" in
+    \"*\") URL_REDIS="${URL_REDIS#\"}"; URL_REDIS="${URL_REDIS%\"}" ;;
+    \'*\') URL_REDIS="${URL_REDIS#\'}"; URL_REDIS="${URL_REDIS%\'}" ;;
+  esac
   if command -v redis-cli >/dev/null 2>&1; then
     # `grep -q PONG` et non le code de sortie : c'est la RÉPONSE qui dit la
     # vérité, le code de sortie vaut 0 même quand Redis refuse l'accès.
@@ -153,11 +167,22 @@ if grep -qE '^\s*REDIS_URL\s*=\s*\S' .env; then
         fi
       fi
     else
+      # ⚠️ AVANT D'ALERTER, ON DEMANDE A L'APPLICATION. C'est elle qui compte :
+      # un `redis-cli` qui echoue alors que `/api/health` annonce un cache actif
+      # designe un probleme de CETTE commande, pas du service. L'inverse serait
+      # une fausse alerte a chaque deploiement — et une vraie panne noyee dedans.
+      SANTE="$(curl -s --max-time 3 "http://127.0.0.1:${PORT_API}/api/health" 2>/dev/null || true)"
+      if printf '%s' "$SANTE" | grep -q '"actif":true'; then
+        vert "  Redis répond (l'application déclare son cache actif)."
+        jaune "  ⚠ redis-cli n'a pas pu s'authentifier — mot de passe à caractères"
+        jaune "    spéciaux, ou ACL. Le plafond mémoire n'a donc pas pu être vérifié."
+      else
       rouge "  ⚠ REDIS_URL est posée mais Redis NE RÉPOND PAS."
       jaune "    Le déploiement peut continuer — tout retombera sur PostgreSQL —"
       jaune "    mais les quatre mécanismes ci-dessus seront inertes."
       read -r -p "  Continuer quand même ? [o/N] " REPONSE
       [ "${REPONSE:-n}" = "o" ] || echec "Déploiement interrompu."
+      fi
     fi
   else
     jaune "  redis-cli absent : impossible de vérifier que le service répond."
