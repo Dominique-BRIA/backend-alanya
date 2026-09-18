@@ -4339,6 +4339,89 @@ const RAPPEL_REUNION_AVANT_MS = 5 * 60 * 1000;
  * a accepté : quelqu'un qui n'a pas encore répondu à l'invitation est
  * précisément celui à qui le rappel sert le plus.
  */
+/** Vingt-quatre heures. Au-delà, une réunion que personne n'a fermée est morte. */
+const REUNION_PERIMEE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * FERME LES RÉUNIONS QUE PERSONNE N'A TERMINÉES.
+ *
+ * 🔴 UNE RÉUNION NE SE FERMAIT QUE SI SON ORGANISATEUR CLIQUAIT « TERMINER ».
+ * Il oublie, ou il ne revient jamais : la réunion reste ouverte pour toujours.
+ * Elle continue de figurer parmi les réunions en cours, d'accepter des entrées,
+ * et d'encombrer la liste de tout le monde — des mois après avoir eu lieu.
+ *
+ * ⚠️ DEUX CONDITIONS, ET LA SECONDE COMPTE AUTANT QUE LA PREMIÈRE :
+ *
+ *   • vingt-quatre heures depuis le début ;
+ *   • PERSONNE DEDANS en ce moment. Une réunion longue existe — une formation,
+ *     une garde, une salle laissée ouverte à dessein — et la fermer sous les
+ *     pieds de ceux qui parlent serait bien pire que de la laisser traîner.
+ *     Elle se fermera d'elle-même au balayage suivant, quand la salle sera vide.
+ *
+ * ⚠️ CE BALAYAGE VIT CÔTÉ SERVEUR, et il le fallait : l'application n'est pas
+ * toujours ouverte, et c'est justement quand personne ne revient que le
+ * nettoyage doit se faire.
+ */
+async function fermeReunionsPerimees() {
+  try {
+    const limite = new Date(Date.now() - REUNION_PERIMEE_MS);
+    const perimees = await prisma.meeting.findMany({
+      where: {
+        isEnd: 0,
+        start_time: { lt: limite },
+        // `none` : aucun participant connecté. Postgres le traduit en NOT EXISTS,
+        // donc sans charger les participants pour les compter en mémoire.
+        participants: { none: { connecte: 1 } },
+      },
+      select: { idMeeting: true, room: true },
+    });
+    if (perimees.length === 0) return;
+
+    const ids = perimees.map((m) => m.idMeeting);
+    await prisma.meeting.updateMany({
+      where: { idMeeting: { in: ids } },
+      data: { isEnd: 1 },
+    });
+
+    /*
+     * ⚠️ LES PARTICIPANTS SONT RACCROCHÉS AUSSI. Une ligne restée `connecte = 1`
+     * — un onglet fermé net, une application tuée — ferait croire pour toujours
+     * que quelqu'un est dans une salle vide, et le `none` ci-dessus écarterait
+     * alors la réunion à chaque passage : elle ne se fermerait JAMAIS.
+     */
+    await prisma.meetingParticipant.updateMany({
+      where: { idMeeting: { in: ids }, connecte: 1 },
+      data: { connecte: 0 },
+    });
+
+    for (const reunion of perimees) {
+      /*
+       * Ceux qui auraient encore la salle à l'écran la voient se fermer, au lieu
+       * de rester devant une réunion qui n'existe plus.
+       *
+       * ⚠️ ET L'ENTRÉE DE LA SALLE EST LIBÉRÉE. Sans cela la carte
+       * `meetingRooms` garderait une salle close, et quelqu'un qui reviendrait
+       * sur son adresse y entrerait dans une réunion terminée.
+       */
+      sendToMeeting(reunion.room, {
+        type: "meeting_ended",
+        meetingId: reunion.room,
+        idMeeting: reunion.idMeeting,
+      });
+      const salle = meetingRooms.get(reunion.room);
+      if (salle) {
+        salle.clear();
+        meetingRooms.delete(reunion.room);
+      }
+      partagesEcran.delete(reunion.room);
+    }
+    console.log(`[reunions] ${ids.length} reunion(s) fermee(s) apres 24 h sans personne`);
+  } catch (err) {
+    // Un balayage qui echoue ne doit pas emporter le serveur : il repassera.
+    console.warn("[reunions] balayage des reunions perimees :", err?.message ?? err);
+  }
+}
+
 async function envoieRappelsReunion() {
   try {
     const maintenant = Date.now();
@@ -4833,6 +4916,16 @@ wss.on("listening", () => {
   // latence suffisent, là où quinze minutes ne suffisaient pas.
   ejecteLesAppareilsFermes();
   setInterval(ejecteLesAppareilsFermes, 30 * 1000);
+  /*
+   * Fermeture des réunions périmées : toutes les dix minutes.
+   *
+   * ⚠️ LA CADENCE EST LENTE À DESSEIN. Le seuil est de vingt-quatre heures :
+   * dix minutes de retard n'y changent rien, et cette requête balaie toutes les
+   * réunions ouvertes du service. La passer toutes les trente secondes
+   * coûterait cent-quarante fois plus pour arriver au même résultat.
+   */
+  fermeReunionsPerimees();
+  setInterval(fermeReunionsPerimees, 10 * 60 * 1000);
 });
 
 wss.on("connection", (ws, req) => {
