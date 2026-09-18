@@ -112,22 +112,45 @@ etape "3/10  Redis"
 if grep -qE '^\s*REDIS_URL\s*=\s*\S' .env; then
   vert "  REDIS_URL posée."
 
-  # Répond-il vraiment ? Une URL juste vers un service arrêté a le même effet
-  # qu'une URL absente, mais sans l'avertissement.
+  # ⚠️ ON INTERROGE REDIS AVEC L'URL DU `.env`, PAS AVEC UN `redis-cli` NU.
+  #
+  # 🐛 LE CONTRÔLE MENTAIT (18/09/2026). Redis demande un mot de passe ; un
+  # `redis-cli ping` sans identifiants reçoit « NOAUTH » — une RÉPONSE d'erreur,
+  # pas un échec de connexion — et redis-cli sort avec le code 0. Le script
+  # annonçait donc « Redis répond (PING) », puis lisait une configuration vide et
+  # concluait « maxmemory n'est pas borné » alors qu'il n'en savait rien.
+  #
+  # Deux mensonges dans le même bloc : un service déclaré joignable sans l'être,
+  # et une alerte sur un plafond peut-être déjà posé. `-u` porte le mot de passe
+  # de l'URL, comme l'application elle-même.
+  URL_REDIS="$(grep -E '^\s*REDIS_URL\s*=' .env | tail -1 | cut -d= -f2- | tr -d '"'"'"' ')"
   if command -v redis-cli >/dev/null 2>&1; then
-    if redis-cli ping >/dev/null 2>&1; then
+    # `grep -q PONG` et non le code de sortie : c'est la RÉPONSE qui dit la
+    # vérité, le code de sortie vaut 0 même quand Redis refuse l'accès.
+    if redis-cli -u "$URL_REDIS" ping 2>/dev/null | grep -q PONG; then
       vert "  Redis répond (PING)."
 
       # ⚠️ SANS `maxmemory`, Redis prendra tout ce que la machine lui laisse, et
       # personne ne s'en apercevra avant que le noyau ne tue un processus.
-      MAXMEM="$(redis-cli config get maxmemory 2>/dev/null | tail -1 || echo 0)"
+      MAXMEM="$(redis-cli -u "$URL_REDIS" config get maxmemory 2>/dev/null | tail -1 || echo 0)"
       if [ "${MAXMEM:-0}" = "0" ]; then
         jaune "  ⚠ maxmemory n'est pas borné : Redis peut consommer toute la RAM."
-        jaune "    Recommandé :  redis-cli config set maxmemory 512mb"
-        jaune "                  redis-cli config set maxmemory-policy allkeys-lru"
+        # ⚠️ `noeviction` ET NON `allkeys-lru`, et ce n'est pas un détail.
+        # Redis ne porte pas que le cache de lecture : il porte aussi la
+        # DÉDUPLICATION DES ENVOIS. Une clé de déduplication évincée, et un
+        # message rejoué après coupure repart EN DOUBLE. Avec `noeviction`, le
+        # cache plein fait simplement échouer l'écriture, et `cache-redis.mjs`
+        # retombe sur PostgreSQL — ce cas-là est traité.
+        jaune "    Recommandé :  redis-cli -u \"\$REDIS_URL\" config set maxmemory 2gb"
+        jaune "                  redis-cli -u \"\$REDIS_URL\" config set maxmemory-policy noeviction"
         jaune "    Puis rendre-le durable dans /etc/redis/redis.conf."
       else
         vert "  maxmemory : $MAXMEM octets."
+        POLITIQUE="$(redis-cli -u "$URL_REDIS" config get maxmemory-policy 2>/dev/null | tail -1)"
+        if [ -n "$POLITIQUE" ] && [ "$POLITIQUE" != "noeviction" ]; then
+          jaune "  ⚠ maxmemory-policy = $POLITIQUE (attendu : noeviction)."
+          jaune "    Une clé de déduplication évincée fait repartir un message EN DOUBLE."
+        fi
       fi
     else
       rouge "  ⚠ REDIS_URL est posée mais Redis NE RÉPOND PAS."
