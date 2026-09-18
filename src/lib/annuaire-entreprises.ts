@@ -63,11 +63,27 @@ async function typesDepuisLaBase(idPaysUtilisateur: number | null): Promise<Type
   });
   const parType = new Map(comptes.map((c) => [c.idTypeCompany, c._count._all]));
 
-  return types.map((t) => ({
-    idTypeCompany: t.idTypeCompany,
-    libelle: t.libelle,
-    nbEntreprises: parType.get(t.idTypeCompany) ?? 0,
-  }));
+  /*
+   * 🐛 LE FILTRE PAR PAYS NE CHANGEAIT RIEN À L'ÉCRAN.
+   *
+   * Tous les types étaient rendus, y compris ceux qui n'ont AUCUNE entreprise
+   * dans le pays retenu — avec un compteur à zéro. D'un pays à l'autre, la
+   * liste affichait donc exactement les mêmes lignes, dans le même ordre : on
+   * changeait de filtre et il ne se passait visiblement rien. Et chaque ligne
+   * vide était une impasse — on cliquait pour tomber sur une liste vide.
+   *
+   * ⚠️ ON NE REND PLUS LES TYPES VIDES. Un type sans entreprise ici n'est pas
+   * une information, c'est une porte fermée. Quand il n'en reste aucun, l'écran
+   * dit « rien dans ce pays », ce qui est la vérité — et c'est bien plus utile
+   * qu'une liste de portes fermées.
+   */
+  return types
+    .map((t) => ({
+      idTypeCompany: t.idTypeCompany,
+      libelle: t.libelle,
+      nbEntreprises: parType.get(t.idTypeCompany) ?? 0,
+    }))
+    .filter((t) => t.nbEntreprises > 0);
 }
 
 /**
