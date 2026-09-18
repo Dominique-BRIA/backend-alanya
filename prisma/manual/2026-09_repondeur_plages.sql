@@ -74,12 +74,19 @@ CREATE TABLE IF NOT EXISTS "repondeur_plage" (
     )
 );
 
+-- ⚠️ LA CLE PRIMAIRE DE `users` S'APPELLE `alanyaID`, PAS `id`.
+--
+-- Le champ Prisma se nomme `id` — `@map("alanyaID")` — et c'est ce nom-la qu'on
+-- lit partout dans le code. La COLONNE, elle, porte le nom du referentiel de
+-- l'equipe. Un `REFERENCES "users"("id")` ecrit de memoire echoue donc a
+-- l'application, et seulement a ce moment-la : rien dans le code TypeScript ne
+-- l'aurait signale. C'est arrive le 18/09/2026.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'repondeur_plage_alanyaID_fkey') THEN
         ALTER TABLE "repondeur_plage"
             ADD CONSTRAINT "repondeur_plage_alanyaID_fkey"
-            FOREIGN KEY ("alanyaID") REFERENCES "users"("id") ON DELETE CASCADE;
+            FOREIGN KEY ("alanyaID") REFERENCES "users"("alanyaID") ON DELETE CASCADE;
     END IF;
     -- ⚠️ `SET NULL` ET NON `CASCADE` : supprimer un message d'accueil ne doit
     -- pas faire disparaître la programmation qui s'y référait. La plage reste,
