@@ -1,6 +1,8 @@
 // Envoi de notifications push FCM (partagé par ws-server.mjs).
 // v1 : désactivé par défaut — aucun import firebase-admin tant que PUSH_ENABLED≠true.
 
+import { canalPourExpediteur } from "./src/lib/canal-message.mjs";
+
 let firebase = null;
 
 function pushExplicitlyDisabled() {
@@ -76,7 +78,7 @@ async function tokensForUser(prisma, userId) {
 export const TTL_APPEL_MS = 90 * 1000;
 export const TTL_ANNULATION_MS = 120 * 1000;
 
-export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false, ttlMs = null }) {
+export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false, ttlMs = null, canal = null }) {
   const fb = await loadFirebase();
   if (!fb) return;
 
@@ -96,6 +98,20 @@ export async function sendPushToUser(prisma, userId, { title, body, data = {}, d
       android: {
         priority: "high",
         ...(ttlMs != null ? { ttl: ttlMs } : {}),
+        /*
+         * LE CANAL, ET C'EST LUI QUI DECIDE DU SON.
+         *
+         * 🔴 SANS CE CHAMP, LE REGLAGE DE SONNERIE D'UNE LISTE N'EXISTAIT PAS
+         * HORS DE L'APPLICATION. Telephone verrouille ou application tuee, c'est
+         * FCM qui affiche la notification sans passer par le client : celui-ci
+         * n'a aucun moyen de choisir le son. Et depuis Android 8, ce son est
+         * porte par le CANAL, qui ne peut plus en changer une fois cree — d'ou
+         * un canal par son, et son identifiant cite ici.
+         *
+         * ⚠️ N'EST POSE QUE SI `canal` EST FOURNI : les autres envois (appels,
+         * reunions) gardent exactement leur comportement.
+         */
+        ...(canal ? { notification: { channelId: canal } } : {}),
       },
       apns: {
         payload: { aps: { sound: "default" } },
@@ -142,6 +158,11 @@ export async function sendPushToUser(prisma, userId, { title, body, data = {}, d
 export async function pushNewMessage(prisma, {
   recipientId,
   senderName,
+  // ⚠️ SANS VALEUR PAR DEFAUT, et c'est volontaire : `senderId = null` fait
+  // inferer le type `null` a TypeScript pour tous les appelants `.ts`, qui ne
+  // peuvent alors plus passer la moindre chaine. `canalPourExpediteur` traite
+  // deja l'absence en rendant le canal par defaut.
+  senderId,
   convId,
   convTitle,
   preview,
@@ -172,6 +193,10 @@ export async function pushNewMessage(prisma, {
                 ? `${senderName} : ${preview || "📍 Position"}`
                 : preview || "Nouveau message";
 
+  // Le son de la liste a laquelle appartient l'expediteur, chez le
+  // DESTINATAIRE. Ne leve jamais : un echec rend le canal par defaut.
+  const canal = await canalPourExpediteur(prisma, recipientId, senderId);
+
   await sendPushToUser(prisma, recipientId, {
     title,
     body,
@@ -179,7 +204,14 @@ export async function pushNewMessage(prisma, {
       type: "message",
       convId: convId ?? "",
       title: convTitle || senderName || "",
+      // ⚠️ AUSSI DANS `data`, ET PAS SEULEMENT DANS `android.notification` :
+      // application AU PREMIER PLAN, FCM n'affiche rien et c'est le client qui
+      // construit la notification. Il lit le canal ici. Les deux chemins
+      // doivent citer le meme, sinon le son changerait selon que l'application
+      // est ouverte ou non.
+      canal,
     },
+    canal,
   });
 }
 

@@ -1288,6 +1288,9 @@ async function handleSend(ws, msg) {
       await pushNewMessage(prisma, {
         recipientId: uid,
         senderName,
+        // Sert au SON de la notification : c'est la liste du destinataire qui
+        // contient cet expediteur qui decide du canal Android.
+        senderId: ws.userId,
         convId,
         convTitle: convTitle ?? senderName,
         // « Vous a mentionne : … » — la notification dit POURQUOI elle mérite
@@ -2882,13 +2885,14 @@ async function handleCallRing(ws, msg) {
     memberCount = conv?.participants.length ?? 0;
   }
   /**
-   * MODE ABSENCE — on répond à la place de la sonnerie.
+   * LE RÉPONDEUR PREND L'APPEL — on répond à la place de la sonnerie.
    *
    * 🔴 C'EST ICI QUE LA DÉCISION SE PREND, et nulle part ailleurs. Le
-   * destinataire a posé une absence : son téléphone ne doit pas sonner, et
-   * aucun client ne peut le garantir à sa place — il suffirait qu'il ait fermé
-   * son onglet pour que plus personne ne refuse l'appel. Une date en base
-   * continue de répondre quand tous ses appareils sont éteints.
+   * destinataire a allumé son répondeur — interrupteur, absence ou plage
+   * programmée : son téléphone ne doit pas sonner, et aucun client ne peut le
+   * garantir à sa place — il suffirait qu'il ait fermé son onglet pour que plus
+   * personne ne refuse l'appel. L'état en base continue de répondre quand tous
+   * ses appareils sont éteints.
    *
    * Le chemin n'est pas neuf : c'est celui d'`ivr_menu`. Quand le numéro appelé
    * est un centre d'appels, le serveur répond déjà l'invite À L'APPELANT sans
@@ -2902,7 +2906,24 @@ async function handleCallRing(ws, msg) {
   if (autres.length === 1) {
     const cible = autres[0];
     const accueil = await accueilPourAppelant(prisma, cible).catch(() => null);
-    if (accueil?.absence && !(await areBlocked(ws.userId, cible))) {
+    /*
+     * 🔴 ON COUPE LA SONNERIE SUR `sansSonnerie`, ET SUR LUI SEUL.
+     *
+     * Une version précédente coupait dès qu'un accueil était rendu, quel que
+     * soit le chemin. Le MODE PAR DÉFAUT disparaissait alors : un répondeur
+     * simplement allumé faisait taire le téléphone, et l'on ne pouvait plus
+     * JAMAIS joindre quelqu'un qui en avait un. Or le défaut, c'est trente
+     * secondes de sonnerie AVANT que le répondeur ne prenne le relais — c'est la
+     * seule chance de décrocher, et elle doit rester.
+     *
+     * La sonnerie n'est donc sautée que si un RÉGLAGE HORAIRE est en cours :
+     * une absence posée, ou une plage programmée. Dans les deux cas la personne
+     * a dit explicitement qu'elle ne répondrait pas maintenant.
+     *
+     * ⚠️ `mode` NE SERT QU'AU LIBELLÉ de l'écran appelant, et voyage avec la
+     * trame plutôt que d'être deviné à l'arrivée.
+     */
+    if (accueil?.sansSonnerie && !(await areBlocked(ws.userId, cible))) {
       /*
        * ⚠️ L'APPEL EST CLOS TOUT DE SUITE, et non laissé à sonner dans le vide.
        * Il n'a jamais sonné : le laisser en RINGING le ferait balayer trente
@@ -2927,6 +2948,20 @@ async function handleCallRing(ws, msg) {
           select: { nom: true, pseudo: true, publicNumber: true },
         }) ?? {}),
         accueil: accueil.media,
+        /*
+         * ⚠️ LE MODE VOYAGE AVEC L'ACCUEIL, il ne se devine pas à l'arrivée.
+         *
+         * Cette trame ne le portait pas, et les clients posaient `absence:
+         * true` en dur — ce qui était juste tant qu'elle ne partait QUE pour
+         * une absence. Maintenant qu'un simple interrupteur la déclenche aussi,
+         * la deviner annoncerait « absent jusqu'à 15 h » pour quelqu'un qui
+         * n'est pas absent du tout. Seul le serveur sait lequel des trois
+         * chemins a décidé, il le dit donc.
+         */
+        absence: accueil.absence,
+        // Le mode voyage avec la trame : l'ecran appelant dit « absent jusqu'a
+        // 15 h » ou « programme », au lieu de le deviner a l'arrivee.
+        mode: accueil.mode,
       });
 
       // Une notification, jamais une sonnerie : être injoignable n'est pas la

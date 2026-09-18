@@ -197,6 +197,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     await pushNewMessage(prisma, {
       recipientId: destinataireId,
       senderName: (expediteur ? nomAffichage(expediteur) : null) ?? "Quelqu'un",
+      // Meme raison qu'au fil ordinaire : le son de la notification depend de
+      // la liste du destinataire ou figure celui qui laisse le message.
+      senderId: userId,
       convId,
       convTitle: (expediteur ? nomAffichage(expediteur) : null) ?? "Quelqu'un",
       preview: null,

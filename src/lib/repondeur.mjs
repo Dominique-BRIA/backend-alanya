@@ -92,8 +92,22 @@ const MEDIA = {
 /**
  * L'accueil à jouer à quelqu'un qui appelle `userId`, ou `null`.
  *
- * Rend aussi le mode, dont l'appelant a besoin : en absence, il n'attend pas
- * trente secondes, et son écran ne dit pas la même chose.
+ * 🔴 CE QUE RENDRE QUELQUE CHOSE VEUT DIRE : « le répondeur prend cet appel,
+ * et le téléphone de l'appelé NE SONNE PAS ». Les deux conditions sont réunies
+ * ici et nulle part ailleurs — le répondeur doit répondre (interrupteur allumé,
+ * absence posée, ou plage programmée en cours) ET un accueil actif existe pour
+ * le faire entendre. `ws-server.mjs` n'a donc rien à réinterpréter : il coupe
+ * la sonnerie dès que cette fonction rend un accueil.
+ *
+ * ⚠️ UN RÉPONDEUR ALLUMÉ SANS ACCUEIL REND `null`, ET DONC ÇA SONNE. C'est le
+ * repli voulu — faire taire un téléphone pour servir un silence serait pire
+ * qu'un appel manqué — mais c'est un piège pour qui a coché la case sans rien
+ * enregistrer. `POST /api/repondeur` refuse pour cette raison d'allumer un
+ * répondeur qui n'a rien à dire.
+ *
+ * Rend aussi le mode, dont l'appelant a besoin : il ne sert plus à décider s'il
+ * attend, mais à choisir ce que son écran affiche — « absent jusqu'à 15 h »
+ * plutôt que « n'a pas répondu ».
  *
  * 🔴 UN SEUL ACCUEIL, DANS LES DEUX MODES — et c'était une complication de trop.
  *
@@ -127,26 +141,36 @@ export async function accueilPourAppelant(prisma, userId) {
   ]);
   if (!compte) return null;
 
-  /*
-   * PRIORITÉ ENTRE LES DEUX RÉGLAGES HORAIRES, ET ELLE EST EXPLICITE.
+/*
+   * DEUX QUESTIONS DIFFÉRENTES, ET LES CONFONDRE CASSE LE MODE PAR DÉFAUT.
    *
-   * 🔴 LA DURÉE FIXE L'EMPORTE SUR LA PROGRAMMATION. Les deux peuvent se
-   * chevaucher — on a programmé « tous les lundis 10 h-12 h », et ce lundi-là on
-   * pose en plus « absent trois heures ». La durée fixe est le geste le plus
-   * RÉCENT et le plus DÉLIBÉRÉ : on vient de la poser, pour maintenant. La
-   * programmation, elle, a été décidée il y a des jours.
+   *   • « le répondeur répondra-t-il ? » — oui dès qu'il est allumé ;
+   *   • « faut-il sauter la sonnerie ? » — seulement si un RÉGLAGE HORAIRE est
+   *     en cours : une absence posée, ou une plage programmée.
    *
-   * Dans les deux cas l'appel ne sonne pas — le résultat est le même — mais
-   * l'accueil joué peut différer, et c'est là que la priorité compte.
+   * 🔴 UNE VERSION PRÉCÉDENTE LES AVAIT FUSIONNÉES : rendre un accueil voulait
+   * dire « ça ne sonne pas », quel que soit le chemin. Le mode par défaut
+   * disparaissait alors — un répondeur simplement allumé coupait la sonnerie, et
+   * l'on ne pouvait plus JAMAIS joindre quelqu'un qui en avait un. Or le défaut,
+   * c'est justement trente secondes de sonnerie AVANT que le répondeur ne
+   * prenne le relais : c'est la seule chance de décrocher.
+   *
+   * ⚠️ LA PRIORITÉ ENTRE LES DEUX RÉGLAGES HORAIRES EST EXPLICITE : la durée
+   * fixe l'emporte sur la programmation. Les deux peuvent se chevaucher — on a
+   * programmé « tous les lundis 10 h-12 h », et ce lundi-là on pose en plus
+   * « absent trois heures ». La durée fixe est le geste le plus RÉCENT et le
+   * plus DÉLIBÉRÉ. Dans les deux cas l'appel ne sonne pas ; c'est l'accueil joué
+   * qui diffère, et c'est là que la priorité compte.
    */
-  const plageActive = plages.find((p) => plageCouvreMaintenant(p)) ?? null;
-  const absence = enAbsence(compte.repondeurJusquA) || plageActive !== null;
+  const enDuree = enAbsence(compte.repondeurJusquA);
+  const plageActive = enDuree ? null : (plages.find((p) => plageCouvreMaintenant(p)) ?? null);
+  const sansSonnerie = enDuree || plageActive !== null;
 
   // ⚠️ L'ABSENCE PASSE OUTRE L'INTERRUPTEUR. Poser une absence EST une demande
   // explicite, et plus récente que l'état de l'interrupteur : refuser de la
   // servir parce qu'une case est décochée quelque part ferait sonner quelqu'un
   // qui vient de dire qu'il ne répondrait pas.
-  if (!absence && compte.repondeurActif !== 1) return null;
+  if (!sansSonnerie && compte.repondeurActif !== 1) return null;
 
   /*
    * L'ACCUEIL DE LA PLAGE, QUAND ELLE EN DÉSIGNE UN.
@@ -155,8 +179,7 @@ export async function accueilPourAppelant(prisma, userId) {
    * elle joue l'accueil actif. Sans cette condition, une programmation
    * chevauchant une absence lui volerait sa voix.
    */
-  const accueilDeLaPlage =
-    plageActive && !enAbsence(compte.repondeurJusquA) ? plageActive.accueilId : null;
+  const accueilDeLaPlage = plageActive ? plageActive.accueilId : null;
 
   const ligne = accueilDeLaPlage
     ? await prisma.repondeurAccueil.findFirst({
@@ -176,7 +199,20 @@ export async function accueilPourAppelant(prisma, userId) {
   if (!retenu) return null;
 
   return {
-    absence,
+/*
+     * ⚠️ `sansSonnerie` EST CE QUI COMPTE POUR `ws-server.mjs` : il coupe la
+     * sonnerie sur ce champ, et sur lui seul. Il n'a rien à réinterpréter.
+     *
+     * `mode` ne sert qu'au LIBELLÉ de l'écran appelant — « absent jusqu'à 15 h »
+     * plutôt que « n'a pas répondu ». Il voyage avec la trame au lieu d'être
+     * deviné à l'arrivée.
+     *
+     * `absence` reste rendu sous son ancien nom : des clients déjà déployés le
+     * lisent, et le retirer les rendrait muets sans rien améliorer.
+     */
+    sansSonnerie,
+    absence: sansSonnerie,
+    mode: enDuree ? "duree" : plageActive ? "plage" : "defaut",
     media: { ...retenu.media, url: `/api/media/${retenu.media.id}` },
   };
 }

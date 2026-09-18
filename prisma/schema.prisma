@@ -656,6 +656,7 @@ model Contact {
 /// 🔴 PLUSIEURS PAR COMPTE, UN SEUL ACTIF. Le besoin est d'en garder quelques-uns
 /// et d'en choisir un selon le contexte — congés, bureau, week-end — plutôt que
 /// de réenregistrer à chaque fois celui qu'on avait déjà.
+
 model RepondeurAccueil {
   id       String @id @default(uuid()) @db.Uuid
   userId   String @map("alanyaID") @db.Uuid
