@@ -2885,13 +2885,14 @@ async function handleCallRing(ws, msg) {
     memberCount = conv?.participants.length ?? 0;
   }
   /**
-   * MODE ABSENCE — on répond à la place de la sonnerie.
+   * LE RÉPONDEUR PREND L'APPEL — on répond à la place de la sonnerie.
    *
    * 🔴 C'EST ICI QUE LA DÉCISION SE PREND, et nulle part ailleurs. Le
-   * destinataire a posé une absence : son téléphone ne doit pas sonner, et
-   * aucun client ne peut le garantir à sa place — il suffirait qu'il ait fermé
-   * son onglet pour que plus personne ne refuse l'appel. Une date en base
-   * continue de répondre quand tous ses appareils sont éteints.
+   * destinataire a allumé son répondeur — interrupteur, absence ou plage
+   * programmée : son téléphone ne doit pas sonner, et aucun client ne peut le
+   * garantir à sa place — il suffirait qu'il ait fermé son onglet pour que plus
+   * personne ne refuse l'appel. L'état en base continue de répondre quand tous
+   * ses appareils sont éteints.
    *
    * Le chemin n'est pas neuf : c'est celui d'`ivr_menu`. Quand le numéro appelé
    * est un centre d'appels, le serveur répond déjà l'invite À L'APPELANT sans
@@ -2905,7 +2906,26 @@ async function handleCallRing(ws, msg) {
   if (autres.length === 1) {
     const cible = autres[0];
     const accueil = await accueilPourAppelant(prisma, cible).catch(() => null);
-    if (accueil?.absence && !(await areBlocked(ws.userId, cible))) {
+    /*
+     * 🔴 UN ACCUEIL RENDU SUFFIT — on ne teste PLUS `accueil.absence`.
+     *
+     * L'ancienne condition ne coupait la sonnerie qu'en mode absence ou pendant
+     * une plage programmée. Répondeur simplement allumé, le téléphone sonnait
+     * ses trente secondes et l'appelant n'obtenait l'accueil qu'après — si tant
+     * est qu'il attende. « Répondeur activé » ne voulait donc rien dire de
+     * visible, et c'est exactement ce qui se lisait comme une panne.
+     *
+     * `accueilPourAppelant` ne rend quelque chose QUE si le répondeur doit
+     * prendre l'appel — interrupteur allumé, absence posée ou plage active — ET
+     * qu'un accueil actif existe pour le faire entendre. La question est donc
+     * déjà tranchée quand on arrive ici : un accueil rendu VEUT DIRE « ça ne
+     * sonne pas ».
+     *
+     * ⚠️ `absence` SURVIT, mais pour le seul libellé : l'écran de l'appelant dit
+     * « absent jusqu'à 15 h » ou « n'a pas répondu ». Le mode change CE QUI EST
+     * ÉCRIT, plus ce qui se passe.
+     */
+    if (accueil && !(await areBlocked(ws.userId, cible))) {
       /*
        * ⚠️ L'APPEL EST CLOS TOUT DE SUITE, et non laissé à sonner dans le vide.
        * Il n'a jamais sonné : le laisser en RINGING le ferait balayer trente
@@ -2930,6 +2950,17 @@ async function handleCallRing(ws, msg) {
           select: { nom: true, pseudo: true, publicNumber: true },
         }) ?? {}),
         accueil: accueil.media,
+        /*
+         * ⚠️ LE MODE VOYAGE AVEC L'ACCUEIL, il ne se devine pas à l'arrivée.
+         *
+         * Cette trame ne le portait pas, et les clients posaient `absence:
+         * true` en dur — ce qui était juste tant qu'elle ne partait QUE pour
+         * une absence. Maintenant qu'un simple interrupteur la déclenche aussi,
+         * la deviner annoncerait « absent jusqu'à 15 h » pour quelqu'un qui
+         * n'est pas absent du tout. Seul le serveur sait lequel des trois
+         * chemins a décidé, il le dit donc.
+         */
+        absence: accueil.absence,
       });
 
       // Une notification, jamais une sonnerie : être injoignable n'est pas la

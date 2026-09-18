@@ -30,8 +30,22 @@ const MEDIA = {
 /**
  * L'accueil à jouer à quelqu'un qui appelle `userId`, ou `null`.
  *
- * Rend aussi le mode, dont l'appelant a besoin : en absence, il n'attend pas
- * trente secondes, et son écran ne dit pas la même chose.
+ * 🔴 CE QUE RENDRE QUELQUE CHOSE VEUT DIRE : « le répondeur prend cet appel,
+ * et le téléphone de l'appelé NE SONNE PAS ». Les deux conditions sont réunies
+ * ici et nulle part ailleurs — le répondeur doit répondre (interrupteur allumé,
+ * absence posée, ou plage programmée en cours) ET un accueil actif existe pour
+ * le faire entendre. `ws-server.mjs` n'a donc rien à réinterpréter : il coupe
+ * la sonnerie dès que cette fonction rend un accueil.
+ *
+ * ⚠️ UN RÉPONDEUR ALLUMÉ SANS ACCUEIL REND `null`, ET DONC ÇA SONNE. C'est le
+ * repli voulu — faire taire un téléphone pour servir un silence serait pire
+ * qu'un appel manqué — mais c'est un piège pour qui a coché la case sans rien
+ * enregistrer. `POST /api/repondeur` refuse pour cette raison d'allumer un
+ * répondeur qui n'a rien à dire.
+ *
+ * Rend aussi le mode, dont l'appelant a besoin : il ne sert plus à décider s'il
+ * attend, mais à choisir ce que son écran affiche — « absent jusqu'à 15 h »
+ * plutôt que « n'a pas répondu ».
  *
  * 🔴 UN SEUL ACCUEIL, DANS LES DEUX MODES — et c'était une complication de trop.
  *
