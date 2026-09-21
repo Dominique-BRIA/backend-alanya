@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { aUnAccueil } from "@/lib/repondeur.mjs";
 
 /**
  * LES PLAGES PROGRAMMÉES DU RÉPONDEUR.
@@ -130,7 +131,27 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * ⚠️ POSER UNE PLAGE ALLUME LE RÉPONDEUR. Programmer « tous les lundis
    * 10 h-12 h » en laissant l'interrupteur éteint donnerait une programmation
    * qui ne fait rien, et rien à l'écran ne dirait pourquoi.
+   *
+   * 🐛 MAIS ALLUMER SANS ACCUEIL EST LE PIÈGE QUE LES DEUX AUTRES CHEMINS
+   * FERMENT. L'interrupteur et l'absence refusent tous deux de s'allumer sur un
+   * répondeur muet — un répondeur sans accueil laisse sonner, et celui qui
+   * vient de régler quelque chose conclut que la fonction est cassée. Cette
+   * route, écrite plus tard et dans un autre fichier, rouvrait ce piège : on
+   * programmait ses lundis matin, l'interrupteur s'allumait, et le lundi venu
+   * le téléphone sonnait comme d'habitude.
+   *
+   * Le contrôle vient APRÈS l'enregistrement des plages, volontairement : la
+   * programmation est conservée, seul l'allumage est refusé. Enregistrer son
+   * accueil ensuite suffit alors à la rendre effective, sans avoir à ressaisir
+   * la semaine entière.
    */
+  if (!(await aUnAccueil(prisma, userId))) {
+    return fail(
+      "Plages enregistrées. Enregistrez un message d'accueil pour qu'elles prennent effet : sans lui, les appels sonneraient comme d'habitude.",
+      400,
+      "NO_GREETING",
+    );
+  }
   await prisma.user.update({ where: { id: userId }, data: { repondeurActif: 1 } });
 
   return ok({ plages: await mesPlages(userId) }, 201);

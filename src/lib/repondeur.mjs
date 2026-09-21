@@ -272,3 +272,26 @@ export async function peutEntendreAccueil(prisma, userId, mediaId) {
   });
   return appel !== null;
 }
+
+/**
+ * Ce compte a-t-il un accueil à faire entendre ?
+ *
+ * 🔴 ALLUMER UN RÉPONDEUR MUET EST LE PIÈGE QUI SE LIT COMME UNE PANNE. Quand
+ * le répondeur prend un appel, il COUPE la sonnerie — mais `accueilPourAppelant`
+ * ne rend quelque chose que s'il a un accueil actif à servir. Sans accueil, elle
+ * rend `null`, le téléphone sonne comme avant, et l'utilisateur qui vient
+ * d'allumer conclut que la fonction ne marche pas. Elle marche : elle n'a rien
+ * à dire.
+ *
+ * ⚠️ LA RÈGLE VIT ICI PARCE QUE TROIS CHEMINS L'ALLUMENT : l'interrupteur,
+ * l'absence et les plages programmées. Elle a vécu un temps dans la seule route
+ * `/api/repondeur`, et les plages — écrites plus tard, dans un autre fichier —
+ * ont rouvert le piège que les deux autres fermaient avec soin.
+ */
+export async function aUnAccueil(prisma, userId) {
+  const accueil = await prisma.repondeurAccueil.findFirst({
+    where: { userId, actif: 1 },
+    select: { id: true },
+  });
+  return accueil !== null;
+}

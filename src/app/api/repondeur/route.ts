@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
-import { accueilPourAppelant, enAbsence } from "@/lib/repondeur.mjs";
+import { accueilPourAppelant, aUnAccueil, enAbsence } from "@/lib/repondeur.mjs";
 
 /**
  * LES MESSAGES D'ACCUEIL DU RÉPONDEUR.
@@ -95,27 +95,6 @@ function avecMediaPublic<T extends { media: { id: string } }>(accueil: T): T {
 /** Fenêtre pendant laquelle un appel donne droit à entendre l'accueil. */
 const FENETRE_APPEL_MS = 10 * 60 * 1000;
 
-/**
- * Ce compte a-t-il un accueil à faire entendre ?
- *
- * 🔴 ALLUMER UN RÉPONDEUR MUET EST LE PIÈGE QUI SE LIT COMME UNE PANNE. Depuis
- * que le répondeur COUPE LA SONNERIE, `accueilPourAppelant` ne rend quelque
- * chose que s'il a un accueil actif à servir : sans lui, il rend `null`, le
- * téléphone sonne comme avant, et l'utilisateur qui vient de cocher la case
- * conclut que la fonction ne marche pas. Elle marche — elle n'a simplement rien
- * à dire.
- *
- * On refuse donc l'allumage plutôt que de le servir à moitié. Le repli côté
- * appel reste le bon (mieux vaut sonner que servir un silence) ; c'est ICI
- * qu'il faut empêcher d'y tomber.
- */
-async function aUnAccueil(userId: string) {
-  const accueil = await prisma.repondeurAccueil.findFirst({
-    where: { userId, actif: 1 },
-    select: { id: true },
-  });
-  return accueil !== null;
-}
 
 /**
  * Un appel récent me donne-t-il le droit d'entendre l'accueil de sa cible ?
@@ -161,17 +140,22 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     return ok({ accueil: accueil.media, absence: accueil.absence });
   }
 
-  const [moi, accueils] = await Promise.all([
-    prisma.user.findUnique({ where: { id: userId }, select: { repondeurActif: true } }),
-    prisma.repondeurAccueil.findMany({
-      where: { userId },
-      // Le plus récent en tête : c'est celui qu'on vient d'enregistrer, donc
-      // celui qu'on cherche.
-      orderBy: { createdAt: "desc" },
-      select: ACCUEIL,
-    }),
-  ]);
-  return ok({ actif: moi?.repondeurActif === 1, accueils: accueils.map(avecMediaPublic) });
+  /*
+   * 🐛 CETTE LECTURE NE RENDAIT PAS `jusquA`, ET ELLE ÉTAIT LA SEULE.
+   *
+   * `etatRepondeur` a été écrite précisément pour que les retours de ce fichier
+   * cessent d'être composés à la main — son propre commentaire prévient que
+   * « le jour où un champ s'ajoute il en manque toujours un ». C'est exactement
+   * ce qui est arrivé : `jusquA` s'est ajouté aux `POST`, et ce `GET` refaisait
+   * la requête à la main, sans lui.
+   *
+   * ⚠️ LE SYMPTÔME NE SE VOYAIT QU'APRÈS COUP. Poser une absence marchait — la
+   * réponse du `POST` la portait. Mais au rechargement suivant, cette lecture
+   * rendait un état SANS absence : l'écran l'annonçait levée alors que les
+   * appels continuaient d'aller au répondeur. Les DEUX clients le subissaient,
+   * le mobile ayant documenté le contournement plutôt que la cause.
+   */
+  return ok(await etatRepondeur(userId));
 });
 
 /**
@@ -242,7 +226,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     }
     // ⚠️ SEULEMENT QUAND ON EN POSE UNE : lever une absence (`0`) doit rester
     // possible même sans accueil, sans quoi un compte resterait coincé.
-    if (minutes > 0 && !(await aUnAccueil(userId))) {
+    if (minutes > 0 && !(await aUnAccueil(prisma, userId))) {
       return fail(
         "Enregistrez d'abord un message d'accueil : sans lui, les appels sonneraient comme d'habitude.",
         400,
@@ -271,7 +255,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     }
     // ⚠️ SEULEMENT À L'ALLUMAGE. Éteindre doit toujours passer : refuser
     // d'éteindre un répondeur sans accueil enfermerait le compte.
-    if (recu.actif && !(await aUnAccueil(userId))) {
+    if (recu.actif && !(await aUnAccueil(prisma, userId))) {
       return fail(
         "Enregistrez d'abord un message d'accueil : sans lui, les appels sonneraient comme d'habitude.",
         400,
