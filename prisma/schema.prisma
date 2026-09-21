@@ -161,6 +161,9 @@ model User {
   /// le compte (il est dans `media_files`) ; la liste de ce qui a ete importe,
   /// non — elle vivait en localStorage. Voir [UserRingtone].
   ringtones        UserRingtone[]
+  e2eeIdentites    E2eeIdentite[]
+  e2eeEnvoyees     E2eeEnveloppe[] @relation("E2eeExpediteur")
+  e2eeRecues       E2eeEnveloppe[] @relation("E2eeDestinataire")
   participations   Participant[]
   sentMessages     Message[]           @relation("MessageSender")
   ownedMedia       MediaFile[]
@@ -870,7 +873,17 @@ model Conversation {
   createdAt DateTime @default(now()) @db.Timestamptz // extra local
   updatedAt DateTime @updatedAt @db.Timestamptz // extra local
 
+  /// La conversation est-elle chiffrée de bout en bout ?
+  ///
+  /// ⚠️ FAUX PAR DÉFAUT, et c'est ce qui rend l'arrivée du chiffrement sans
+  /// danger pour l'existant : rien ne bascule tant que personne ne l'a
+  /// demandé. Une conversation qui passe à `true` ne revient pas en arrière —
+  /// les messages déjà chiffrés le restent, et le serveur n'a pas de quoi les
+  /// rouvrir.
+  e2eeActif    Boolean     @default(false) @map("e2ee_actif")
+
   participants Participant[]
+  e2eeEnveloppes E2eeEnveloppe[]
   messages     Message[]
   locks        ConversationLock[]
 
@@ -2916,4 +2929,153 @@ model RepondeurPlage {
 
   @@index([userId, expireLe], map: "repondeur_plage_compte_idx")
   @@map("repondeur_plage")
+}
+
+/// ════════════════════════════════════════════════════════════════════
+///  CHIFFREMENT DE BOUT EN BOUT (protocole Signal)
+/// ════════════════════════════════════════════════════════════════════
+///
+/// 🔴 CES QUATRE TABLES NE CONTIENNENT QUE DU PUBLIC : des clés publiques et
+/// des messages déjà chiffrés. Le serveur ne détient AUCUN secret permettant
+/// de lire quoi que ce soit — c'est la seule propriété qui fasse du bout en
+/// bout autre chose qu'un mot.
+///
+/// Ce qui n'est PAS ici, et ne doit jamais y venir : les clés privées, et
+/// l'état des sessions du Double Ratchet. Ils vivent chez le client, dans son
+/// stockage local, et nulle part ailleurs.
+///
+/// Voir `prisma/manual/2026-09_e2ee.sql` pour le détail du raisonnement.
+
+/// L'identité d'UN APPAREIL — jamais d'un compte.
+///
+/// ⚠️ LE CHIFFREMENT EST PAR APPAREIL. Un compte ouvert sur un téléphone et un
+/// navigateur a deux identités, et chaque message leur est chiffré deux fois.
+/// Ranger ces clés au niveau du compte rendrait le second appareil incapable
+/// de lire quoi que ce soit — erreur coûteuse, parce qu'elle ne se voit qu'à
+/// l'usage.
+model E2eeIdentite {
+  id             String @id @default(uuid()) @db.Uuid
+  userId         String @map("alanyaID") @db.Uuid
+  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// L'appareil AU SENS DU PROTOCOLE, et non `Appareil.appareilId` : celui-ci
+  /// est choisi et gardé par le client, et survit au vidage du cache qui
+  /// recrée une ligne du registre d'appareils.
+  deviceId       Int    @map("device_id")
+
+  /// Tiré au sort à l'installation, il distingue deux installations d'un même
+  /// appareil. Il voyage dans les paquets de pré-clés.
+  registrationId Int    @map("registration_id")
+
+  /// Clé publique d'identité, permanente, en base64.
+  ///
+  /// ⚠️ SON CHANGEMENT DOIT ÊTRE VISIBLE des correspondants : c'est sur elle
+  /// que repose la vérification de sécurité entre deux personnes. Un
+  /// remplacement silencieux est exactement ce qu'un serveur malveillant
+  /// ferait pour s'interposer.
+  cleIdentite    String @map("cle_identite")
+
+  createdAt      DateTime @default(now()) @map("create_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt      @map("update_at") @db.Timestamptz
+
+  prekeysSignees E2eePrekeySignee[]
+  prekeysUniques E2eePrekeyUnique[]
+
+  @@unique([userId, deviceId], map: "e2ee_identites_compte_appareil")
+  @@index([userId], map: "e2ee_identites_compte_idx")
+  @@map("e2ee_identites")
+}
+
+/// La pré-clé signée, renouvelée régulièrement.
+///
+/// ⚠️ ON GARDE L'ANCIENNE UN TEMPS : un correspondant peut avoir récupéré le
+/// paquet juste avant la rotation et écrire une minute après. La supprimer
+/// aussitôt rendrait ce message-là indéchiffrable, sans que rien ne
+/// l'explique.
+model E2eePrekeySignee {
+  id          String @id @default(uuid()) @db.Uuid
+  identiteId  String @map("identite_id") @db.Uuid
+  identite    E2eeIdentite @relation(fields: [identiteId], references: [id], onDelete: Cascade)
+
+  prekeyId    Int    @map("prekey_id")
+  clePublique String @map("cle_publique")
+
+  /// Signature de [clePublique] par la clé d'identité.
+  ///
+  /// 🔴 C'EST ELLE QUI EMPÊCHE LE SERVEUR DE S'INTERPOSER. Sans vérification
+  /// côté client, il suffirait de servir une pré-clé fabriquée pour lire tout
+  /// ce qui suit. La ranger sans la vérifier ne protège de rien.
+  signature   String
+
+  createdAt   DateTime @default(now()) @map("create_at") @db.Timestamptz
+
+  @@unique([identiteId, prekeyId], map: "e2ee_prekeys_signees_unique")
+  @@index([identiteId, createdAt], map: "e2ee_prekeys_signees_identite_idx")
+  @@map("e2ee_prekeys_signees")
+}
+
+/// Les pré-clés à usage unique.
+///
+/// 🔴 « USAGE UNIQUE » EST UNE PROPRIÉTÉ DE SÉCURITÉ. En servir deux fois la
+/// même détruit la confidentialité persistante de la première session. La
+/// consommation passe donc par une mise à jour conditionnelle atomique
+/// (`WHERE consomme_le IS NULL`), jamais par un « lire puis écrire » que deux
+/// requêtes simultanées franchiraient ensemble.
+///
+/// ⚠️ ON MARQUE AU LIEU DE SUPPRIMER : le client se réapprovisionne en
+/// comptant ce qui reste. La purge est une tâche d'entretien, pas la
+/// consommation.
+model E2eePrekeyUnique {
+  id          String @id @default(uuid()) @db.Uuid
+  identiteId  String @map("identite_id") @db.Uuid
+  identite    E2eeIdentite @relation(fields: [identiteId], references: [id], onDelete: Cascade)
+
+  prekeyId    Int    @map("prekey_id")
+  clePublique String @map("cle_publique")
+  createdAt   DateTime  @default(now()) @map("create_at") @db.Timestamptz
+  consommeLe  DateTime? @map("consomme_le") @db.Timestamptz
+
+  @@unique([identiteId, prekeyId], map: "e2ee_prekeys_uniques_unique")
+  @@map("e2ee_prekeys_uniques")
+}
+
+/// Un message chiffré, à destination d'UN appareil.
+///
+/// 🔴 UNE ENVELOPPE PAR APPAREIL DESTINATAIRE : un message à quelqu'un qui a
+/// trois appareils produit trois enveloppes, chacune illisible par les deux
+/// autres.
+///
+/// ⚠️ TABLE SÉPARÉE DE `Message`, VOLONTAIREMENT. Celle-ci porte du texte en
+/// clair et tout l'historique ; mélanger les deux régimes dans les mêmes
+/// colonnes ferait qu'une requête oubliée exposerait l'un en croyant lire
+/// l'autre.
+model E2eeEnveloppe {
+  id                 String @id @default(uuid()) @db.Uuid
+
+  convId             String       @map("conversation_id") @db.Uuid
+  conv               Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+
+  expediteurId       String @map("expediteur_id") @db.Uuid
+  expediteur         User   @relation("E2eeExpediteur", fields: [expediteurId], references: [id], onDelete: Cascade)
+  expediteurDevice   Int    @map("expediteur_device")
+
+  destinataireId     String @map("destinataire_id") @db.Uuid
+  destinataire       User   @relation("E2eeDestinataire", fields: [destinataireId], references: [id], onDelete: Cascade)
+  destinataireDevice Int    @map("destinataire_device")
+
+  /// 1 = PreKeyWhisperMessage (ouvre la session), 3 = WhisperMessage.
+  ///
+  /// Les valeurs du protocole, reprises telles quelles plutôt que renommées :
+  /// elles voyagent jusqu'à la bibliothèque du client, qui ne connaît que
+  /// celles-là.
+  type               Int @db.SmallInt
+
+  /// Le chiffré, en base64. Opaque pour le serveur, et il doit le rester.
+  corps              String
+
+  createdAt          DateTime  @default(now()) @map("create_at") @db.Timestamptz
+  remisLe            DateTime? @map("remis_le") @db.Timestamptz
+
+  @@index([convId, createdAt], map: "e2ee_enveloppes_conv_idx")
+  @@map("e2ee_enveloppes")
 }
