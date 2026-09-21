@@ -38,6 +38,24 @@ export function familleDeAppareil(typeDevice: number | null | undefined): Famill
 export const RAISON_EVICTION = "evicted";
 
 /**
+ * Raison inscrite quand un jeton manifestement COPIÉ a fait couper la chaîne.
+ *
+ * Distincte de l'éviction : l'utilisateur n'a pas ouvert son compte ailleurs,
+ * c'est un incident de sécurité. Le message qu'on lui doit n'est pas le même.
+ */
+export const RAISON_REJEU = "replayed";
+
+/**
+ * Raison inscrite quand l'utilisateur ferme lui-même une session depuis
+ * « Appareils connectés ».
+ *
+ * ⚠️ ELLE N'EXISTAIT PAS, et son absence est devenue un défaut le jour où le
+ * client a cessé de se déconnecter sur un refus anonyme : une révocation sans
+ * raison est indistinguable d'un jeton simplement périmé.
+ */
+export const RAISON_REVOCATION = "revoked";
+
+/**
  * Combien de sessions simultanées cette famille tolère-t-elle ?
  *
  * `users.appareil_total` compte **le mobile ET le web** : réglé à 2 — le défaut —
@@ -221,16 +239,30 @@ export async function fermeLesAutresSessions(
    * Sans risque pour l'appareil courant : son propre couple n'est émis qu'APRÈS
    * cet appel, et il porte son `device_id`.
    */
-  const anonymesAussi = limite <= 1;
+  /*
+   * 🔴 CORRIGÉ : LES SESSIONS ANONYMES NE SONT PLUS COUPÉES PAR UN MOBILE.
+   *
+   * La règle disait « on coupe aussi les sessions sans `device_id` quand la
+   * limite est de 1 ». Or la limite du MOBILE vaut 1 EN TOUTES CIRCONSTANCES
+   * (`limiteDeLaFamille`) : chaque connexion d'un téléphone révoquait donc
+   * toutes les sessions sans identifiant d'appareil — y compris celles d'un
+   * POSTE, qui n'avait rien à voir avec la famille concernée.
+   *
+   * Le raisonnement d'origine — « tant qu'une seule session est permise, tout
+   * part de toute façon, le doute est sans conséquence » — ne vaut QUE si la
+   * famille couvre le compte entier. Ce n'est vrai pour personne : le mobile
+   * plafonne à 1, mais le poste existe à côté. Quelqu'un qui travaillait sur son
+   * ordinateur était éjecté parce qu'il avait rouvert son téléphone, et c'est
+   * exactement le cas que le commentaire de `fermeLesAutresSessions` jurait de
+   * ne jamais provoquer.
+   *
+   * ⚠️ ON NE TOUCHE DONC PLUS QU'AUX APPAREILS IDENTIFIÉS de la famille visée.
+   * Une session anonyme peut survivre en trop — elle s'éteindra à sa propre
+   * expiration. Déconnecter quelqu'un à tort ne se rattrape pas ; une session
+   * de trop, si.
+   */
   await prisma.refreshToken.updateMany({
-    where: {
-      userId,
-      revoked: false,
-      OR: [
-        { deviceId: { in: idsClients } },
-        ...(anonymesAussi ? [{ deviceId: null }] : []),
-      ],
-    },
+    where: { userId, revoked: false, deviceId: { in: idsClients } },
     data: { revoked: true, revokedReason: RAISON_EVICTION },
   });
 
@@ -245,10 +277,17 @@ export async function fermeLesAutresSessions(
   await supprimeJetonsPushDAppareils(
     userId,
     idsClients,
-    // Même prudence que ci-dessus : les jetons push sans appareil connu ne
-    // partent que si tout part. Au-delà d'une session, on couperait les
-    // notifications d'un poste qui reste.
-    anonymesAussi ? (famille === "mobile" ? PLATEFORMES_MOBILE : PLATEFORMES_POSTE) : [],
+    /*
+     * ⚠️ PLUS AUCUNE PLATEFORME EN BLOC, pour la raison qui précède : couper
+     * les jetons push « de toute la famille mobile » emportait ceux d'appareils
+     * dont la session n'avait pas été révoquée. Un téléphone parfaitement
+     * connecté cessait alors de sonner, sans que rien ne l'explique — la panne
+     * la plus difficile à relier à sa cause, puisque l'application marchait
+     * par ailleurs.
+     *
+     * On ne retire donc que les jetons des appareils RÉELLEMENT évincés.
+     */
+    [],
   );
 
   return idsClients;

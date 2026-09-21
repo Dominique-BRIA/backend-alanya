@@ -618,9 +618,27 @@ model RefreshToken {
   /// l'éviction — le seul cas que l'événement temps réel ne peut pas couvrir.
   revokedReason String? @map("revoked_reason") @db.VarChar(20)
 
+  /// Instant de la rotation ORDINAIRE, ou `null` si ce jeton n'a jamais tourné.
+  ///
+  /// 🔴 C'est lui qui sépare le réessai anodin du jeton volé. Un jeton rejoué
+  /// quelques secondes après sa rotation est un client qui réessaie ; rejoué
+  /// longtemps après, c'est une copie en circulation. Sans cette date, les deux
+  /// se ressemblent — et on déconnectait le premier.
+  rotatedAt DateTime? @map("rotated_at") @db.Timestamptz
+
+  /// Hachage du jeton émis EN ÉCHANGE de celui-ci, qui chaîne la succession.
+  ///
+  /// Permet de reconnaître un rejeu TARDIF : si le successeur a lui-même déjà
+  /// tourné, deux porteurs se servent du même jeton et toute la chaîne doit
+  /// tomber. Le hachage plutôt que l'identifiant : la vérification part du
+  /// jeton présenté, donc de son hachage — pas de jointure sur le chemin chaud.
+  remplacePar String? @map("remplace_par") @db.VarChar(64)
+
   @@index([userId])
   /// Sert la révocation : retrouver les sessions d'un appareil donné.
   @@index([userId, deviceId], map: "refresh_tokens_user_device_idx")
+  /// Le chemin le plus chaud de l'API : chaque rafraîchissement cherche ici.
+  @@index([tokenHash], map: "refresh_tokens_token_hash_idx")
   @@map("refresh_tokens")
 }
 
