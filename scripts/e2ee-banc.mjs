@@ -597,6 +597,59 @@ async function main() {
     select: { content: true },
   })
   verifier(fuite === null, "aucun message en clair n'a atterri dans le fil chiffré")
+  console.log("\n⑱ Un AGENT est hors périmètre, comme un standard")
+  /*
+   * 🐛 CE CONTRÔLE EXISTE PARCE QUE LA RÈGLE ÉTAIT FAUSSE.
+   *
+   * La première version n'excluait que les standards (types 3 et 4) et
+   * laissait passer les AGENTS (type 2). Le raisonnement était plausible :
+   * « un agent est une personne, donc il peut chiffrer ». Il est faux — ce
+   * n'est pas la nature du titulaire qui compte, c'est QUI A BESOIN DE LIRE.
+   * Les échanges d'un agent avec ses clients sont relus par sa hiérarchie et
+   * passés à un collègue lors d'un transfert.
+   *
+   * ⚠️ LE DÉFAUT NE SE SERAIT VU QU'EN PRODUCTION, le jour où un superviseur
+   * aurait ouvert un fil devenu illisible — et il aurait été IRRÉVERSIBLE,
+   * puisque le serveur n'a pas de quoi rouvrir ce qui est chiffré.
+   */
+  const agent = await prisma.user.upsert({
+    where: { email: "banc-agent@e2ee.test" },
+    update: { typeCompte: 2 },
+    create: {
+      email: "banc-agent@e2ee.test",
+      nom: "Banc agent",
+      typeCompte: 2,
+      publicNumber: "E2EEAGENT" + Math.floor(Math.random() * 100000),
+      emailVerified: true,
+    },
+  })
+  const convAgent = await prisma.conversation.create({
+    data: {
+      isGroup: false,
+      participants: { create: [{ userId: a.user.id }, { userId: agent.id }] },
+    },
+  })
+
+  const vu = await appel("/api/conversations/" + convAgent.id + "/e2ee", {
+    jeton: sessionA.accessToken,
+  })
+  verifier(vu.activable === false, "le GET annonce que ce n'est pas activable")
+  verifier(vu.motif === "HORS_PERIMETRE", "et il en DONNE la raison : " + vu.motif)
+
+  let refusAgent = ""
+  try {
+    await appel("/api/conversations/" + convAgent.id + "/e2ee", {
+      methode: "POST",
+      jeton: sessionA.accessToken,
+    })
+  } catch (e) {
+    refusAgent = e.message
+  }
+  verifier(
+    refusAgent.includes("HORS_PERIMETRE"),
+    "le POST refuse aussi — GET et POST disent la même chose",
+  )
+  await prisma.conversation.delete({ where: { id: convAgent.id } })
   console.log(
     `\n════ ${echecs === 0 ? "TOUT EST VERT" : `${echecs} ÉCHEC(S)`} ════\n`,
   )
