@@ -1024,6 +1024,12 @@ model Message {
   /// l'envoie pas reste valide. Pas de clé étrangère — la ligne d'appareil peut
   /// disparaître sans emporter les messages déjà envoyés.
   appareilId Int?              @map("appareilID")
+  /// Les enveloppes chiffrées qui portent le contenu de ce message.
+  ///
+  /// Vide pour tout message en clair — c'est-à-dire l'immense majorité, et
+  /// tout l'historique.
+  e2eeEnveloppes E2eeEnveloppe[]
+
   type       MessageType       @default(TEXT)
   status     MessageStatus     @default(SENT)
   replyToId  String?           @map("replyToID") @db.Uuid
@@ -3072,6 +3078,21 @@ model E2eeEnveloppe {
 
   /// Le chiffré, en base64. Opaque pour le serveur, et il doit le rester.
   corps              String
+
+  /// Le message du fil auquel cette enveloppe apporte son contenu.
+  ///
+  /// 🔴 UNE CONVERSATION CHIFFRÉE NE PEUT PLUS RANGER SON TEXTE DANS
+  /// `Message.content` : le serveur n'a pas le droit de le lire. Mais le fil a
+  /// toujours besoin d'une LIGNE par message — pour l'ordre, l'horodatage,
+  /// l'expéditeur, le statut, la réponse citée. On garde donc les deux : la
+  /// ligne porte tout SAUF le contenu, l'enveloppe porte le contenu et rien
+  /// d'autre.
+  ///
+  /// ⚠️ NULLABLE, ET CE N'EST PAS UNE FACILITÉ : une enveloppe peut exister
+  /// sans message — c'est le cas du banc d'essai. L'exiger interdirait cet
+  /// usage sans rien protéger de plus.
+  messageId          String?   @map("message_id") @db.Uuid
+  message            Message?  @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   createdAt          DateTime  @default(now()) @map("create_at") @db.Timestamptz
   remisLe            DateTime? @map("remis_le") @db.Timestamptz

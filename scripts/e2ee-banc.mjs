@@ -487,6 +487,89 @@ async function main() {
   }
   verifier(refuse, "le serveur refuse un destinataire hors de la conversation")
 
+
+  console.log("\n⑬ Activer le chiffrement sur la conversation")
+  const avant = await appel(`/api/conversations/${conv.id}/e2ee`, { jeton: sessionA.accessToken })
+  verifier(avant.e2eeActif === false, "elle est en clair au départ")
+  verifier(avant.activable === true, "elle est activable : les deux ont des clés")
+  const apresAct = await appel(`/api/conversations/${conv.id}/e2ee`, {
+    methode: "POST",
+    jeton: sessionA.accessToken,
+  })
+  verifier(apresAct.e2eeActif === true, "le chiffrement est actif")
+
+  /*
+   * ⚠️ ON REDEMANDE, ET CE N'EST PAS DU ZÈLE : deux appareils du même compte
+   * peuvent activer en même temps. Une seconde demande doit passer sans se
+   * plaindre, sinon le second appareil verrait une erreur pour une action qui
+   * a réussi.
+   */
+  const rejoue = await appel(`/api/conversations/${conv.id}/e2ee`, {
+    methode: "POST",
+    jeton: sessionB.accessToken,
+  })
+  verifier(rejoue.deja === true, "une seconde activation est idempotente")
+
+  console.log("\n⑭ Le message du fil ne porte PAS le texte")
+  /*
+   * 🔴 LE CŒUR DU BRANCHEMENT AU FIL.
+   *
+   * La ligne de `message` existe — le fil a besoin de l'ordre, de l'heure, de
+   * l'expéditeur — mais son `content` est NUL. Le texte vit dans l'enveloppe,
+   * et nulle part ailleurs.
+   */
+  const SECRET3 = "Le contenu ne doit pas etre dans la table message"
+  const ligne = await prisma.message.create({
+    data: { convId: conv.id, senderId: a.user.id, content: null, type: "TEXT" },
+    select: { id: true, content: true },
+  })
+  const env3 = await alice.envoyer(conv.id, b.user.id, devices, SECRET3)
+  await prisma.e2eeEnveloppe.updateMany({
+    where: { convId: conv.id, messageId: null, destinataireId: b.user.id },
+    data: { messageId: ligne.id },
+  })
+  verifier(ligne.content === null, "la ligne de message n'a pas de contenu")
+  verifier(env3.length === 1, "le contenu est parti dans une enveloppe")
+
+  const relue = await prisma.message.findUnique({
+    where: { id: ligne.id },
+    select: { content: true, e2eeEnveloppes: { select: { id: true, corps: true } } },
+  })
+  verifier(relue.content === null, "relue en base : toujours aucun contenu en clair")
+  verifier(relue.e2eeEnveloppes.length >= 1, "l'enveloppe est bien rattachée au message")
+  verifier(
+    !Buffer.from(relue.e2eeEnveloppes[0].corps, "base64").toString("utf8").includes("contenu"),
+    "et son corps reste illisible",
+  )
+
+  console.log("\n⑮ Supprimer le message emporte ses enveloppes")
+  await prisma.message.delete({ where: { id: ligne.id } })
+  const orphelines = await prisma.e2eeEnveloppe.count({ where: { messageId: ligne.id } })
+  verifier(orphelines === 0, "aucune enveloppe orpheline (cascade)")
+
+  console.log("\n⑯ Un groupe est refusé, explicitement")
+  const groupe = await prisma.conversation.create({
+    data: {
+      isGroup: true,
+      name: "Banc groupe",
+      participants: { create: [{ userId: a.user.id }, { userId: b.user.id }] },
+    },
+  })
+  let refuseGroupe = ""
+  try {
+    await appel(`/api/conversations/${groupe.id}/e2ee`, {
+      methode: "POST",
+      jeton: sessionA.accessToken,
+    })
+  } catch (e) {
+    refuseGroupe = e.message
+  }
+  verifier(
+    refuseGroupe.includes("GROUPE_NON_SUPPORTE"),
+    "le serveur refuse un groupe en le DISANT (Sender Keys non implémenté)",
+  )
+  await prisma.conversation.delete({ where: { id: groupe.id } })
+
   console.log(
     `\n════ ${echecs === 0 ? "TOUT EST VERT" : `${echecs} ÉCHEC(S)`} ════\n`,
   )
