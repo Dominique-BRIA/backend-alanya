@@ -8,6 +8,7 @@ import { withAuth } from "@/lib/auth-context";
  *
  * `GET  /api/e2ee/cles` → ce qu'il me reste en stock, par appareil
  * `PUT  /api/e2ee/cles` → publier ou renouveler le jeu d'un appareil
+ * `DELETE /api/e2ee/cles?deviceId=N` → retirer l'identité de cet appareil
  *
  * 🔴 TOUT CE QUI TRANSITE ICI EST PUBLIC. Aucune clé privée ne doit atteindre
  * cette route, et aucune ne doit être acceptée si elle y arrivait : un serveur
@@ -188,4 +189,38 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
   });
 
   return ok({ deviceId: r.deviceId, prekeysRestantes: restantes }, 201);
+});
+
+/**
+ * Retire l'identité d'un appareil — sa déconnexion volontaire.
+ *
+ * 🔴 C'EST LE SEUL GESTE QUI SUPPRIME. Le balayage par silence, lui, se
+ * contente d'IGNORER : un appareil muet peut revenir. Celui qui se déconnecte
+ * dit qu'il ne reviendra pas, et le croire évite que ses correspondants
+ * continuent de chiffrer pour lui pendant trente jours.
+ *
+ * ⚠️ LA CASCADE EMPORTE SES PRÉ-CLÉS, ce qui est voulu : elles ne servent
+ * qu'à ouvrir une session avec un appareil qui n'existe plus.
+ *
+ * ⚠️ LES ENVELOPPES DÉJÀ DÉPOSÉES NE SONT PAS TOUCHÉES. Elles ne pointent pas
+ * vers l'identité mais vers le couple (compte, appareil) ; les effacer ici
+ * ferait disparaître des messages que le destinataire n'a peut-être pas
+ * encore lus sur un AUTRE appareil. Elles expireront d'elles-mêmes.
+ *
+ * ⚠️ IDEMPOTENTE : se déconnecter deux fois ne doit pas produire d'erreur.
+ */
+export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
+  const brut = req.nextUrl.searchParams.get("deviceId");
+  const deviceId = Number(brut);
+  if (brut === null || !Number.isInteger(deviceId)) {
+    return fail("« deviceId » est requis", 400, "BAD_BODY");
+  }
+
+  const { count } = await prisma.e2eeIdentite.deleteMany({
+    // Le compte est dans la condition : un identifiant d'appareil qui fuite ne
+    // doit pas permettre de retirer l'identité de quelqu'un d'autre.
+    where: { userId, deviceId },
+  });
+
+  return ok({ retiree: count > 0 });
 });

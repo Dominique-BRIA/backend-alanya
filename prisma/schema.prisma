@@ -2981,6 +2981,19 @@ model E2eeIdentite {
   /// ferait pour s'interposer.
   cleIdentite    String @map("cle_identite")
 
+  /// Quand cet appareil a releve ses enveloppes pour la derniere fois.
+  ///
+  /// 🔴 C EST CE QUI DISTINGUE UNE IDENTITE VIVANTE D UNE IDENTITE MORTE. Un
+  /// navigateur dont on a vide le cache laisse son identite publiee pour
+  /// toujours : les correspondants continuent de chiffrer pour elle, chaque
+  /// envoi consomme une de ses pre-cles, et ses enveloppes s entassent sans que
+  /// personne ne vienne jamais les lire.
+  ///
+  /// ⚠️ MIS A JOUR A LA RELEVE, PAS A L ENVOI : c est la LECTURE qui prouve
+  /// qu un appareil est encore la. Un appareil peut publier ses cles puis
+  /// disparaitre ; il ne peut pas relever sans exister.
+  derniereReleve DateTime? @map("derniere_releve") @db.Timestamptz
+
   createdAt      DateTime @default(now()) @map("create_at") @db.Timestamptz
   updatedAt      DateTime @updatedAt      @map("update_at") @db.Timestamptz
 
@@ -2989,6 +3002,8 @@ model E2eeIdentite {
 
   @@unique([userId, deviceId], map: "e2ee_identites_compte_appareil")
   @@index([userId], map: "e2ee_identites_compte_idx")
+  // Le balayage des identites inactives : « qui n a pas releve depuis N jours ? »
+  @@index([derniereReleve], map: "e2ee_identites_releve_idx")
   @@map("e2ee_identites")
 }
 

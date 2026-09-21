@@ -155,6 +155,26 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
    * réception explicite (`DELETE`) qui retire — le client garde donc la
    * responsabilité de dire qu'il a bien rangé ce qu'il a lu.
    */
+  /*
+   * 🔴 LA RELÈVE PROUVE QUE CET APPAREIL EXISTE ENCORE.
+   *
+   * C'est le seul signe de vie fiable : un appareil peut publier ses clés
+   * puis disparaître à jamais, mais il ne peut pas RELEVER sans exister. On
+   * horodate donc ici, et nulle part ailleurs.
+   *
+   * ⚠️ SANS CE REPÈRE, RIEN NE DISTINGUE UNE IDENTITÉ VIVANTE D'UNE MORTE, et
+   * les correspondants continuent de chiffrer pour des appareils qui ne
+   * liront jamais — un message en six exemplaires dont cinq sont perdus.
+   *
+   * ⚠️ `updateMany` ET NON `update` : l'identité peut ne pas exister (un
+   * client qui relève avant d'avoir publié ses clés). On ne veut pas lever
+   * pour si peu, et `updateMany` sur zéro ligne ne se plaint pas.
+   */
+  await prisma.e2eeIdentite.updateMany({
+    where: { userId, deviceId },
+    data: { derniereReleve: new Date() },
+  });
+
   const enveloppes = await prisma.e2eeEnveloppe.findMany({
     where: { destinataireId: userId, destinataireDevice: deviceId, remisLe: null },
     orderBy: { createdAt: "asc" },

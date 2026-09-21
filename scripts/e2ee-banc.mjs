@@ -721,6 +721,71 @@ async function main() {
   }
   verifier(refuseAilleurs !== "", "le serveur refuse un message d'une autre conversation")
   await prisma.conversation.delete({ where: { id: autreConv.id } })
+  console.log("\n㉑ Les identités mortes")
+  /*
+   * 🔴 LE PROBLÈME QUE CE LOT CORRIGE. Chaque appareil publie une identité, et
+   * rien ne la retirait. Après cinq réinstallations, un message partait en six
+   * exemplaires dont cinq ne seraient JAMAIS lus.
+   */
+
+  // Une identité fantôme : publiée, puis muette depuis longtemps.
+  const fantome = await prisma.e2eeIdentite.create({
+    data: {
+      userId: b.user.id,
+      deviceId: 999000001,
+      registrationId: 1,
+      cleIdentite: "BfCEKR+ALQKT1NWPiKwEzniHElTdONrii4iZJbluO8xd",
+      // Quarante jours de silence : au-delà du seuil de trente.
+      derniereReleve: new Date(Date.now() - 40 * 24 * 3600 * 1000),
+      prekeysSignees: {
+        create: {
+          prekeyId: 1,
+          clePublique: "BfCEKR+ALQKT1NWPiKwEzniHElTdONrii4iZJbluO8xd",
+          signature: "AAAA",
+        },
+      },
+    },
+  })
+
+  const paquets2 = await appel("/api/e2ee/cles/" + b.user.id, { jeton: sessionA.accessToken })
+  const contientFantome = paquets2.paquets.some((p) => p.deviceId === 999000001)
+  verifier(!contientFantome, "une identité muette depuis 40 jours n'est plus servie")
+
+  // Elle redevient servie dès qu'elle relève.
+  await prisma.e2eeIdentite.update({
+    where: { id: fantome.id },
+    data: { derniereReleve: new Date() },
+  })
+  const paquets3 = await appel("/api/e2ee/cles/" + b.user.id, { jeton: sessionA.accessToken })
+  verifier(
+    paquets3.paquets.some((p) => p.deviceId === 999000001),
+    "et elle redevient servie dès qu'elle relève — un retour de congé ne coûte rien",
+  )
+
+  console.log("\n㉒ Le retrait explicite, à la déconnexion")
+  /*
+   * ⚠️ LE SEUL GESTE QUI SUPPRIME. Le balayage par silence se contente
+   * d'IGNORER — un appareil muet peut revenir. Celui qui se déconnecte dit
+   * qu'il ne reviendra pas.
+   */
+  const retrait = await appel("/api/e2ee/cles?deviceId=" + bob.deviceId, {
+    methode: "DELETE",
+    jeton: sessionB.accessToken,
+  })
+  verifier(retrait.retiree === true, "l'identité de Bob est retirée")
+
+  const restePrekeys = await prisma.e2eePrekeyUnique.count({
+    where: { identite: { deviceId: bob.deviceId, userId: b.user.id } },
+  })
+  verifier(restePrekeys === 0, "ses pré-clés tombent avec elle (cascade)")
+
+  const rejoue2 = await appel("/api/e2ee/cles?deviceId=" + bob.deviceId, {
+    methode: "DELETE",
+    jeton: sessionB.accessToken,
+  })
+  verifier(rejoue2.retiree === false, "se déconnecter deux fois ne produit pas d'erreur")
+
+  await prisma.e2eeIdentite.deleteMany({ where: { deviceId: 999000001 } })
   console.log(
     `\n════ ${echecs === 0 ? "TOUT EST VERT" : `${echecs} ÉCHEC(S)`} ════\n`,
   )

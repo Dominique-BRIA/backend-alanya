@@ -23,6 +23,21 @@ import { withAuth } from "@/lib/auth-context";
 /** Plafond de paquets rendus d'un coup — un compte n'a pas cinquante appareils. */
 const APPAREILS_MAX = 20;
 
+/**
+ * Au-delà de ce silence, on cesse de chiffrer pour un appareil.
+ *
+ * 🔴 TRENTE JOURS, ET C'EST UN COMPROMIS ASSUMÉ. Trop court, on cesserait
+ * d'écrire à quelqu'un parti trois semaines en congé — ses messages seraient
+ * perdus sans qu'il l'apprenne. Trop long, chaque compte traîne ses appareils
+ * morts pendant des mois, et chaque message part en autant d'exemplaires
+ * inutiles.
+ *
+ * ⚠️ L'APPAREIL N'EST PAS SUPPRIMÉ, il est IGNORÉ. Il redevient servi dès
+ * qu'il relève à nouveau — un retour de congé ne doit rien coûter. Seule la
+ * déconnexion explicite supprime, parce qu'elle est un geste, pas un silence.
+ */
+const SILENCE_MAX_MS = 30 * 24 * 60 * 60 * 1000;
+
 export const GET = withAuth(
   // ⚠️ `Record<string, string>` ET NON `{ userId: string }` : c'est la
   // signature que `withAuth` impose a tous ses appelants. La resserrer ici la
@@ -33,7 +48,21 @@ export const GET = withAuth(
     if (!userId) return fail("Destinataire manquant", 400, "BAD_BODY");
 
     const identites = await prisma.e2eeIdentite.findMany({
-      where: { userId },
+      where: {
+        userId,
+        /*
+         * ⚠️ ON ÉCARTE LES IDENTITÉS QUI N'ONT PLUS DONNÉ SIGNE DE VIE.
+         *
+         * `null` passe : une identité qui n'a jamais relevé vient peut-être
+         * d'être publiée, et refuser de lui écrire empêcherait le tout
+         * premier message — celui-là même qui lui donnera une raison de
+         * relever.
+         */
+        OR: [
+          { derniereReleve: null },
+          { derniereReleve: { gt: new Date(Date.now() - SILENCE_MAX_MS) } },
+        ],
+      },
       take: APPAREILS_MAX,
       select: {
         id: true,
