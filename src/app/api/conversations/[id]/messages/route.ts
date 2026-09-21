@@ -320,6 +320,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     mentions: body.mentions,
     mentionneTous: body.mentionneTous,
     mentionTousLibelle: body.mentionTousLibelle,
+    chiffre: body.chiffre,
   });
 
   if (!envoi.ok) {
@@ -339,6 +340,27 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     // est coupé silencieusement, jamais refusé.
     if (envoi.motif === "CONTENU_TROP_LONG") {
       return fail("Charge trop longue (500 caractères maximum)", 422, "CONTENT_TOO_LONG");
+    }
+    /*
+     * ⚠️ CES DEUX MOTIFS DOIVENT ÊTRE DISTINGUÉS DE « BLOCKED », qui veut dire
+     * « cette personne vous a bloqué ». Les confondre enverrait quelqu'un
+     * chercher un blocage qui n'existe pas, alors que son client est
+     * simplement trop ancien pour écrire dans un fil chiffré.
+     */
+    if (envoi.motif === "CONVERSATION_CHIFFREE") {
+      return fail(
+        "Cette conversation est chiffrée de bout en bout : ce client ne sait " +
+          "pas encore y écrire.",
+        409,
+        "CONVERSATION_CHIFFREE",
+      );
+    }
+    if (envoi.motif === "CONTENU_EN_CLAIR") {
+      return fail(
+        "Un message chiffré ne doit porter aucun contenu en clair.",
+        400,
+        "CONTENU_EN_CLAIR",
+      );
     }
     return fail("Message non distribuable", 403, "BLOCKED");
   }

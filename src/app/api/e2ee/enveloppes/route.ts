@@ -38,7 +38,12 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   } catch {
     return fail("Corps JSON invalide", 400, "BAD_JSON");
   }
-  const r = (corps ?? {}) as { convId?: unknown; deviceId?: unknown; enveloppes?: unknown };
+  const r = (corps ?? {}) as {
+    convId?: unknown;
+    deviceId?: unknown;
+    enveloppes?: unknown;
+    messageId?: unknown;
+  };
 
   if (typeof r.convId !== "string" || r.convId === "") {
     return fail("« convId » est requis", 400, "BAD_BODY");
@@ -58,6 +63,24 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     select: { id: true },
   });
   if (!moi) return fail("Conversation inconnue", 404, "NOT_FOUND");
+
+  /*
+   * ⚠️ LE MESSAGE DOIT APPARTENIR À CETTE CONVERSATION, et le vérifier n'est
+   * pas du zèle : sans ce contrôle, on rattacherait le contenu chiffré d'un
+   * fil au message d'un AUTRE. Le destinataire verrait alors apparaître, dans
+   * une conversation, un texte écrit pour une autre — une fuite que le
+   * chiffrement lui-même ne peut pas empêcher, puisqu'elle a lieu APRÈS le
+   * déchiffrement, chez quelqu'un qui a bien le droit de lire.
+   */
+  let messageId: string | null = null;
+  if (typeof r.messageId === "string" && r.messageId !== "") {
+    const ligne = await prisma.message.findFirst({
+      where: { id: r.messageId, convId: r.convId, senderId: userId },
+      select: { id: true },
+    });
+    if (!ligne) return fail("Message inconnu", 404, "NOT_FOUND");
+    messageId = ligne.id;
+  }
 
   const brutes = Array.isArray(r.enveloppes) ? r.enveloppes : [];
   if (brutes.length === 0) return fail("Aucune enveloppe", 400, "BAD_BODY");
@@ -111,6 +134,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       destinataireDevice: e!.destinataireDevice,
       type: e!.type,
       corps: e!.corps,
+      messageId,
     })),
   });
 
@@ -140,6 +164,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       convId: true,
       expediteurId: true,
       expediteurDevice: true,
+      messageId: true,
       type: true,
       corps: true,
       createdAt: true,

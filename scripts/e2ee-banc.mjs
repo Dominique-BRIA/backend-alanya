@@ -650,6 +650,77 @@ async function main() {
     "le POST refuse aussi — GET et POST disent la même chose",
   )
   await prisma.conversation.delete({ where: { id: convAgent.id } })
+  console.log("\n⑲ Le fil chiffré, de bout en bout, par les vraies routes")
+  /*
+   * 🔴 LE SCÉNARIO COMPLET, celui que le navigateur jouera : on crée la LIGNE
+   * du fil sans contenu, puis on y rattache les enveloppes.
+   *
+   * ⚠️ DANS CET ORDRE, ET PAS L'INVERSE. Il faut l'identifiant de la ligne
+   * pour rattacher les enveloppes. Déposer d'abord laisserait des enveloppes
+   * orphelines qu'aucun fil ne réclamerait jamais — invisibles, donc jamais
+   * corrigées. Un message vide, lui, se voit et se renvoie.
+   */
+  const ligne2 = await appel("/api/conversations/" + conv.id + "/messages", {
+    methode: "POST",
+    jeton: sessionA.accessToken,
+    corps: { type: "TEXT", chiffre: true },
+  })
+  verifier(!!ligne2.id, "la ligne du fil est créée, sans contenu")
+
+  const env4 = await alice.envoyer(conv.id, b.user.id, devices, "Message du fil chiffré")
+  await appel("/api/e2ee/enveloppes", {
+    methode: "POST",
+    jeton: sessionA.accessToken,
+    corps: {
+      convId: conv.id,
+      deviceId: alice.deviceId,
+      messageId: ligne2.id,
+      enveloppes: env4,
+    },
+  })
+
+  const recues2 = await bob.relever()
+  const pourLigne = recues2.find((e) => e.messageId === ligne2.id)
+  verifier(!!pourLigne, "Bob reçoit une enveloppe RATTACHÉE à la ligne du fil")
+  if (pourLigne) {
+    const clair3 = await bob.lire(pourLigne)
+    verifier(clair3 === "Message du fil chiffré", "et son contenu revient : « " + clair3 + " »")
+  }
+
+  console.log("\n⑳ Une enveloppe ne peut pas être rattachée au message d'un AUTRE fil")
+  /*
+   * ⚠️ FUITE QUE LE CHIFFREMENT NE PEUT PAS EMPÊCHER, parce qu'elle a lieu
+   * APRÈS le déchiffrement, chez quelqu'un qui a bien le droit de lire. Sans
+   * ce contrôle, on rattacherait le contenu d'un fil au message d'un autre, et
+   * le destinataire verrait un texte écrit pour une autre conversation.
+   */
+  const autreConv = await prisma.conversation.create({
+    data: {
+      isGroup: false,
+      participants: { create: [{ userId: a.user.id }, { userId: b.user.id }] },
+    },
+  })
+  const ligneAilleurs = await prisma.message.create({
+    data: { convId: autreConv.id, senderId: a.user.id, type: "TEXT" },
+    select: { id: true },
+  })
+  let refuseAilleurs = ""
+  try {
+    await appel("/api/e2ee/enveloppes", {
+      methode: "POST",
+      jeton: sessionA.accessToken,
+      corps: {
+        convId: conv.id,
+        deviceId: alice.deviceId,
+        messageId: ligneAilleurs.id,
+        enveloppes: env4,
+      },
+    })
+  } catch (e) {
+    refuseAilleurs = e.message
+  }
+  verifier(refuseAilleurs !== "", "le serveur refuse un message d'une autre conversation")
+  await prisma.conversation.delete({ where: { id: autreConv.id } })
   console.log(
     `\n════ ${echecs === 0 ? "TOUT EST VERT" : `${echecs} ÉCHEC(S)`} ════\n`,
   )
