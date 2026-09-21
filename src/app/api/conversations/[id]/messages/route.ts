@@ -73,6 +73,14 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
       // perdrait sa mise en évidence — elle n'apparaîtrait que sur les messages
       // arrivés en temps réel, ce qui ressemblerait à un défaut d'affichage.
       mentions: { select: { userId: true, libelle: true } },
+      /*
+       * ⚠️ ON COMPTE LES ENVELOPPES, ON NE LES CHARGE PAS. Le client n a besoin
+       * que de SAVOIR qu un message est chiffre — pour placer la banniere et
+       * pour ne pas afficher une bulle vide comme un message perdu. Charger les
+       * corps ici les ferait transiter sans que personne ne les lise, et
+       * alourdirait chaque page d historique.
+       */
+      _count: { select: { e2eeEnveloppes: true } },
     },
   });
 
@@ -149,6 +157,17 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         convId: m.convId,
         senderId: m.senderId,
         content: m.content,
+        /*
+         * Ce message est-il chiffre de bout en bout ?
+         *
+         * 🔴 IL SE DEDUIT DE L EXISTENCE D UNE ENVELOPPE, jamais de l absence de
+         * contenu : un message EN CLAIR peut legitimement n avoir aucun texte —
+         * un media sans legende. Les confondre placerait la banniere avant la
+         * premiere photo du fil.
+         *
+         * ⚠️ CHAMP FACULTATIF : un client qui l ignore se comporte comme avant.
+         */
+        chiffre: m._count.e2eeEnveloppes > 0,
         type: m.type,
         status: m.status,
         // 🐛 LE MESSAGE PORTAIT SON APPEL EN BASE, ET NE LE DISAIT PAS.
