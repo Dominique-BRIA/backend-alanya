@@ -38,7 +38,17 @@ export type TypeMessage =
 
 export type ResultatEnvoi =
   | { ok: true; message: Awaited<ReturnType<typeof creerLigneMessage>> }
-  | { ok: false; motif: "BLOQUE" | "MEDIA_ETRANGER" | "CONTENU_TROP_LONG" };
+  | {
+      ok: false;
+      motif:
+        | "BLOQUE"
+        | "MEDIA_ETRANGER"
+        | "CONTENU_TROP_LONG"
+        // La conversation est chiffree : ce chemin-la ne peut pas y ecrire.
+        | "CONVERSATION_CHIFFREE"
+        // Le chemin chiffre a presente du texte, ce qu il ne doit jamais faire.
+        | "CONTENU_EN_CLAIR";
+    };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
 function creerLigneMessage(data: Parameters<typeof prisma.message.create>[0]["data"]) {
@@ -134,6 +144,16 @@ export async function creerMessage(params: {
   /// décroché, que le déposant en est bien l'appelant et qu'aucun message ne
   /// l'a déjà prolongé. Cette fonction ne fait qu'écrire ce qu'on lui donne.
   callId?: string;
+  /// Ce message est-il l'enveloppe VIDE d'un contenu chiffré ?
+  ///
+  /// 🔴 SEUL LE CHEMIN CHIFFRÉ A LE DROIT D'ÉCRIRE DANS UNE CONVERSATION
+  /// CHIFFRÉE, et il le fait sans contenu : le texte vit dans
+  /// `e2ee_enveloppes`, jamais ici.
+  ///
+  /// ⚠️ CE DRAPEAU N'EST PAS UNE PERMISSION QU'ON S'ACCORDE : il dit « je
+  /// n'apporte pas de texte ». La garde ci-dessous refuse quand même si un
+  /// contenu l'accompagne.
+  chiffre?: boolean;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
 
@@ -141,8 +161,41 @@ export async function creerMessage(params: {
   // indispensable au surlignage : sans lui, rien à mettre en évidence.
   const conversation = await prisma.conversation.findUnique({
     where: { id: convId },
-    select: { isGroup: true },
+    select: { isGroup: true, e2eeActif: true },
   });
+
+  /*
+   * 🔴 ON N'ÉCRIT PAS EN CLAIR DANS UNE CONVERSATION CHIFFRÉE.
+   *
+   * 🐛 TROU RÉEL, TROUVÉ EN RELISANT CE QUI ÉCRIT DES MESSAGES. Rien
+   * n'empêchait la route ordinaire NI l'API v1 des entreprises de déposer du
+   * texte en clair dans une conversation marquée `e2eeActif`. L'écran aurait
+   * annoncé « chiffrée » pendant que le serveur rangeait le contenu lisible à
+   * côté — la pire des situations, puisqu'elle ment à l'utilisateur au lieu de
+   * simplement échouer.
+   *
+   * ⚠️ LA GARDE VIT ICI PARCE QUE QUATRE ROUTES PASSENT PAR CETTE FONCTION :
+   * le fil ordinaire, l'API v1 des messages, celle des médias, et le dépôt de
+   * messagerie vocale. La poser dans chacune, c'est accepter qu'une cinquième
+   * l'oublie — et c'est exactement ainsi que les trois oublis du répondeur sont
+   * nés.
+   *
+   * 🔴 CE QUE CE REFUS RÉVÈLE, ET QU'IL FAUT REGARDER EN FACE : l'API v1 ne
+   * POURRA jamais écrire dans une conversation chiffrée. Une entreprise qui
+   * envoie par clé d'API n'a aucune identité cryptographique, donc aucune
+   * session, donc rien à chiffrer avec. Ce n'est pas une limite à lever plus
+   * tard : c'est ce que le bout en bout signifie.
+   */
+  if (conversation?.e2eeActif === true) {
+    if (params.chiffre !== true) {
+      return { ok: false, motif: "CONVERSATION_CHIFFREE" };
+    }
+    if ((params.content ?? "").trim() !== "") {
+      // Le drapeau dit « pas de texte » ; du texte l'accompagne. On refuse
+      // plutôt que de choisir à la place de l'appelant.
+      return { ok: false, motif: "CONTENU_EN_CLAIR" };
+    }
+  }
   const mentionneTous =
     params.mentionneTous === true &&
     conversation?.isGroup === true &&

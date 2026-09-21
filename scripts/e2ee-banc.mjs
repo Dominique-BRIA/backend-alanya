@@ -570,6 +570,33 @@ async function main() {
   )
   await prisma.conversation.delete({ where: { id: groupe.id } })
 
+  console.log("\n⑰ Une conversation chiffrée REFUSE le texte en clair")
+  /*
+   * 🔴 LE CONTRÔLE LE PLUS IMPORTANT DE CE LOT.
+   *
+   * Sans cette garde, l'écran annonce « chiffrée » pendant que le serveur
+   * range le contenu lisible à côté. Il MENT à l'utilisateur au lieu
+   * d'échouer — et un mensonge sur du chiffrement vaut moins que pas de
+   * chiffrement du tout, puisqu'il fait prendre des risques qu'on croyait
+   * écartés.
+   */
+  let refuseClair = ""
+  try {
+    await appel("/api/conversations/" + conv.id + "/messages", {
+      methode: "POST",
+      jeton: sessionA.accessToken,
+      corps: { content: "du clair dans un fil chiffré", type: "TEXT" },
+    })
+  } catch (e) {
+    refuseClair = e.message
+  }
+  verifier(refuseClair !== "", "la route ordinaire refuse d'écrire en clair")
+
+  const fuite = await prisma.message.findFirst({
+    where: { convId: conv.id, content: { not: null } },
+    select: { content: true },
+  })
+  verifier(fuite === null, "aucun message en clair n'a atterri dans le fil chiffré")
   console.log(
     `\n════ ${echecs === 0 ? "TOUT EST VERT" : `${echecs} ÉCHEC(S)`} ════\n`,
   )
