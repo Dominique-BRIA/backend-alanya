@@ -162,15 +162,30 @@ export async function accueilPourAppelant(prisma, userId) {
    * plus DÉLIBÉRÉ. Dans les deux cas l'appel ne sonne pas ; c'est l'accueil joué
    * qui diffère, et c'est là que la priorité compte.
    */
+  /*
+   * 🔴 ÉTEINT VEUT DIRE ÉTEINT — L'INTERRUPTEUR EST UN MAÎTRE, PAS UN AVIS.
+   *
+   * 🐛 Cette condition venait APRÈS le calcul des réglages horaires, et elle
+   * était court-circuitée par eux : `if (!sansSonnerie && actif !== 1)`. Une
+   * plage programmée passait donc outre l'interrupteur. On éteignait son
+   * répondeur, et le lundi venu les appels partaient quand même à la
+   * messagerie, sans que rien ne dise pourquoi.
+   *
+   * ⚠️ LE FICHIER PORTAIT DÉJÀ LA RÈGLE, POUR L'ABSENCE SEULEMENT : éteindre
+   * efface `repondeurJusquA`, au nom de « éteint doit vouloir dire éteint ».
+   * Les plages, écrites plus tard et dans un autre fichier, y ont échappé —
+   * troisième fois que ce découpage laisse passer la même classe d'oubli.
+   *
+   * ⚠️ ON N'EFFACE PAS LES PLAGES POUR AUTANT, on cesse de les appliquer. Une
+   * programmation hebdomadaire est un travail de saisie ; la détruire parce
+   * qu'on éteint une semaine obligerait à la refaire au retour. Rallumer
+   * l'interrupteur la remet en service telle quelle.
+   */
+  if (compte.repondeurActif !== 1) return null;
+
   const enDuree = enAbsence(compte.repondeurJusquA);
   const plageActive = enDuree ? null : (plages.find((p) => plageCouvreMaintenant(p)) ?? null);
   const sansSonnerie = enDuree || plageActive !== null;
-
-  // ⚠️ L'ABSENCE PASSE OUTRE L'INTERRUPTEUR. Poser une absence EST une demande
-  // explicite, et plus récente que l'état de l'interrupteur : refuser de la
-  // servir parce qu'une case est décochée quelque part ferait sonner quelqu'un
-  // qui vient de dire qu'il ne répondrait pas.
-  if (!sansSonnerie && compte.repondeurActif !== 1) return null;
 
   /*
    * L'ACCUEIL DE LA PLAGE, QUAND ELLE EN DÉSIGNE UN.
