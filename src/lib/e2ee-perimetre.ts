@@ -14,6 +14,16 @@
  *   4 → CENTRE VOCAL : un standard dont les touches jouent des sons ;
  *   9 → ADMINISTRATEUR (modération de la plateforme).
  *
+ * ⚠️ ET LE 1 ? IL N EXISTE PAS — ou plus exactement, personne ne sait. Il n est
+ * documenté nulle part, lu nulle part dans le code, et absent de la base. C est
+ * la meilleure illustration de ce que la liste blanche apporte : ce type est
+ * refusé SANS QUE QUICONQUE AIT EU A Y PENSER.
+ *
+ * Avec une liste noire, il aurait fallu deviner son existence pour l écarter —
+ * et le jour où quelqu un s en servira, il serait chiffrable par défaut. La
+ * question « pourquoi n exclut-on pas le 1 ? » n a donc pas de réponse : on
+ * n exclut rien, on AUTORISE le seul type dont on sait ce qu il veut dire.
+ *
  * 🐛 PREMIÈRE VERSION DE CETTE RÈGLE : ELLE N'EXCLUAIT QUE 3 ET 4.
  *
  * L'erreur venait d'un raisonnement plausible et faux — « un standard n'est pas
