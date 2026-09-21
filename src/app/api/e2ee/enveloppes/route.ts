@@ -72,7 +72,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       e.destinataireId !== "" &&
       typeof e.destinataireDevice === "number" &&
       Number.isInteger(e.destinataireDevice) &&
-      // 1 = PreKeyWhisperMessage, 3 = WhisperMessage. Les deux seules valeurs
+      // 3 = PreKeyWhisperMessage (ouvre la session), 1 = WhisperMessage. Les deux seules valeurs
       // que la bibliothèque du client sait produire et relire.
       (e.type === 1 || e.type === 3) &&
       typeof e.corps === "string" &&

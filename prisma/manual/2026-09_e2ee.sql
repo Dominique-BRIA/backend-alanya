@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS e2ee_enveloppes (
                     REFERENCES users("alanyaID") ON DELETE CASCADE ON UPDATE CASCADE,
   destinataire_device INTEGER NOT NULL,
 
-  -- 1 = PreKeyWhisperMessage (ouvre la session), 3 = WhisperMessage (session
+  -- 3 = PreKeyWhisperMessage (ouvre la session), 1 = WhisperMessage (session
   -- déjà établie). Ce sont les valeurs du protocole, reprises telles quelles
   -- plutôt que renommées : elles voyagent jusqu'à la bibliothèque du client,
   -- qui ne connaît que celles-là.

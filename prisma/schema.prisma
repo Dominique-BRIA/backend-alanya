@@ -3063,7 +3063,7 @@ model E2eeEnveloppe {
   destinataire       User   @relation("E2eeDestinataire", fields: [destinataireId], references: [id], onDelete: Cascade)
   destinataireDevice Int    @map("destinataire_device")
 
-  /// 1 = PreKeyWhisperMessage (ouvre la session), 3 = WhisperMessage.
+  /// 3 = PreKeyWhisperMessage (ouvre la session), 1 = WhisperMessage.
   ///
   /// Les valeurs du protocole, reprises telles quelles plutôt que renommées :
   /// elles voyagent jusqu'à la bibliothèque du client, qui ne connaît que
