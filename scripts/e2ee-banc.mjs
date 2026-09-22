@@ -786,6 +786,24 @@ async function main() {
   verifier(rejoue2.retiree === false, "se déconnecter deux fois ne produit pas d'erreur")
 
   await prisma.e2eeIdentite.deleteMany({ where: { deviceId: 999000001 } })
+  /*
+   * 🧹 ON RETIRE CE QU'ON A PUBLIÉ.
+   *
+   * ⚠️ UN BANC QUI LAISSE DES IDENTITÉS DERRIÈRE LUI FABRIQUE LE DÉFAUT QU'IL
+   * teste : un vrai navigateur qui se connecte ensuite sur le même compte se
+   * retrouve avec deux identités, et chaque message part en double dont un
+   * exemplaire que personne ne lira jamais.
+   */
+  const restes = await prisma.e2eeIdentite.findMany({
+    where: { userId: { in: [a.user.id, b.user.id] } },
+    select: { deviceId: true },
+  })
+  await prisma.e2eeEnveloppe.deleteMany({
+    where: { remisLe: null, destinataireDevice: { in: restes.map((r) => r.deviceId) } },
+  })
+  await prisma.e2eeIdentite.deleteMany({
+    where: { userId: { in: [a.user.id, b.user.id] } },
+  })
   console.log(
     `\n════ ${echecs === 0 ? "TOUT EST VERT" : `${echecs} ÉCHEC(S)`} ════\n`,
   )

@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -136,6 +137,45 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       corps: e!.corps,
       messageId,
     })),
+  });
+
+  /*
+   * ══════════════ LA SONNETTE, ET ELLE EST ICI POUR UNE RAISON ══════════════
+   *
+   * 🐛 « LE MESSAGE N'ARRIVE PAS INSTANTANEMENT » — constate par le user le
+   * 21/09/2026 : Alice ecrit, rien ne bouge chez Bob ; Bob ecrit a son tour, et
+   * c'est SEULEMENT LA que le message d'Alice apparait.
+   *
+   * LA CAUSE. Un message ordinaire part par le WebSocket, qui l'ecrit ET le
+   * diffuse dans la foulee. Un message chiffre, lui, part en REST — et la route
+   * REST ne diffuse RIEN, volontairement (voir `creerMessage`). Personne ne
+   * prevenait donc le destinataire. Il ne decouvrait le message qu'au prochain
+   * rafraichissement de son fil, c'est-a-dire quand il ecrivait lui-meme.
+   *
+   * 🔴 POURQUOI LA SONNETTE EST DANS LE DEPOT ET NON DANS LA CREATION DU
+   * MESSAGE. Un message chiffre s'ecrit en DEUX temps : la ligne du fil, puis
+   * les enveloppes qui portent le texte. Sonner apres la premiere etape
+   * enverrait le destinataire relever un fil ou RIEN ne l'attend encore — et il
+   * ne serait pas rappele. C'est le depot, et lui seul, qui rend le message
+   * lisible : c'est donc de lui que part l'avis.
+   *
+   * ⚠️ ON NE SONNE PAS CHEZ SOI. L'expediteur est souvent son propre
+   * destinataire — ses autres appareils. Mais celui qui vient d'ecrire a deja
+   * son texte a l'ecran : le renvoyer relever lui ferait un aller-retour pour
+   * rien. Ses AUTRES appareils, eux, sont bien prevenus : ils sont dans la
+   * liste, c'est le compte qui est exclu... et c'est justement ce qu'on ne
+   * peut pas distinguer ici — la trame vise un COMPTE, pas un appareil. On
+   * accepte donc l'aller-retour de trop plutot que de priver un second
+   * appareil de sa remise immediate.
+   *
+   * ⚠️ ELLE NE PEUT PAS FAIRE ECHOUER LE DEPOT. `previensDesPersonnes` ne leve
+   * jamais et rend `false` quand le pont est absent : le message est ecrit, il
+   * est valide, et au pire il arrivera a la prochaine ouverture.
+   */
+  await previensDesPersonnes({
+    personnes: [...new Set(lues.map((e) => e!.destinataireId))],
+    type: "e2ee_arrivee",
+    donnees: { convId: r.convId as string, messageId },
   });
 
   return ok({ deposees: lues.length }, 201);
