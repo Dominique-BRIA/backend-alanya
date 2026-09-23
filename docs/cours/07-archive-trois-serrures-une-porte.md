@@ -508,7 +508,100 @@ la lecture.
 
 ---
 
-## 13. Où nous en sommes
+## 13. La troisième serrure : celle qu'on ne retient pas
+
+Les deux premières demandent quelque chose : un mot de passe, ou douze mots
+notés quelque part. La troisième ne demande rien — juste le geste que les gens
+font déjà tous les jours.
+
+WebAuthn sert habituellement à **se connecter**. Son extension `prf` sert à
+autre chose :
+
+```
+  même clé d'accès + même sel ──▶ TOUJOURS le même secret (32 octets)
+  clé d'accès absente          ──▶ rien, et rien ne le remplace
+```
+
+La clé d'accès calcule ce secret à partir de **sa propre clé privée**, qui ne
+sort jamais de l'appareil. Il n'est stocké nulle part — ni chez nous, ni dans
+le navigateur. Il est **recalculé** à chaque fois, après vérification.
+
+> 🔴 **Ce secret ne nous traverse jamais.** Contrairement à la serrure « mot de
+> passe » — que notre serveur reçoit à chaque connexion — celle-ci reste fermée
+> même si nous sommes compromis. C'est la plus forte des trois.
+
+### Deux décisions qui évitent une table
+
+**Clé découvrable** (`residentKey: "required"`). Sans cela, il faudrait
+connaître l'identifiant de la clé pour la redemander — donc le ranger sur le
+serveur, donc une table de plus. Une clé découvrable se retrouve toute seule.
+
+**Deux appels à la création.** Certains navigateurs ne rendent pas le résultat
+PRF au moment de créer la clé. On crée, puis on demande : une vérification de
+plus, **une seule fois**, contre un chemin qui marche partout.
+
+### Le sel PRF est une constante — et c'est cohérent
+
+Au §4, nous avons posé que les paramètres de dérivation vivent **avec** la
+serrure. Ici, le sel PRF est une constante dans le code. Contradiction ?
+
+Non, et la distinction est instructive :
+
+| | durcir un coût | changer le sel PRF |
+|---|---|---|
+| effet | protection accrue | **autre secret** |
+| veut-on le faire ? | oui, un jour | jamais |
+| conséquence sur l'existant | doit rester lisible | serrure morte |
+
+> **Un paramètre qu'on ne fera jamais évoluer n'a rien à faire en base.** L'y
+> ranger suggérerait le contraire à qui lira le code plus tard.
+
+Et comme le secret PRF fait 256 bits tirés au sort, il suit la règle du §3 :
+**une seule itération**. L'étirer coûterait sans rien protéger.
+
+### Ce qu'un banc peut prouver, et ce qu'il ne peut pas
+
+WebAuthn n'existe que dans un navigateur, derrière une vérification humaine. Il
+n'y a pas de bibliothèque à simuler.
+
+Le banc utilise donc un **authentificateur virtuel** (protocole DevTools de
+Chrome), qui se comporte comme un vrai : clé découvrable, secret PRF stable. Le
+cycle complet est éprouvé — poser la serrure, tout effacer en local, rouvrir
+**sans rien taper** :
+
+```
+④ Rouvrir SANS mot de passe ni clé de récupération
+  ✓ le trousseau seul ouvre l'archive
+  ✓ et rend les quatre messages
+
+⑤ Sans la clé d'accès, la serrure ne sert à rien
+  ✓ sans l'appareil, le trousseau n'ouvre PAS
+  ✓ mais les autres serrures restent
+```
+
+Le ⑤ compte autant que le ④ : on **retire** l'authentificateur — l'appareil
+perdu, volé, ou simplement un autre navigateur — et la serrure doit échouer.
+C'est le comportement correct, et c'est pour cela que la clé de récupération
+existe à côté.
+
+> ⚠️ **Ce qu'aucun banc automatique ne prouvera : que Face ID marche.** Il
+> faudrait un visage. Ce qui est prouvé, c'est que notre code demande la bonne
+> chose et en fait le bon usage.
+
+### Un dernier détail d'écran
+
+Le bouton « Restaurer avec cet appareil » n'est **pas désactivé** quand le champ
+de secret est vide — contrairement aux deux autres. C'est tout l'intérêt de
+cette serrure, et l'écran doit le montrer.
+
+Et on ne le propose que si le navigateur sait faire :
+
+> ⚠️ Un bouton qui échouera après une demande de Face ID est **pire** que pas de
+> bouton : la personne croit avoir raté quelque chose.
+
+---
+
+## 14. Où nous en sommes
 
 | | |
 |---|---|
@@ -521,17 +614,17 @@ la lecture.
 | **Clé de récupération (12 mots)** | ✅ **(ce chapitre)** |
 | **Restauration automatique à la connexion** | ✅ **(ce chapitre)** |
 | **Activée par défaut, refus mémorisé** | ✅ **(ce chapitre)** |
-| Serrure « trousseau » (WebAuthn PRF) | ⏳ **suivant** |
+| **Serrure « trousseau » (WebAuthn PRF)** | ✅ **(ce chapitre)** |
 | Chiffrement des médias | ⏸️ remis |
 | Client mobile | ⏳ |
 
 **Bancs** : `e2ee-serrures` (28 contrôles), `e2ee-archive-banc` (22 gardes
 serveur), `e2ee-sauvegarde` (chemin complet), `e2ee-navigateur` et `e2ee-ecran`
-(vrai Chrome). Tous verts.
+(vrai Chrome), `e2ee-trousseau` (authentificateur virtuel). Tous verts.
 
 ---
 
-## 14. Ce qu'il faut retenir
+## 15. Ce qu'il faut retenir
 
 1. **Confidentialité persistante et sauvegarde durable sont contradictoires.**
    Il faut deux boîtes, pas une boîte plus maligne.
@@ -563,3 +656,10 @@ serveur), `e2ee-sauvegarde` (chemin complet), `e2ee-navigateur` et `e2ee-ecran`
 
 10. **Une spécification n'est pas une mesure.** Ce que fait le navigateur se
     vérifie dans un navigateur.
+
+11. **Un paramètre qu'on ne fera jamais évoluer n'a rien à faire en base.**
+    L'y ranger suggère qu'on pourrait le changer — ici, cela tuerait la
+    serrure.
+
+12. **Ne proposez pas ce que vous ne pouvez pas tenir.** Un bouton qui
+    échouera après une demande de vérification est pire que pas de bouton.

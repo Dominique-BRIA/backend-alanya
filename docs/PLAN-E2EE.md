@@ -1,4 +1,4 @@
-# Plan d'implémentation — Chiffrement de bout en bout
+Je m# Plan d'implémentation — Chiffrement de bout en bout
 
 > **Établi le 23/09/2026**, après audit du code existant.
 >
@@ -25,6 +25,7 @@
 | Lot 0 — fuites et manques (traduction, push, aperçu, médias, pré-clés) | ✅ |
 | Lot 1 — codes de sécurité | ✅ |
 | Lot 2 — purge des enveloppes (2.3 reporté sur mesure) | ✅ |
+| **Lot 3 — archive chiffrée, trois serrures** | ✅ |
 
 **Bancs** : `e2ee-banc.mjs`, `e2ee-nonfuite.mjs`, `e2ee-purge.mjs` (backend),
 `e2ee-web.mjs`, `e2ee-empreinte.mjs` (modules navigateur),
