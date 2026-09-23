@@ -43,26 +43,25 @@
 
 Quatre défauts réels, tous invisibles à l'écran.
 
-### 🔴 E-01 — La traduction exfiltre le clair d'un fil chiffré
+### 🟠 E-01 — Un moteur de traduction EN LIGNE, s'il est choisi, exfiltre le clair
 
-**`src/app/api/translate/route.ts`**
+> ⚠️ **Ce point a été corrigé le 23/09/2026, après lecture du client.** Je
+> l'avais d'abord écrit en rouge, sur la seule lecture du relais serveur.
+> C'était faux, et c'est exactement la faute contre laquelle le chapitre 3
+> met en garde : n'avoir pas regardé **tous** les chemins.
 
-Le relais de traduction prend le texte du client, l'envoie à un fournisseur
-tiers (Azure, DeepL, Google), et **le met dans un cache partagé**.
+**Ce qui est déjà juste** — `src/services/traduction-service.ts` :
 
-Un utilisateur qui appuie sur « traduire » dans une conversation chiffrée
-envoie donc son message :
+- le moteur du **navigateur est le défaut** ;
+- et il n'y a **aucun repli silencieux** vers le relais :
 
-1. à notre serveur ;
-2. à Microsoft ou Google ;
-3. dans un cache lisible par d'autres comptes.
+> *« Pas de repli sur le relais : l'utilisateur a choisi que rien ne sorte de
+> son appareil, un échec local ne vaut pas autorisation de sortir. »*
 
-**L'écran affiche « chiffré » pendant ce temps.** C'est le pire genre de fuite :
-celle que l'utilisateur déclenche lui-même en croyant être protégé.
-
-⚠️ Ce n'est pas un défaut du relais — il fait exactement ce pour quoi il a été
-écrit. C'est un défaut de **périmètre** : personne n'a rapproché les deux
-fonctionnalités.
+**Ce qui reste à faire, et c'est petit** : le relais est toujours
+*sélectionnable* dans les Réglages, et **rien ne relie ce réglage à l'état
+chiffré d'une conversation**. Un utilisateur qui a choisi Azure fuite — pas
+par défaut, mais par réglage.
 
 ### 🔴 E-02 — Aucune notification pour un message chiffré
 
@@ -109,8 +108,8 @@ paie deux fois.
 
 | # | ticket | où |
 |---|---|---|
-| **0.1** | **Interdire la traduction serveur sur un fil chiffré.** Le client refuse, et l'écran explique pourquoi. Le serveur refuse aussi — une garde côté client seul se contourne. | web + `translate/route.ts` |
-| **0.2** | **Traduction sur l'appareil** pour les fils chiffrés, ou rien. Un moteur local existe déjà côté navigateur (mentionné dans le relais). Sinon : bouton absent, pas grisé sans explication. | web |
+| **0.1** | **Dans un fil chiffré, forcer le moteur sur l'appareil** — quel que soit le réglage de l'utilisateur. Le défaut est déjà bon ; c'est le réglage qui n'est relié à rien. | `traduction-service.ts` |
+| **0.2** | **Le serveur refuse aussi**, en garde de fond : `/api/translate` rejette un texte venant d'une conversation chiffrée. Une garde côté client seul se contourne. ⚠️ Suppose que le client dise de quelle conversation il parle — à concevoir sans transformer le relais en oracle. | `translate/route.ts` |
 | **0.3** | **Notification pour les messages chiffrés.** Le push part du **dépôt des enveloppes** — même endroit que la sonnette, et pour la même raison. Le contenu de la notification est générique : « Nouveau message », jamais un aperçu. | `e2ee/enveloppes/route.ts` |
 | **0.4** | **Aperçu de conversation** : poser un libellé neutre (« Message chiffré ») côté serveur, ou laisser le client l'afficher à partir de `e2ee_actif`. Décision à prendre : le serveur ne doit pas mentir sur ce qu'il sait. | backend + web |
 | **0.5** | **Dire que les médias ne sont pas chiffrés.** Mention explicite au moment de joindre un fichier dans un fil chiffré. | web |
@@ -141,7 +140,7 @@ cryptographie, seulement l'écran.
 | **1.1** | Calculer l'empreinte des deux identités. ⚠️ Les identifiants doivent être **stables et identiques des deux côtés**, sinon les deux personnes voient des codes différents et concluent à une attaque. |
 | **1.2** | Écran de comparaison : 60 chiffres en 12 groupes de 5, plus un QR code. Lisible au téléphone, à voix haute. |
 | **1.3** | Marquer un correspondant comme **vérifié**, et le montrer dans le fil. |
-| **1.4** | **Décider ce qui se passe quand la clé change APRÈS vérification.** C'est le seul cas où bloquer se défend : l'utilisateur avait affirmé connaître cette clé. Aujourd'hui on avertit sans bloquer — c'est bon par défaut, discutable après vérification. |
+| **1.4** | ✅ **DÉCIDÉ (user, 23/09) : le modèle WhatsApp.** On avertit, on ne bloque **jamais** — vérifié ou non. La vérification achète de la **visibilité**, pas un panneau stop. ⚠️ Conséquence à assumer : un correspondant vérifié dont la clé change peut recevoir un message avant que l'utilisateur n'ait réagi. C'est le choix de la messagerie la plus utilisée au monde, et il se défend : bloquer produit surtout des gens bloqués. ⚠️ Corollaire : l'avertissement doit être **actif par défaut** sur un contact vérifié — chez WhatsApp il est désactivé, ce qui vide la fonctionnalité de son sens. |
 | **1.5** | Relier l'avertissement existant à cet écran : l'alerte doit **mener** à la comparaison, pas seulement informer. |
 
 ---
@@ -173,7 +172,36 @@ cryptographie, seulement l'écran.
 | **3.4** | **Dépôt incrémental**, à chaque lot de messages lus. ⚠️ Pas au moment du changement de téléphone : un téléphone cassé n'exporte rien. |
 | **3.5** | **Restauration** sur appareil neuf. ⚠️ L'archive ne restaure **pas** l'identité Signal : le nouvel appareil en publie une neuve, et les correspondants voient « la clé a changé ». D'où le lot 1 en prérequis. |
 | **3.6** | **Écran** : dire au moment de la création ce qui est sauvegardé, et ce qui est perdu si le trousseau ne suit pas. Pas dans les conditions d'utilisation. |
-| **3.7** | **Serrure 2 — le mot de passe du compte.** ⚠️ Exige de séparer les dérivations : aujourd'hui `login/route.ts` reçoit le mot de passe **en clair**. Refonte connexion + inscription + changement de mot de passe, web **et** mobile. À décider séparément. |
+| **3.7** | ⛔ **ABANDONNÉ (user, 23/09) : pas de réécriture de l'authentification.** Donc **pas de serrure dérivée du mot de passe**. Voir la note ci-dessous — ce n'est pas neutre. |
+| **3.8** | **Clé de récupération affichée, EN OPTION.** La compensation de l'abandon de 3.7, et elle est quasi gratuite : la clé maîtresse s'enveloppe autant de fois qu'on veut. Personne ne la subit, et le cas « tout est perdu » cesse d'être fatal. |
+
+---
+
+### ⚠️ Ce que l'abandon de 3.7 coûte — à assumer explicitement
+
+Sans serrure dérivée du mot de passe, **l'archive n'a qu'une serrure** : le
+trousseau de l'appareil.
+
+Si le trousseau ne suit pas, **l'historique est perdu** :
+
+- passage Android → iPhone ;
+- synchronisation du trousseau désactivée ;
+- téléphone perdu sans sauvegarde système.
+
+Le raisonnement du user se tient : le mot de passe est **haché** en base
+(bcrypt), et l'objectif — que les messages ne soient jamais stockés en clair —
+est déjà atteint sans toucher à l'authentification.
+
+⚠️ **Une précision, parce qu'elle porte sur la décision** : le hachage au repos
+ne couvrait pas la préoccupation d'origine. Le mot de passe **transite en clair
+par le serveur à chaque connexion** — un journal, un vidage mémoire, un serveur
+compromis le voient à cet instant. C'est ce que la dérivation à deux sels
+aurait supprimé.
+
+Mais cela ne change **rien** au chiffrement des messages, qui est le sujet.
+La décision tient ; c'est son périmètre qu'il fallait nommer.
+
+➜ **Le ticket 3.8 est donc la vraie compensation**, et je le recommande.
 
 ---
 
@@ -225,11 +253,27 @@ cryptographie, seulement l'écran.
   LOT 5 : continu
 ```
 
-**Trois décisions vous appartiennent, et elles bloquent :**
+**Les trois décisions sont prises** (user, 23/09/2026) :
 
-1. **Ticket 0.2** — traduction sur l'appareil pour les fils chiffrés, ou bouton absent ?
-2. **Ticket 1.4** — bloquer, ou seulement avertir, quand la clé d'un correspondant **vérifié** change ?
-3. **Ticket 3.7** — réécrit-on l'authentification pour la seconde serrure, ou reste-t-on sur le trousseau seul ?
+| ticket | décision |
+|---|---|
+| **0.1** | La traduction est **déjà** sur l'appareil par défaut. Il reste à la **forcer** dans un fil chiffré, quel que soit le réglage. |
+| **1.4** | **Modèle WhatsApp** : on avertit, on ne bloque jamais. |
+| **3.7** | **Pas de réécriture de l'authentification.** Une seule serrure sur l'archive, plus la clé de récupération en option (3.8). |
 
-**Je commencerais par le lot 0.1–0.3** : ce sont les trois points qui font
-qu'aujourd'hui, le mot « chiffré » affiché à l'écran n'est pas tenu.
+➜ **En cours : lot 0.**
+
+---
+
+## 12. Journal des décisions
+
+| date | décision | par |
+|---|---|---|
+| 21/09 | Périmètre : personnel ↔ personnel uniquement | user |
+| 21/09 | Anciens messages lisibles + bannière « à partir d'ici, chiffré » | user |
+| 21/09 | Changement de clé : avertir, ne pas bloquer | user |
+| 21/09 | Les messages en clair restent en cache | user |
+| 21/09 | Chiffrement des médias : remis | user |
+| 23/09 | Sauvegarder les **messages**, pas les clés Signal | analyse |
+| 23/09 | Codes de sécurité : modèle WhatsApp | user |
+| 23/09 | Pas de réécriture de l'authentification | user |
