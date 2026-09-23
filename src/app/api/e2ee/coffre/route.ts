@@ -55,7 +55,17 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
    * sans le secret, ces octets ne sont qu'un chiffré authentifié. Les retenir
    * n'ajouterait aucune protection et empêcherait simplement de restaurer.
    */
-  return ok({ serrures });
+  /*
+   * ⚠️ LE REFUS VOYAGE AVEC LES SERRURES. Le client doit pouvoir
+   * distinguer « pas encore activée » de « refusée » : la première appelle
+   * une activation silencieuse, la seconde l'interdit.
+   */
+  const moi = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { e2eeSauvegardeRefusee: true },
+  });
+
+  return ok({ serrures, refusee: moi?.e2eeSauvegardeRefusee === true });
 });
 
 export const PUT = withAuth(async (req: NextRequest, userId: string) => {
@@ -128,6 +138,16 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
       parametres: r.parametres as string,
     },
     select: { type: true, updatedAt: true },
+  });
+
+  /*
+   * ⚠️ POSER UNE SERRURE LÈVE LE REFUS. C'est le geste par lequel
+   * l'utilisateur revient sur sa décision — le laisser en place
+   * empêcherait toute réactivation future sans qu'on comprenne pourquoi.
+   */
+  await prisma.user.update({
+    where: { id: userId },
+    data: { e2eeSauvegardeRefusee: false },
   });
 
   return ok({ serrure }, 201);

@@ -122,9 +122,24 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string) => {
    * ⚠️ DANS UNE TRANSACTION : à moitié fait, ce ménage produit exactement l'un
    * des deux états qu'on vient d'écarter.
    */
+  /*
+   * 🔴 EFFACER, C'EST REFUSER — et cette ligne est indispensable depuis que
+   * la sauvegarde s'active d'elle-même. Sans elle, l'utilisateur supprime
+   * son archive, se reconnecte, et la retrouve recréée. Il la supprimerait
+   * encore, et encore.
+   *
+   * ⚠️ DANS LA MÊME TRANSACTION que la suppression : à moitié fait, on aurait
+   * soit une archive sans refus (donc recréée), soit un refus sans
+   * suppression (donc une archive orpheline qu'on n'alimente plus).
+   */
   const [blocs, serrures] = await prisma.$transaction([
     prisma.e2eeArchiveBloc.deleteMany({ where: { userId } }),
     prisma.e2eeSerrure.deleteMany({ where: { userId } }),
+    prisma.user.update({
+      where: { id: userId },
+      data: { e2eeSauvegardeRefusee: true },
+    }),
+
   ]);
 
   return ok({ blocsSupprimes: blocs.count, serruresSupprimees: serrures.count });

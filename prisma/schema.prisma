@@ -150,18 +150,30 @@ model User {
   /// foi — à clarifier avec l'équipe avant que du code ne s'appuie dessus.
   isDelete Boolean @default(false) @map("isDelete")
 
-  refreshTokens    RefreshToken[]
-  contacts         Contact[]             @relation("UserContacts")
-  contactOf        Contact[]             @relation("ContactOf")
-  contactLists     ContactList[]         @relation("UserContactLists")
+  refreshTokens         RefreshToken[]
+  contacts              Contact[]           @relation("UserContacts")
+  contactOf             Contact[]           @relation("ContactOf")
+  contactLists          ContactList[]       @relation("UserContactLists")
   /// Listes d'AUTRES comptes ou ce compte figure comme membre. Relation inverse
   /// seule : elle n'ajoute aucune colonne a `users`.
-  contactListsIn   ContactListMember[]   @relation("ContactListMemberOf")
+  contactListsIn        ContactListMember[] @relation("ContactListMemberOf")
   /// Catalogue des sonneries que ce compte a importees. Le FICHIER suivait deja
   /// le compte (il est dans `media_files`) ; la liste de ce qui a ete importe,
   /// non — elle vivait en localStorage. Voir [UserRingtone].
-  ringtones        UserRingtone[]
-  e2eeIdentites    E2eeIdentite[]
+  ringtones             UserRingtone[]
+  e2eeIdentites         E2eeIdentite[]
+  /// L'utilisateur a-t-il REFUSÉ la sauvegarde chiffrée ?
+  ///
+  /// 🔴 UN REFUS DOIT TENIR. La sauvegarde s'active d'elle-même à la première
+  /// connexion ; sans cette mémoire, quelqu'un qui la désactive la verrait
+  /// revenir à la connexion suivante. Ce ne serait pas une maladresse, ce
+  /// serait passer outre une décision explicite sur ses propres données.
+  ///
+  /// ⚠️ SUR LE COMPTE, PAS SUR L'APPAREIL : le refus suit la personne. Le
+  /// ranger localement le ferait oublier au premier navigateur neuf — c'est-
+  /// à-dire précisément quand la réactivation silencieuse se produirait.
+  e2eeSauvegardeRefusee Boolean             @default(false) @map("e2ee_sauvegarde_refusee")
+
   e2eeSerrures     E2eeSerrure[]
   e2eeArchive      E2eeArchiveBloc[]
   e2eeEnvoyees     E2eeEnveloppe[]       @relation("E2eeExpediteur")
