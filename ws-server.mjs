@@ -361,10 +361,219 @@ function markOfflineIfGone(userId, ws) {
   removeClient(userId, ws);
   if (!clients.has(userId)) {
     announcePresence(userId, false).catch(() => {});
-    // Dernière socket fermée : ses appels en cours n'ont plus personne pour
-    // les porter. Sans cela, l'appel restait en sonnerie et son correspondant
-    // était considéré comme occupé indéfiniment.
-    clotureAppelsDeLUtilisateur(userId).catch(() => {});
+    // Dernière socket fermée : ses appels n'ont plus personne pour les porter.
+    // La sonnerie se clôt sur-le-champ, l'appel déjà décroché obtient un
+    // sursis — voir `deconnexionDuParticipant`.
+    deconnexionDuParticipant(userId).catch(() => {});
+  }
+}
+
+/*
+ * 🔴 UNE COUPURE RÉSEAU N'EST PAS UN RACCROCHAGE (chantier du 23/09/2026).
+ *
+ * Jusqu'ici, la fermeture de la dernière socket d'un compte clôturait ses
+ * appels SUR-LE-CHAMP : en tête-à-tête il ne restait plus deux participants,
+ * l'appel passait en ENDED et les deux écrans se fermaient. Deux secondes de
+ * tunnel, un changement de cellule, un Wi-Fi qui bascule vers la 4G — et
+ * l'appel était mort sans recours, alors que le réseau revenait aussitôt.
+ *
+ * L'appel DÉJÀ DÉCROCHÉ obtient désormais un sursis : le correspondant est
+ * prévenu (« Reconnexion… »), et la clôture n'a lieu qu'à l'expiration du
+ * délai. Si la personne revient avant, tout reprend sans que personne n'ait eu
+ * à rappeler.
+ *
+ * ⚠️ LA SONNERIE, ELLE, N'A PAS DE SURSIS. Un appel jamais décroché dont
+ * l'appelant disparaît doit se fermer tout de suite : son correspondant serait
+ * sinon tenu pour « occupé » pendant tout le sursis — donc injoignable — pour
+ * un appel que plus personne ne porte.
+ */
+// Reglable sans rebuild : le banc d'essai le raccourcit, et la production
+// peut l'ajuster si le terrain montre que 45 s est trop long ou trop court.
+const SURSIS_RECONNEXION_MS = Number(process.env.SURSIS_RECONNEXION_MS ?? 45_000);
+
+/** `${callId}|${userId}` → minuteur de clôture armé à la déconnexion. */
+const sursisReconnexion = new Map();
+
+/** Instant de démarrage du process : voir `fermeAppelsOrphelins`. */
+const demarreLe = Date.now();
+
+function cleSursis(callId, userId) {
+  return `${callId}|${userId}`;
+}
+
+/**
+ * Dernière socket d'un compte fermée : on tranche appel par appel.
+ *
+ * `RINGING` → clôture immédiate, exactement comme avant ce chantier.
+ * `ONGOING` → sursis, et le correspondant l'apprend.
+ */
+async function deconnexionDuParticipant(userId) {
+  await clotureAppelsDeLUtilisateur(userId, ["RINGING"]);
+  await armerSursisReconnexion(userId);
+}
+
+/**
+ * Accorde son sursis à chaque appel décroché que ce compte portait.
+ *
+ * ⚠️ UN SURSIS DÉJÀ ARMÉ N'EST PAS RALLONGÉ. Une socket qui tombe, se rouvre
+ * une seconde et retombe ne doit pas repousser l'échéance à l'infini : le
+ * plafond compte depuis la PREMIÈRE chute, sinon un réseau qui clignote
+ * tiendrait l'appel ouvert indéfiniment sans qu'un mot n'y passe.
+ */
+async function armerSursisReconnexion(userId) {
+  try {
+    const parts = await prisma.callParticipant.findMany({
+      where: { userId, leftAt: null, call: { status: "ONGOING" } },
+      select: { callId: true },
+    });
+    for (const { callId } of parts) {
+      const cle = cleSursis(callId, userId);
+      if (sursisReconnexion.has(cle)) continue;
+      const participants = await callParticipantIds(callId);
+      for (const uid of participants) {
+        if (uid === userId) continue;
+        sendTo(uid, {
+          type: "call_state",
+          callId,
+          state: "reconnecting",
+          from: userId,
+          userId,
+          delaiMs: SURSIS_RECONNEXION_MS,
+        });
+      }
+      const minuteur = setTimeout(() => {
+        sursisReconnexion.delete(cle);
+        // Revenu entre-temps sans que l'annulation ait porté : on ne clôture
+        // pas quelqu'un qui tient une socket ouverte.
+        if (isUserOnline(userId)) return;
+        console.log(`[ws] Appel ${callId} : sursis expiré pour ${userId}, clôture`);
+        clotureAppelsDeLUtilisateur(userId, ["ONGOING"]).catch(() => {});
+      }, SURSIS_RECONNEXION_MS);
+      // Ce minuteur ne doit pas retenir le process au moment de s'arrêter.
+      minuteur.unref?.();
+      sursisReconnexion.set(cle, minuteur);
+      console.log(
+        `[ws] Appel ${callId} : ${userId} a perdu sa socket, sursis de ${SURSIS_RECONNEXION_MS / 1000}s`,
+      );
+    }
+  } catch (e) {
+    console.error("[ws] armement du sursis de reconnexion:", e);
+  }
+}
+
+/**
+ * Le compte est de retour : ses sursis tombent, et le correspondant l'apprend.
+ *
+ * Appelé à l'ouverture de CHAQUE socket, et non de la seule première : le
+ * retour peut venir d'un autre appareil du même compte, et l'appel doit vivre
+ * dès qu'un porteur existe.
+ */
+function annulerSursisReconnexion(userId) {
+  for (const [cle, minuteur] of sursisReconnexion) {
+    const separateur = cle.lastIndexOf("|");
+    if (cle.slice(separateur + 1) !== userId) continue;
+    const callId = cle.slice(0, separateur);
+    clearTimeout(minuteur);
+    sursisReconnexion.delete(cle);
+    console.log(`[ws] Appel ${callId} : ${userId} est revenu, sursis levé`);
+    callParticipantIds(callId)
+      .then((participants) => {
+        for (const uid of participants) {
+          if (uid === userId) continue;
+          sendTo(uid, { type: "call_state", callId, state: "resumed", from: userId, userId });
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+/**
+ * « Je suis toujours dans cet appel », renvoyé par le client dès que son
+ * WebSocket se rouvre.
+ *
+ * ⚠️ IDEMPOTENT, sur le modèle de `meeting_join` : le renvoyer alors que rien
+ * n'était tombé ne fait rien. Le client n'a donc pas à distinguer une première
+ * ouverture d'une reprise, ce qui lui demanderait un état de plus pour aucun
+ * gain.
+ *
+ * 🔴 IL NE RECRÉE RIEN. Si l'appel est clos — sursis expiré, ou l'autre a
+ * raccroché pendant la coupure — on répond `ended` : l'écran se ferme
+ * proprement au lieu d'attendre un média qui ne viendra jamais.
+ */
+async function handleCallRejoin(ws, msg) {
+  const callId = String(msg.callId ?? "");
+  if (!callId) return;
+  const appel = await prisma.call.findUnique({
+    where: { id: callId },
+    select: { status: true },
+  });
+  const encoreDedans = appel
+    ? await prisma.callParticipant.findFirst({
+        where: { callId, userId: ws.userId, leftAt: null },
+        select: { userId: true },
+      })
+    : null;
+  if (!appel || appel.status !== "ONGOING" || !encoreDedans) {
+    envoieA(ws, { type: "call_state", callId, state: "ended", from: ws.userId });
+    return;
+  }
+  annulerSursisReconnexion(ws.userId);
+  const participants = await callParticipantIds(callId);
+  envoieA(ws, {
+    type: "call_rejoined",
+    callId,
+    participants: participants.filter((uid) => uid !== ws.userId),
+  });
+}
+
+/** Envoi sur UNE socket précise, sans lever si elle vient de se fermer. */
+function envoieA(ws, payload) {
+  try {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+  } catch {
+    // Socket partie entre-temps : rien à faire, le client redemandera.
+  }
+}
+
+/**
+ * Filet pour les appels qu'un REDÉMARRAGE a laissés en l'air.
+ *
+ * Les sursis vivent en mémoire : un `pm2 restart` les efface, et l'appel
+ * resterait ONGOING pour toujours — ses participants tenus pour occupés, donc
+ * injoignables, sans que rien ne vienne les délivrer.
+ *
+ * ⚠️ IL NE TOUCHE QU'À CE QU'AUCUN SURSIS NE COUVRE. Quand les deux
+ * correspondants perdent le réseau en même temps, chacun a son minuteur : ce
+ * cas appartient au sursis, et ce balayage le laisse tranquille.
+ *
+ * ⚠️ ET PAS AVANT UN SURSIS COMPLET APRÈS LE DÉMARRAGE. Au redémarrage tout le
+ * monde est déconnecté quelques secondes : balayer tout de suite clorait des
+ * appels vivants dont les clients sont en train de rouvrir leur socket.
+ */
+async function fermeAppelsOrphelins() {
+  if (Date.now() - demarreLe < SURSIS_RECONNEXION_MS) return;
+  try {
+    const appels = await prisma.call.findMany({
+      where: { status: "ONGOING" },
+      select: { id: true },
+    });
+    for (const { id } of appels) {
+      let sousSursis = false;
+      for (const cle of sursisReconnexion.keys()) {
+        if (cle.startsWith(`${id}|`)) {
+          sousSursis = true;
+          break;
+        }
+      }
+      if (sousSursis) continue;
+      const participants = await callParticipantIds(id);
+      if (participants.length === 0) continue;
+      if (participants.some((uid) => isUserOnline(uid))) continue;
+      console.log(`[ws] Appel ${id} : plus aucun porteur ni sursis, clôture du filet`);
+      await clotureAppelsDeLUtilisateur(participants[0], ["ONGOING"]);
+    }
+  } catch (e) {
+    console.error("[ws] balayage des appels orphelins:", e);
   }
 }
 
@@ -469,13 +678,13 @@ async function fermeAppelsPerimes() {
  * l'application de l'appelant est tuée, son correspondant n'a aucune raison
  * d'attendre 90 s avant que la sonnerie ne s'arrête.
  */
-async function clotureAppelsDeLUtilisateur(userId) {
+async function clotureAppelsDeLUtilisateur(userId, statuts = ["RINGING", "ONGOING"]) {
   try {
     const parts = await prisma.callParticipant.findMany({
       where: {
         userId,
         leftAt: null,
-        call: { status: { in: ["RINGING", "ONGOING"] } },
+        call: { status: { in: statuts } },
       },
       include: { call: { select: { id: true, status: true, initiatorId: true, answeredAt: true } } },
     });
@@ -4906,6 +5115,7 @@ wss.on("listening", () => {
    * filet ne sert que lorsqu'il a disparu — onglet ferme, application tuee.
    */
   setInterval(fermeAppelsPerimes, 10 * 1000);
+  setInterval(fermeAppelsOrphelins, 30 * 1000);
   // Rappels de réunion : même cadence que les appels périmés. La fenêtre de
   // rappel dure cinq minutes, un balayage toutes les 30 s la traverse dix fois
   // — aucune réunion ne peut la franchir sans être vue.
@@ -4944,6 +5154,9 @@ wss.on("connection", (ws, req) => {
   ws.userId = userId;
   ws.isAlive = true;
   addClient(userId, ws);
+  // Un appel tenu en sursis reprend dès qu'une socket du compte revient,
+  // sans rien attendre du client : sa demande de reprise, elle, suivra.
+  annulerSursisReconnexion(userId);
   announcePresence(userId, true).catch(() => {}); // en ligne + diffusion
   sendPresenceSnapshot(userId, ws).catch(() => {}); // état des contacts en ligne
   ws.send(JSON.stringify({ type: "ready" }));
@@ -4980,6 +5193,7 @@ wss.on("connection", (ws, req) => {
       else if (msg.type === "call_ring") await handleCallRing(ws, msg);
       else if (msg.type === "call_signal") await handleCallSignal(ws, msg);
       else if (msg.type === "call_state") await handleCallState(ws, msg);
+      else if (msg.type === "call_rejoin") await handleCallRejoin(ws, msg);
       else if (msg.type === "call_invite") await handleCallInvite(ws, msg);
       else if (msg.type === "ivr_dtmf") await handleIvrDtmf(ws, msg);
       else if (msg.type === "ivr_back") await handleIvrBack(ws, msg);
