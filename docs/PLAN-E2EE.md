@@ -172,37 +172,49 @@ cryptographie, seulement l'écran.
 | **3.4** | **Dépôt incrémental**, à chaque lot de messages lus. ⚠️ Pas au moment du changement de téléphone : un téléphone cassé n'exporte rien. |
 | **3.5** | **Restauration** sur appareil neuf. ⚠️ L'archive ne restaure **pas** l'identité Signal : le nouvel appareil en publie une neuve, et les correspondants voient « la clé a changé ». D'où le lot 1 en prérequis. |
 | **3.6** | **Écran** : dire au moment de la création ce qui est sauvegardé, et ce qui est perdu si le trousseau ne suit pas. Pas dans les conditions d'utilisation. |
-| **3.7** | ⛔ **ABANDONNÉ (user, 23/09) : pas de réécriture de l'authentification.** Donc **pas de serrure dérivée du mot de passe**. Voir la note ci-dessous — ce n'est pas neutre. |
-| **3.8** | **Clé de récupération affichée, EN OPTION.** La compensation de l'abandon de 3.7, et elle est quasi gratuite : la clé maîtresse s'enveloppe autant de fois qu'on veut. Personne ne la subit, et le cas « tout est perdu » cesse d'être fatal. |
+| **3.7** | ✅ **Serrure 2 — le mot de passe du compte, SANS réécrire l'authentification.** Le client dérive `vaultKey = KDF(mdp, sel_coffre)` **au moment où l'utilisateur tape son mot de passe** — connexion, inscription, changement. Cette valeur ne part jamais. La route de connexion, elle, ne change pas. |
+| **3.7b** | ⚠️ **La propriété qu'on n'obtient PAS**, et il faut l'écrire dans le produit : le serveur reçoit toujours le mot de passe en clair à la connexion. Il **pourrait** donc dériver la clé du coffre s'il était compromis ou malveillant. Cette serrure protège l'archive **au repos**, pas contre nous. Les deux autres serrures, elles, n'ont pas cette limite. |
+| **3.8** | **Serrure 3 — clé de récupération affichée, en option.** Tirée au sort, montrée une fois, en mots plutôt qu'en hexadécimal. La seule qui survive à un « mot de passe oublié ». |
+| **3.9** | **Le rattrapage** : les trois serrures n'enveloppent pas toutes la clé au même moment. Il faut pouvoir en ajouter une plus tard — l'utilisateur active l'archive une semaine après sa connexion, et on n'a plus son mot de passe en mémoire. ⚠️ Redemander le mot de passe à ce moment-là est normal ; le garder en mémoire ne l'est pas. |
 
 ---
 
-### ⚠️ Ce que l'abandon de 3.7 coûte — à assumer explicitement
+### Les trois serrures, et ce que chacune vaut
 
-Sans serrure dérivée du mot de passe, **l'archive n'a qu'une serrure** : le
-trousseau de l'appareil.
+> **Décision du user, 23/09/2026 : les trois.** Pas de réécriture de
+> l'authentification, mais la serrure du mot de passe quand même.
 
-Si le trousseau ne suit pas, **l'historique est perdu** :
+**Les deux instructions sont compatibles**, et le détail compte :
 
-- passage Android → iPhone ;
-- synchronisation du trousseau désactivée ;
-- téléphone perdu sans sauvegarde système.
+| serrure | l'utilisateur doit | protège au repos | protège contre NOUS |
+|---|---|---|---|
+| trousseau de l'appareil | rien (Face ID) | ✅ | ✅ |
+| mot de passe du compte | s'en souvenir | ✅ | ❌ |
+| clé de récupération | la garder | ✅ | ✅ |
 
-Le raisonnement du user se tient : le mot de passe est **haché** en base
-(bcrypt), et l'objectif — que les messages ne soient jamais stockés en clair —
-est déjà atteint sans toucher à l'authentification.
+La serrure du mot de passe se pose **sans toucher à la connexion** : le client
+dérive la clé localement au moment où l'utilisateur tape son mot de passe, et
+ne l'envoie pas. La route de connexion continue de recevoir le mot de passe
+comme aujourd'hui.
 
-⚠️ **Une précision, parce qu'elle porte sur la décision** : le hachage au repos
-ne couvrait pas la préoccupation d'origine. Le mot de passe **transite en clair
-par le serveur à chaque connexion** — un journal, un vidage mémoire, un serveur
-compromis le voient à cet instant. C'est ce que la dérivation à deux sels
-aurait supprimé.
+⚠️ **D'où la colonne rouge.** Le serveur voyant le mot de passe à la connexion,
+il pourrait dériver la même clé s'il était compromis. Cette serrure-là est un
+**confort de récupération**, pas une garantie zero-knowledge — et le produit
+doit le dire, pas le laisser croire.
 
-Mais cela ne change **rien** au chiffrement des messages, qui est le sujet.
-La décision tient ; c'est son périmètre qu'il fallait nommer.
+➜ **C'est précisément pourquoi avoir les trois est la bonne décision.** Chacune
+couvre le trou des autres :
 
-➜ **Le ticket 3.8 est donc la vraie compensation**, et je le recommande.
+- le trousseau ne suit pas d'Android à iPhone → **le mot de passe** ;
+- mot de passe oublié et réinitialisé → **la clé de récupération** ;
+- serveur compromis → **les deux autres restent hors de sa portée**.
 
+⚠️ **La porte de sortie reste ouverte** : le jour où l'authentification serait
+réécrite (dérivation à deux sels), la serrure 2 gagne la colonne rouge **sans
+rechiffrer l'archive** — on ré-enveloppe la clé maîtresse, rien d'autre. C'est
+tout l'intérêt de la clé maîtresse tirée au sort.
+
+---
 ---
 
 ## 7. LOT 4 — Le client mobile
@@ -259,7 +271,7 @@ La décision tient ; c'est son périmètre qu'il fallait nommer.
 |---|---|
 | **0.1** | La traduction est **déjà** sur l'appareil par défaut. Il reste à la **forcer** dans un fil chiffré, quel que soit le réglage. |
 | **1.4** | **Modèle WhatsApp** : on avertit, on ne bloque jamais. |
-| **3.7** | **Pas de réécriture de l'authentification.** Une seule serrure sur l'archive, plus la clé de récupération en option (3.8). |
+| **3.7** | **Les trois serrures**, dont le mot de passe — mais **sans** réécrire l'authentification. La serrure 2 protège au repos, pas contre un serveur compromis ; le produit doit le dire. |
 
 ➜ **En cours : lot 0.**
 
@@ -277,3 +289,4 @@ La décision tient ; c'est son périmètre qu'il fallait nommer.
 | 23/09 | Sauvegarder les **messages**, pas les clés Signal | analyse |
 | 23/09 | Codes de sécurité : modèle WhatsApp | user |
 | 23/09 | Pas de réécriture de l'authentification | user |
+| 23/09 | **Les TROIS serrures**, dont celle du mot de passe — sans réécrire l'authentification | user |
