@@ -25,7 +25,7 @@ model User {
   // Colonnes physiques alignées sur le référentiel équipe (alanya.sql).
   // Les noms de champ Prisma restent inchangés → code applicatif et contrat API intacts ;
   // seuls les noms de colonnes Postgres changent via @map (UUID conservés).
-  id            String   @id @default(uuid()) @map("alanyaID") @db.Uuid
+  id             String   @id @default(uuid()) @map("alanyaID") @db.Uuid
   /// NULLABLE depuis le 25/08/2026 : l'adresse est devenue FACULTATIVE à
   /// l'inscription. Elle ne sert qu'à reprendre le compte ; sans elle, c'est
   /// [idRecuperation] qui joue ce rôle.
@@ -35,7 +35,7 @@ model User {
   /// coexister. C'est le comportement par défaut, pas un réglage — ne pas
   /// ajouter `NULLS NOT DISTINCT`, qui interdirait le deuxième compte sans
   /// adresse.
-  email         String?  @unique @db.VarChar(100)
+  email          String?  @unique @db.VarChar(100)
   /// Identifiant de reprise du compte, pour qui s'inscrit SANS adresse.
   ///
   /// 🔴 C'EST UN SECRET : le présenter suffit à réinitialiser le mot de passe
@@ -48,17 +48,17 @@ model User {
   ///
   /// Forme : 10 symboles de l'alphabet de Crockford, majuscules, sans
   /// séparateur — voir `src/lib/id-recuperation.ts`, qui la tient.
-  idRecuperation String? @unique @map("idRecuperation") @db.VarChar(10)
-  passwordHash  String?  @map("password") @db.VarChar(255)
+  idRecuperation String?  @unique @map("idRecuperation") @db.VarChar(10)
+  passwordHash   String?  @map("password") @db.VarChar(255)
   /// VarChar(20) depuis le 30/07/2026, pour suivre le référentiel équipe.
   /// L'unicité est CONSERVÉE, contrairement à leur fichier : sans elle, deux
   /// comptes pourraient porter le même Alanya ID.
   /// La génération reste à 8 chiffres (src/lib/publicNumber.ts) et la
   /// validation n'accepte que 6 ou 8 (src/lib/validation.ts).
-  publicNumber  String   @unique @map("alanyaPhone") @db.VarChar(20)
-  emailVerified Boolean  @default(false)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamptz
+  publicNumber   String   @unique @map("alanyaPhone") @db.VarChar(20)
+  emailVerified  Boolean  @default(false)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamptz
 
   // --- F1 : Inscription avec pays ---
   nom    String? @db.VarChar(100)
@@ -151,21 +151,23 @@ model User {
   isDelete Boolean @default(false) @map("isDelete")
 
   refreshTokens    RefreshToken[]
-  contacts         Contact[]           @relation("UserContacts")
-  contactOf        Contact[]           @relation("ContactOf")
-  contactLists     ContactList[]       @relation("UserContactLists")
+  contacts         Contact[]             @relation("UserContacts")
+  contactOf        Contact[]             @relation("ContactOf")
+  contactLists     ContactList[]         @relation("UserContactLists")
   /// Listes d'AUTRES comptes ou ce compte figure comme membre. Relation inverse
   /// seule : elle n'ajoute aucune colonne a `users`.
-  contactListsIn   ContactListMember[] @relation("ContactListMemberOf")
+  contactListsIn   ContactListMember[]   @relation("ContactListMemberOf")
   /// Catalogue des sonneries que ce compte a importees. Le FICHIER suivait deja
   /// le compte (il est dans `media_files`) ; la liste de ce qui a ete importe,
   /// non — elle vivait en localStorage. Voir [UserRingtone].
   ringtones        UserRingtone[]
   e2eeIdentites    E2eeIdentite[]
-  e2eeEnvoyees     E2eeEnveloppe[] @relation("E2eeExpediteur")
-  e2eeRecues       E2eeEnveloppe[] @relation("E2eeDestinataire")
+  e2eeSerrures     E2eeSerrure[]
+  e2eeArchive      E2eeArchiveBloc[]
+  e2eeEnvoyees     E2eeEnveloppe[]       @relation("E2eeExpediteur")
+  e2eeRecues       E2eeEnveloppe[]       @relation("E2eeDestinataire")
   participations   Participant[]
-  sentMessages     Message[]           @relation("MessageSender")
+  sentMessages     Message[]             @relation("MessageSender")
   ownedMedia       MediaFile[]
   statuses         Status[]
   statusViews      StatusView[]
@@ -177,9 +179,9 @@ model User {
   statusListedIn   StatusAudienceEntry[] @relation("StatusAudienceListed")
   /// Les citations de MES statuts posees dans des conversations.
   statusQuotes     StatusReplyQuote[]
-  callsInitiated   Call[]            @relation("CallInitiator")
+  callsInitiated   Call[]                @relation("CallInitiator")
   /// Appels où ce compte sert d'identité de rappel (voir `Call.callerMaskId`).
-  callsAsMask      Call[]            @relation("CallCallerMask")
+  callsAsMask      Call[]                @relation("CallCallerMask")
   callParticipants CallParticipant[]
   aiThreads        AiThread[]
   pushDevices      PushDevice[]
@@ -188,12 +190,12 @@ model User {
   messageStars     MessageStar[]
 
   // --- Nouvelles relations (schéma PDF) ---
-  organizedMeetings     Meeting[]            @relation("MeetingOrganizer")
-  meetingParticipations MeetingParticipant[] @relation("MeetingParticipantUser")
+  organizedMeetings     Meeting[]              @relation("MeetingOrganizer")
+  meetingParticipations MeetingParticipant[]   @relation("MeetingParticipantUser")
   demandesFormulees     MeetingInviteRequest[] @relation("MeetingRequestAuthor")
   demandesRecues        MeetingInviteRequest[] @relation("MeetingRequestInvitee")
-  blockedUsers          Blocked[]            @relation("BlockOwner")
-  blockedByUsers        Blocked[]            @relation("BlockedUser")
+  blockedUsers          Blocked[]              @relation("BlockOwner")
+  blockedByUsers        Blocked[]              @relation("BlockedUser")
   conversationLocks     ConversationLock[]
 
   // --- Espace Développeur ---
@@ -219,25 +221,25 @@ model User {
   // --- Organisation / centre d'appels (référentiel équipe) ---
   // Seule `idCompany` ajoute une colonne à `users` ; les quatre suivantes sont
   // des relations inverses, sans existence en base.
-  idCompany       Int?             @map("idcompany")
-  company         Company?         @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull)
-  Fonctions       Fonction[]
-  GestionCompany  GestionCompany[]
-  centerUsers     Center[]         @relation("centerUser")
-  assignedCenters Center[]         @relation("assignedUser")
-  vocaux          Vocal[]          @relation("vocalCentre")
-  musiques        CenterMusic[]    @relation("musiqueCentre")
-  vocauxAttente   VocalAttente[]   @relation("vocalAttenteCentre")
-  audiosMenu      CenterAudio[]    @relation("audioCentreVocal")
+  idCompany             Int?             @map("idcompany")
+  company               Company?         @relation(fields: [idCompany], references: [idCompany], onDelete: SetNull)
+  Fonctions             Fonction[]
+  GestionCompany        GestionCompany[]
+  centerUsers           Center[]         @relation("centerUser")
+  assignedCenters       Center[]         @relation("assignedUser")
+  vocaux                Vocal[]          @relation("vocalCentre")
+  musiques              CenterMusic[]    @relation("musiqueCentre")
+  vocauxAttente         VocalAttente[]   @relation("vocalAttenteCentre")
+  audiosMenu            CenterAudio[]    @relation("audioCentreVocal")
   /// Les plaintes vocales reçues par ce centre vocal, et celles que ce compte a
   /// laissées ailleurs. Deux relations distinctes vers la même table : un même
   /// compte peut être l'un ou l'autre, jamais confondus.
-  plaintesRecues  VoiceComplaint[] @relation("plainteCentreVocal")
-  plaintesLaissees VoiceComplaint[] @relation("plainteAuteur")
+  plaintesRecues        VoiceComplaint[] @relation("plainteCentreVocal")
+  plaintesLaissees      VoiceComplaint[] @relation("plainteAuteur")
   /// Enregistrements de conversations où ce compte est l'agent, et ceux où il
   /// est le correspondant. Deux relations distinctes, jamais confondues.
-  enregistrementsAgent  CallRecording[] @relation("enregistrementAgent")
-  enregistrementsClient CallRecording[] @relation("enregistrementClient")
+  enregistrementsAgent  CallRecording[]  @relation("enregistrementAgent")
+  enregistrementsClient CallRecording[]  @relation("enregistrementClient")
 
   // --- Relations vers la file d'attente ---
   queueCenterFiles   QueueFile[]           @relation("QueueCenterUser")
@@ -679,18 +681,18 @@ model Contact {
 /// de réenregistrer à chaque fois celui qu'on avait déjà.
 
 model RepondeurAccueil {
-  id       String @id @default(uuid()) @db.Uuid
-  userId   String @map("alanyaID") @db.Uuid
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// ⚠️ `Cascade` : un accueil dont le fichier a disparu ne serait qu'une ligne
   /// morte promettant un son inexistant.
-  mediaId  String    @map("mediaID") @db.Uuid
-  media    MediaFile @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  mediaId String    @map("mediaID") @db.Uuid
+  media   MediaFile @relation(fields: [mediaId], references: [id], onDelete: Cascade)
 
   /// Nom donné par l'utilisateur. C'est ce qui rend la liste utilisable : sans
   /// lui, cinq accueils se ressemblent tous et il faut les écouter un par un.
-  libelle  String? @db.VarChar(60)
+  libelle String? @db.VarChar(60)
 
   /// 1 = celui que les appelants entendent.
   ///
@@ -699,12 +701,11 @@ model RepondeurAccueil {
   /// `prisma/manual/2026-09_repondeur_accueils.sql`. Sans lui, « activer »
   /// devrait éteindre les autres côté code — donc un jour l'oublier, et faire
   /// dépendre ce que l'appelant entend de l'ordre de lecture des lignes.
-  actif    Int      @default(0) @db.SmallInt
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  actif     Int              @default(0) @db.SmallInt
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  plages    RepondeurPlage[]
 
   @@index([userId])
-  plages   RepondeurPlage[]
-
   @@map("repondeur_accueil")
 }
 
@@ -880,12 +881,12 @@ model Conversation {
   /// demandé. Une conversation qui passe à `true` ne revient pas en arrière —
   /// les messages déjà chiffrés le restent, et le serveur n'a pas de quoi les
   /// rouvrir.
-  e2eeActif    Boolean     @default(false) @map("e2ee_actif")
+  e2eeActif Boolean @default(false) @map("e2ee_actif")
 
-  participants Participant[]
+  participants   Participant[]
   e2eeEnveloppes E2eeEnveloppe[]
-  messages     Message[]
-  locks        ConversationLock[]
+  messages       Message[]
+  locks          ConversationLock[]
 
   // --- F11 : Dernier message dénormalisé ---
   lastMessage         String?   @db.Text
@@ -997,11 +998,11 @@ enum MessageStatus {
 }
 
 model Message {
-  id         String            @id @default(uuid()) @map("msgID") @db.Uuid
-  convId     String            @map("conversationID") @db.Uuid
-  senderId   String            @map("senderID") @db.Uuid
-  conv       Conversation      @relation(fields: [convId], references: [id], onDelete: Cascade)
-  sender     User              @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  id             String          @id @default(uuid()) @map("msgID") @db.Uuid
+  convId         String          @map("conversationID") @db.Uuid
+  senderId       String          @map("senderID") @db.Uuid
+  conv           Conversation    @relation(fields: [convId], references: [id], onDelete: Cascade)
+  sender         User            @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   /// Texte du message, `null` pour un média sans légende.
   ///
   /// 🔴 VARCHAR(500) DEPUIS LE 25/08/2026, plus `TEXT`
@@ -1012,7 +1013,7 @@ model Message {
   /// `src/lib/message-payload.mjs` — c'est elle qui coupe le texte et qui
   /// REFUSE une charge CONTACT/LOCATION trop longue, dont le JSON ne survivrait
   /// pas à une coupe.
-  content    String?           @db.VarChar(500)
+  content        String?         @db.VarChar(500)
   /// Appareil qui a envoyé le message, quand le client l'a indiqué.
   ///
   /// `senderId` dit quel COMPTE a écrit ; cette colonne dit lequel de ses
@@ -1023,30 +1024,30 @@ model Message {
   /// Nullable : tout l'historique existant n'en a pas, et un client qui ne
   /// l'envoie pas reste valide. Pas de clé étrangère — la ligne d'appareil peut
   /// disparaître sans emporter les messages déjà envoyés.
-  appareilId Int?              @map("appareilID")
+  appareilId     Int?            @map("appareilID")
   /// Les enveloppes chiffrées qui portent le contenu de ce message.
   ///
   /// Vide pour tout message en clair — c'est-à-dire l'immense majorité, et
   /// tout l'historique.
   e2eeEnveloppes E2eeEnveloppe[]
 
-  type       MessageType       @default(TEXT)
-  status     MessageStatus     @default(SENT)
-  replyToId  String?           @map("replyToID") @db.Uuid
-  replyTo    Message?          @relation("MessageReplies", fields: [replyToId], references: [id])
-  replies    Message[]         @relation("MessageReplies")
-  media      MediaFile[]
-  createdAt  DateTime          @default(now()) @map("sendAt") @db.Timestamptz
-  editedAt   DateTime?         @db.Timestamptz
+  type        MessageType       @default(TEXT)
+  status      MessageStatus     @default(SENT)
+  replyToId   String?           @map("replyToID") @db.Uuid
+  replyTo     Message?          @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies     Message[]         @relation("MessageReplies")
+  media       MediaFile[]
+  createdAt   DateTime          @default(now()) @map("sendAt") @db.Timestamptz
+  editedAt    DateTime?         @db.Timestamptz
   // Message éphémère : instant d'expiration (null = permanent). Purgé après.
-  expiresAt  DateTime?         @map("expires_at") @db.Timestamptz
-  deletedAt  DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
-  hides      MessageHide[]
-  reactions  MessageReaction[]
+  expiresAt   DateTime?         @map("expires_at") @db.Timestamptz
+  deletedAt   DateTime?         @db.Timestamptz // extra local (le réf. utilise isDeleted/deletedForID)
+  hides       MessageHide[]
+  reactions   MessageReaction[]
   /// Le statut auquel ce message répond, s'il en cite un.
   statusQuote StatusReplyQuote?
-  stars      MessageStar[]
-  mentions   MessageMention[]
+  stars       MessageStar[]
+  mentions    MessageMention[]
 
   /// Appel que ce message PROLONGE : renseigné, c'est une messagerie vocale
   /// laissée après un appel sans réponse. `null` pour un message ordinaire.
@@ -1082,11 +1083,11 @@ model Message {
   /// Sert a surligner la mention : l'application parle neuf langues, et le
   /// deduire demanderait de connaitre les neuf formes — et de deviner celle de
   /// l'auteur, qui n'est pas forcement celle du lecteur.
-  mentionTousLibelle String? @map("mention_tous_libelle") @db.VarChar(80)
+  mentionTousLibelle String?         @map("mention_tous_libelle") @db.VarChar(80)
   /// Les épinglages de ce message. En pratique zéro ou un — la contrainte
   /// d'unicité (conversation, message) l'impose — mais la relation reste une
   /// liste, comme toute relation inverse.
-  epingles   MessagePinned[]
+  epingles           MessagePinned[]
 
   @@index([convId, createdAt])
   @@index([senderId])
@@ -1229,11 +1230,11 @@ model MediaFile {
 
   /// Une plainte vocale s'appuie sur ce média. `Cascade` : supprimer le fichier
   /// retire la plainte, qui n'aurait plus rien à faire écouter.
-  plainteVocale VoiceComplaint[]
+  plainteVocale             VoiceComplaint[]
   /// Les trois rôles qu'un média peut tenir dans un enregistrement d'appel.
-  enregistrementPisteAgent  CallRecording[] @relation("enregistrementPisteAgent")
-  enregistrementPisteClient CallRecording[] @relation("enregistrementPisteClient")
-  enregistrementMelange     CallRecording[] @relation("enregistrementMelange")
+  enregistrementPisteAgent  CallRecording[]    @relation("enregistrementPisteAgent")
+  enregistrementPisteClient CallRecording[]    @relation("enregistrementPisteClient")
+  enregistrementMelange     CallRecording[]    @relation("enregistrementMelange")
   /// Accueils de répondeur qui s'appuient sur ce média.
   accueilsRepondeur         RepondeurAccueil[]
 
@@ -1400,18 +1401,18 @@ enum CallStatus {
 }
 
 model Call {
-  id          String     @id @default(uuid()) @db.Uuid
+  id               String     @id @default(uuid()) @db.Uuid
   /// La messagerie vocale laissée après cet appel, s'il en a une. Au plus une :
   /// un index unique partiel le garantit côté base.
-  messagerieVocale Message[] @relation("MessagerieVocale")
-  initiatorId String     @db.Uuid
-  initiator   User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
-  convId      String?    @db.Uuid
-  type        CallType   @default(AUDIO)
-  status      CallStatus @default(RINGING)
-  startedAt   DateTime   @default(now()) @db.Timestamptz
-  answeredAt  DateTime?  @db.Timestamptz
-  endedAt     DateTime?  @db.Timestamptz
+  messagerieVocale Message[]  @relation("MessagerieVocale")
+  initiatorId      String     @db.Uuid
+  initiator        User       @relation("CallInitiator", fields: [initiatorId], references: [id], onDelete: Cascade)
+  convId           String?    @db.Uuid
+  type             CallType   @default(AUDIO)
+  status           CallStatus @default(RINGING)
+  startedAt        DateTime   @default(now()) @db.Timestamptz
+  answeredAt       DateTime?  @db.Timestamptz
+  endedAt          DateTime?  @db.Timestamptz
 
   /// Identité à MONTRER À L'APPELÉ, ajouté le 15/08/2026 pour le rappel « sous
   /// le nom du centre » (`/api/queue/callback`) : un agent rappelle un client
@@ -1424,7 +1425,7 @@ model Call {
   callerMaskId String? @db.Uuid
   callerMask   User?   @relation("CallCallerMask", fields: [callerMaskId], references: [id], onDelete: SetNull)
 
-  participants CallParticipant[]
+  participants    CallParticipant[]
   /// ⚠️ `SetNull` et non `Cascade` : une purge des appels ne doit pas emporter
   /// des enregistrements que l'entreprise est censée conserver.
   enregistrements CallRecording[]
@@ -1490,11 +1491,11 @@ model AiMessage {
 // ---------------------------------------------------------------------------
 
 model Pays {
-  idPays          Int    @id @default(autoincrement()) @db.SmallInt // MySQL smallint → PG SMALLINT
-  libelle         String @db.VarChar(100)
+  idPays          Int     @id @default(autoincrement()) @db.SmallInt // MySQL smallint → PG SMALLINT
+  libelle         String  @db.VarChar(100)
   /// Libellé anglais du pays. NOT NULL avec défaut vide : les lignes déjà
   /// semées n'en ont pas, et la colonne s'ajoute sans réécrire la table.
-  libelleAnglais  String @default("") @db.VarChar(100)
+  libelleAnglais  String  @default("") @db.VarChar(100)
   /// Code ISO 3166-1 alpha-2 (CM, FR, SN…).
   ///
   /// C'est lui qui permet aux clients de traduire le nom du pays dans les neuf
@@ -1502,9 +1503,9 @@ model Pays {
   /// équivalent natif sur mobile. Nullable — un pays sans code s'affiche avec
   /// son `libelle`, comme avant.
   iso2            String? @db.Char(2)
-  prefix          String @default("") @db.VarChar(10) // indicatif téléphonique (+237, +33…)
-  timeZone        String @default("Africa/Dakar") @db.VarChar(200) // ex: "Africa/Douala"
-  decalageHoraire Int    @default(0)
+  prefix          String  @default("") @db.VarChar(10) // indicatif téléphonique (+237, +33…)
+  timeZone        String  @default("Africa/Dakar") @db.VarChar(200) // ex: "Africa/Douala"
+  decalageHoraire Int     @default(0)
 
   users User[]
 
@@ -1525,16 +1526,16 @@ model Pays {
 // ---------------------------------------------------------------------------
 
 model Meeting {
-  idMeeting   Int      @id @default(autoincrement()) // MySQL int → PG INTEGER
-  idOrganiser String   @db.Uuid
-  organiser   User     @relation("MeetingOrganizer", fields: [idOrganiser], references: [id], onDelete: Cascade)
-  start_time  DateTime @default(now()) @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
-  duree       Int      @default(0) // MySQL int → PG INTEGER (secondes)
-  objet       String   @default("Réunion") @db.VarChar(200) // MySQL varchar(200)
-  room        String   @default("default-room") @db.VarChar(200) // MySQL varchar(200)
-  isEnd       Int      @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT
-  type_media  Int      @default(1) @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
-  invitationAuto Int @default(0) @db.SmallInt @map("invitation_auto")
+  idMeeting      Int      @id @default(autoincrement()) // MySQL int → PG INTEGER
+  idOrganiser    String   @db.Uuid
+  organiser      User     @relation("MeetingOrganizer", fields: [idOrganiser], references: [id], onDelete: Cascade)
+  start_time     DateTime @default(now()) @db.Timestamptz // MySQL datetime → PG TIMESTAMPTZ
+  duree          Int      @default(0) // MySQL int → PG INTEGER (secondes)
+  objet          String   @default("Réunion") @db.VarChar(200) // MySQL varchar(200)
+  room           String   @default("default-room") @db.VarChar(200) // MySQL varchar(200)
+  isEnd          Int      @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT
+  type_media     Int      @default(1) @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
+  invitationAuto Int      @default(0) @map("invitation_auto") @db.SmallInt
 
   participants MeetingParticipant[]
   rappel       MeetingRappel?
@@ -1555,17 +1556,17 @@ model Meeting {
 /// celui qui la formule — sans quoi un participant refusé n'aurait qu'à faire
 /// redemander par un collègue.
 model MeetingInviteRequest {
-  id            Int       @id @default(autoincrement())
-  idMeeting     Int
-  meeting       Meeting   @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
-  demandeurId   String    @map("demandeur") @db.Uuid
-  demandeur     User      @relation("MeetingRequestAuthor", fields: [demandeurId], references: [id], onDelete: Cascade)
-  inviteId      String    @map("invite") @db.Uuid
-  invite        User      @relation("MeetingRequestInvitee", fields: [inviteId], references: [id], onDelete: Cascade)
+  id          Int       @id @default(autoincrement())
+  idMeeting   Int
+  meeting     Meeting   @relation(fields: [idMeeting], references: [idMeeting], onDelete: Cascade)
+  demandeurId String    @map("demandeur") @db.Uuid
+  demandeur   User      @relation("MeetingRequestAuthor", fields: [demandeurId], references: [id], onDelete: Cascade)
+  inviteId    String    @map("invite") @db.Uuid
+  invite      User      @relation("MeetingRequestInvitee", fields: [inviteId], references: [id], onDelete: Cascade)
   /// 0 = en attente, 1 = acceptée, 2 = refusée.
-  statut        Int       @default(0) @db.SmallInt
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
-  decidedAt     DateTime? @map("decided_at") @db.Timestamptz
+  statut      Int       @default(0) @db.SmallInt
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  decidedAt   DateTime? @map("decided_at") @db.Timestamptz
 
   @@unique([idMeeting, inviteId], map: "meeting_invite_request_unique")
   @@index([idMeeting, statut], map: "meeting_invite_request_meeting_statut_idx")
@@ -1760,7 +1761,7 @@ model ConversationLock {
 /// La table existait déjà en production sans figurer ici — Prisma ne pouvait
 /// donc pas l'écrire. Migration : `prisma/manual/2026-08_geo_positions.sql`.
 model Geo {
-  idGeo BigInt @id @default(autoincrement()) @map("idGeo")
+  idGeo BigInt  @id @default(autoincrement()) @map("idGeo")
   /// `Decimal(10,7)` : environ un centimètre de résolution. Bien au-delà de la
   /// précision d'un GPS de téléphone, mais c'est le type déjà en base.
   lat   Decimal @db.Decimal(10, 7)
@@ -1997,7 +1998,7 @@ model Company {
   /// ⚠️ CE N'EST PAS LA BORNE PAR ENTREPRISE. Celle-là est ailleurs, et elle a
   /// toujours existé : le répertoire n'a jamais montré une autre société. Ce
   /// réglage ne fait que resserrer au service.
-  collegue           Int       @default(1) @db.SmallInt
+  collegue Int @default(1) @db.SmallInt
 
   /// Adresses des services propres à l'entreprise. Les trois colonnes
   /// existaient DÉJÀ en base, en VARCHAR(50), sans figurer dans ce schéma —
@@ -2017,17 +2018,17 @@ model Company {
 
   Factures Facture[]
 
-  Users      User[]
-  Admins     Admin[]
-  Agences    Agence[]
-  Services   Service[]
-  CenterComs CenterCom[]
-  Centers    Center[]
-  Vocaux        Vocal[]
-  Musiques      CenterMusic[]
-  VocauxAttente VocalAttente[]
-  AudiosMenu    CenterAudio[]
-  plaintesVocales VoiceComplaint[]
+  Users                User[]
+  Admins               Admin[]
+  Agences              Agence[]
+  Services             Service[]
+  CenterComs           CenterCom[]
+  Centers              Center[]
+  Vocaux               Vocal[]
+  Musiques             CenterMusic[]
+  VocauxAttente        VocalAttente[]
+  AudiosMenu           CenterAudio[]
+  plaintesVocales      VoiceComplaint[]
   enregistrementsAppel CallRecording[]
 
   QueueFiles     QueueFile[]
@@ -2380,27 +2381,27 @@ model VoiceComplaint {
 /// micro et le distant séparément, et le serveur les mélange. C'est ce qui
 /// évite de maintenir un fork d'une dépendance critique.
 model CallRecording {
-  idRecording     String   @id @default(uuid()) @map("idRecording") @db.Uuid
-  idCompany       Int      @map("idCompany")
-  callId          String?  @map("call_id") @db.Uuid
-  agentId         String?  @map("agent_alanyaID") @db.Uuid
-  clientId        String?  @map("client_alanyaID") @db.Uuid
+  idRecording String  @id @default(uuid()) @map("idRecording") @db.Uuid
+  idCompany   Int     @map("idCompany")
+  callId      String? @map("call_id") @db.Uuid
+  agentId     String? @map("agent_alanyaID") @db.Uuid
+  clientId    String? @map("client_alanyaID") @db.Uuid
 
   /// ⚠️ CONSERVÉES même après le mélange, et ce n'est pas du gaspillage : c'est
   /// la seule façon de le REFAIRE si ffmpeg change ou si le résultat est
   /// mauvais. Les effacer ferait de la première tentative la dernière.
-  mediaAgentId    String   @map("media_agent_id") @db.Uuid
-  mediaClientId   String   @map("media_client_id") @db.Uuid
+  mediaAgentId  String @map("media_agent_id") @db.Uuid
+  mediaClientId String @map("media_client_id") @db.Uuid
 
   /// Nul tant que le mélange n'a pas eu lieu — état NORMAL, pas une panne :
   /// ffmpeg peut manquer sur le serveur, l'enregistrement reste alors
   /// exploitable en deux pistes.
-  mediaMixId      String?  @map("media_mix_id") @db.Uuid
+  mediaMixId String? @map("media_mix_id") @db.Uuid
 
-  dureeMs         Int      @default(0) @map("duree_ms")
+  dureeMs   Int      @default(0) @map("duree_ms")
   /// 0 à mélanger · 1 en cours · 2 mélangé · 3 mélange impossible.
-  statut          Int      @default(0) @db.SmallInt
-  cleEnvoi        String   @map("cle_envoi") @db.VarChar(64)
+  statut    Int      @default(0) @db.SmallInt
+  cleEnvoi  String   @map("cle_envoi") @db.VarChar(64)
   /// URL ABSOLUE de l'enregistrement MÉLANGÉ, lisible SANS jeton — la plateforme
   /// de la collègue lit cette table directement et n'a pas notre mécanisme
   /// d'authentification. Décision du user du 21/08/2026, en réponse à la
@@ -2413,8 +2414,8 @@ model CallRecording {
   /// plainte : c'est une CONVERSATION ENTIÈRE, à deux voix, dont le
   /// correspondant n'a jamais été averti. Quiconque connaît l'URL l'écoute ;
   /// elle est seulement indevinable (elle porte l'UUID de l'enregistrement).
-  urlAudio        String?  @map("url_audio") @db.VarChar(500)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  urlAudio  String?  @map("url_audio") @db.VarChar(500)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   company     Company    @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade, onUpdate: Cascade)
   call        Call?      @relation(fields: [callId], references: [id], onDelete: SetNull, onUpdate: Cascade)
@@ -2580,11 +2581,11 @@ enum ApiKeyType {
 }
 
 enum TransactionType {
-  PURCHASE      // Achat/Recharge de crédits
-  MESSAGE_SENT  // Consommation message API
-  CALL_MINUTE   // Consommation minute d'appel API
-  HOLD_RESERVE  // Réservation d'appel WebRTC (5 min)
-  REFUND        // Remboursement / Ajustement
+  PURCHASE // Achat/Recharge de crédits
+  MESSAGE_SENT // Consommation message API
+  CALL_MINUTE // Consommation minute d'appel API
+  HOLD_RESERVE // Réservation d'appel WebRTC (5 min)
+  REFUND // Remboursement / Ajustement
 }
 
 enum TransactionStatus {
@@ -2610,13 +2611,13 @@ model DeveloperAccount {
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
-  apiKeys    ApiKey[]
-  ledger     DevLedger[]
-  workspaces DeveloperWorkspace[]
-  logs       DeveloperApiLog[]
-  webhooks   DeveloperWebhook?
-  otps       DeveloperOtp[]
-  medias     DeveloperMedia[]
+  apiKeys       ApiKey[]
+  ledger        DevLedger[]
+  workspaces    DeveloperWorkspace[]
+  logs          DeveloperApiLog[]
+  webhooks      DeveloperWebhook?
+  otps          DeveloperOtp[]
+  medias        DeveloperMedia[]
   /// Codes de vérification — remplace [otps], voir [Verification].
   verifications Verification[]
 
@@ -2645,13 +2646,13 @@ model Verification {
   developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   /// `AUTH_2FA`, `CREATION_AGENT`, `VALIDATION_CONTACT` — chacune a SA politique.
-  finalite    String   @db.VarChar(30)
+  finalite    String @db.VarChar(30)
   /// `ALANYA` ou `EMAIL`. **Nous livrons dans les deux cas** : le code brut ne
   /// figure dans aucune réponse d'API. Un canal « délégué », où l'appelant
   /// aurait livré lui-même, a été écarté — il suffisait que son relais
   /// journalise les réponses pour publier tous les codes.
-  canal       String   @db.VarChar(20)
-  destination String   @db.VarChar(120)
+  canal       String @db.VarChar(20)
+  destination String @db.VarChar(120)
 
   codeEmpreinte String @map("code_empreinte") @db.Char(64)
   codeSel       String @map("code_sel") @db.Char(32)
@@ -2790,7 +2791,7 @@ model DevLedger {
   id          String            @id @default(uuid()) @map("ledger_id") @db.Uuid
   developerId String            @map("developer_id") @db.Uuid
   developer   DeveloperAccount  @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  amount      BigInt            // Positif = recharge, Négatif = consommation
+  amount      BigInt // Positif = recharge, Négatif = consommation
   type        TransactionType
   status      TransactionStatus @default(SETTLED)
   referenceId String?           @map("reference_id") @db.VarChar(100) // ID de message, ID d'appel ou ID Stripe
@@ -2809,20 +2810,20 @@ model DevLedger {
 /// Une ligne = un client actuellement en train d'attendre un agent libre.
 /// Nettoyée dès que l'appel est pris en charge, abandonné ou expiré.
 model QueueFile {
-  idFile          Int      @id @default(autoincrement()) @map("idFile")
-  idCompany       Int      @map("idCompany")
-  center_alanyaID String   @map("center_alanyaID") @db.Uuid
-  idService       Int?     @map("idService")
-  idAgent         String?  @map("idAgent") @db.Uuid
-  idCustomer      String   @map("idCustomer") @db.Uuid
-  
+  idFile          Int     @id @default(autoincrement()) @map("idFile")
+  idCompany       Int     @map("idCompany")
+  center_alanyaID String  @map("center_alanyaID") @db.Uuid
+  idService       Int?    @map("idService")
+  idAgent         String? @map("idAgent") @db.Uuid
+  idCustomer      String  @map("idCustomer") @db.Uuid
+
   /// Position / Rang du client dans la file (1, 2, 3...)
-  rang            Int      @default(1)
+  rang     Int @default(1)
   /// Niveau de priorité (0 = normal, 1 = VIP, 2 = urgent)
-  priorite        Int      @default(0) @db.SmallInt
-  
+  priorite Int @default(0) @db.SmallInt
+
   /// Date et heure d'entrée dans la file
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   // Relations Prisma
   company    Company  @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade)
@@ -2845,39 +2846,39 @@ model QueueFile {
 /// Statut final du passage en file d'attente.
 enum QueueStatus {
   MIS_EN_RELATION // Le client a pu contacter l'agent (succès)
-  ABANDON         // Le client a raccroché pendant l'attente
-  TIMEOUT         // Attente maximale atteinte sans réponse
-  REJETE          // File pleine ou rejeté
-  RECONTACTER     // Rappelé par un agent APRÈS un abandon, et il a décroché
+  ABANDON // Le client a raccroché pendant l'attente
+  TIMEOUT // Attente maximale atteinte sans réponse
+  REJETE // File pleine ou rejeté
+  RECONTACTER // Rappelé par un agent APRÈS un abandon, et il a décroché
 }
 
 /// Historique complet de la file d'attente pour chaque appel vers un centre.
 /// Permet de mesurer les statistiques par service, par agent, les abandons,
 /// les durées d'attente et la note globale sur 5 attribuée par le client.
 model QueueFileHistorique {
-  idHist          BigInt      @id @default(autoincrement()) @map("idHist")
-  idCompany       Int         @map("idCompany")
-  center_alanyaID String      @map("center_alanyaID") @db.Uuid
-  idService       Int?        @map("idService")
-  idAgent         String?     @map("idAgent") @db.Uuid
-  idCustomer      String      @map("idCustomer") @db.Uuid
+  idHist          BigInt  @id @default(autoincrement()) @map("idHist")
+  idCompany       Int     @map("idCompany")
+  center_alanyaID String  @map("center_alanyaID") @db.Uuid
+  idService       Int?    @map("idService")
+  idAgent         String? @map("idAgent") @db.Uuid
+  idCustomer      String  @map("idCustomer") @db.Uuid
 
   /// Statut de l'attente : MIS_EN_RELATION, ABANDON, TIMEOUT, REJETE
-  statut          QueueStatus @default(MIS_EN_RELATION)
+  statut QueueStatus @default(MIS_EN_RELATION)
 
   /// Heure d'entrée dans la file
-  joinedAt        DateTime    @default(now()) @map("joined_at") @db.Timestamptz
+  joinedAt        DateTime  @default(now()) @map("joined_at") @db.Timestamptz
   /// Heure de sortie de la file (prise en charge ou abandon)
-  leftAt          DateTime?   @map("left_at") @db.Timestamptz
+  leftAt          DateTime? @map("left_at") @db.Timestamptz
   /// Temps passé à attendre en secondes
-  attenteDureeSec Int         @default(0) @map("attente_duree_sec")
+  attenteDureeSec Int       @default(0) @map("attente_duree_sec")
   /// Durée de la communication effective avec l'agent en secondes (0 si abandon)
-  appelDureeSec   Int         @default(0) @map("appel_duree_sec")
+  appelDureeSec   Int       @default(0) @map("appel_duree_sec")
 
   /// Note de satisfaction optionnelle donnée par le client à la fin (1 à 5 étoiles)
-  note            Int?        @db.SmallInt
+  note            Int?    @db.SmallInt
   /// Avis/Commentaire optionnel laissé par le client
-  avisCommentaire String?     @map("avis_commentaire") @db.Text
+  avisCommentaire String? @map("avis_commentaire") @db.Text
 
   // Relations Prisma
   company    Company  @relation(fields: [idCompany], references: [idCompany], onDelete: Cascade)
@@ -2960,18 +2961,18 @@ model RepondeurPlage {
 /// de lire quoi que ce soit — erreur coûteuse, parce qu'elle ne se voit qu'à
 /// l'usage.
 model E2eeIdentite {
-  id             String @id @default(uuid()) @db.Uuid
-  userId         String @map("alanyaID") @db.Uuid
-  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   /// L'appareil AU SENS DU PROTOCOLE, et non `Appareil.appareilId` : celui-ci
   /// est choisi et gardé par le client, et survit au vidage du cache qui
   /// recrée une ligne du registre d'appareils.
-  deviceId       Int    @map("device_id")
+  deviceId Int @map("device_id")
 
   /// Tiré au sort à l'installation, il distingue deux installations d'un même
   /// appareil. Il voyage dans les paquets de pré-clés.
-  registrationId Int    @map("registration_id")
+  registrationId Int @map("registration_id")
 
   /// Clé publique d'identité, permanente, en base64.
   ///
@@ -2979,7 +2980,7 @@ model E2eeIdentite {
   /// que repose la vérification de sécurité entre deux personnes. Un
   /// remplacement silencieux est exactement ce qu'un serveur malveillant
   /// ferait pour s'interposer.
-  cleIdentite    String @map("cle_identite")
+  cleIdentite String @map("cle_identite")
 
   /// Quand cet appareil a releve ses enveloppes pour la derniere fois.
   ///
@@ -2994,8 +2995,8 @@ model E2eeIdentite {
   /// disparaitre ; il ne peut pas relever sans exister.
   derniereReleve DateTime? @map("derniere_releve") @db.Timestamptz
 
-  createdAt      DateTime @default(now()) @map("create_at") @db.Timestamptz
-  updatedAt      DateTime @updatedAt      @map("update_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("create_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("update_at") @db.Timestamptz
 
   prekeysSignees E2eePrekeySignee[]
   prekeysUniques E2eePrekeyUnique[]
@@ -3014,9 +3015,9 @@ model E2eeIdentite {
 /// aussitôt rendrait ce message-là indéchiffrable, sans que rien ne
 /// l'explique.
 model E2eePrekeySignee {
-  id          String @id @default(uuid()) @db.Uuid
-  identiteId  String @map("identite_id") @db.Uuid
-  identite    E2eeIdentite @relation(fields: [identiteId], references: [id], onDelete: Cascade)
+  id         String       @id @default(uuid()) @db.Uuid
+  identiteId String       @map("identite_id") @db.Uuid
+  identite   E2eeIdentite @relation(fields: [identiteId], references: [id], onDelete: Cascade)
 
   prekeyId    Int    @map("prekey_id")
   clePublique String @map("cle_publique")
@@ -3026,9 +3027,9 @@ model E2eePrekeySignee {
   /// 🔴 C'EST ELLE QUI EMPÊCHE LE SERVEUR DE S'INTERPOSER. Sans vérification
   /// côté client, il suffirait de servir une pré-clé fabriquée pour lire tout
   /// ce qui suit. La ranger sans la vérifier ne protège de rien.
-  signature   String
+  signature String
 
-  createdAt   DateTime @default(now()) @map("create_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("create_at") @db.Timestamptz
 
   @@unique([identiteId, prekeyId], map: "e2ee_prekeys_signees_unique")
   @@index([identiteId, createdAt], map: "e2ee_prekeys_signees_identite_idx")
@@ -3047,12 +3048,12 @@ model E2eePrekeySignee {
 /// comptant ce qui reste. La purge est une tâche d'entretien, pas la
 /// consommation.
 model E2eePrekeyUnique {
-  id          String @id @default(uuid()) @db.Uuid
-  identiteId  String @map("identite_id") @db.Uuid
-  identite    E2eeIdentite @relation(fields: [identiteId], references: [id], onDelete: Cascade)
+  id         String       @id @default(uuid()) @db.Uuid
+  identiteId String       @map("identite_id") @db.Uuid
+  identite   E2eeIdentite @relation(fields: [identiteId], references: [id], onDelete: Cascade)
 
-  prekeyId    Int    @map("prekey_id")
-  clePublique String @map("cle_publique")
+  prekeyId    Int       @map("prekey_id")
+  clePublique String    @map("cle_publique")
   createdAt   DateTime  @default(now()) @map("create_at") @db.Timestamptz
   consommeLe  DateTime? @map("consomme_le") @db.Timestamptz
 
@@ -3070,15 +3071,95 @@ model E2eePrekeyUnique {
 /// clair et tout l'historique ; mélanger les deux régimes dans les mêmes
 /// colonnes ferait qu'une requête oubliée exposerait l'un en croyant lire
 /// l'autre.
+/// UNE SERRURE DE L'ARCHIVE — la clé maîtresse, enveloppée par un secret.
+///
+/// 🔴 CE QUE LE SERVEUR GARDE ICI NE LUI SERT À RIEN. La clé maîtresse est
+/// chiffrée par une clé dérivée d'un secret qu'il ne connaît pas. Le sel, l'IV
+/// et le nombre d'itérations sont publics par construction : ils ne protègent
+/// rien, ils permettent de refaire la dérivation.
+///
+/// ⚠️ PLUSIEURS SERRURES POUR UNE SEULE ARCHIVE, et c'est tout l'intérêt :
+/// perdre son trousseau n'est plus fatal si le mot de passe en ouvre une autre.
+model E2eeSerrure {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// `trousseau`, `motdepasse` ou `recuperation`.
+  ///
+  /// ⚠️ UNE SEULE PAR TYPE ET PAR COMPTE : reposer la même serrure remplace
+  /// l'ancienne. Sans cette unicité, un changement de mot de passe laisserait
+  /// derrière lui une serrure ouvrable par l'ANCIEN mot de passe — et le
+  /// changer n'aurait alors rien changé.
+  type String @db.VarChar(20)
+
+  /// Base64. Aléatoire, public.
+  sel           String @db.VarChar(64)
+  /// Base64. 12 octets, neuf à chaque enveloppement.
+  iv            String @db.VarChar(32)
+  /// Base64. La clé maîtresse chiffrée — 32 octets plus l'étiquette GCM.
+  cleEnveloppee String @map("cle_enveloppee") @db.VarChar(128)
+
+  /// La fonction de dérivation : `argon2id` ou `pbkdf2-sha256`.
+  ///
+  /// 🔴 PAS LA MÊME POUR TOUTES LES SERRURES, et ce n'est pas de la
+  /// sophistication : l'étirement compense le MANQUE D'ENTROPIE d'un secret.
+  /// Un mot de passe humain se devine, donc il faut le rendre coûteux à
+  /// essayer — et Argon2id, qui exige de la MÉMOIRE, résiste aux cartes
+  /// graphiques là où PBKDF2 se laisse paralléliser. Une clé de 256 bits
+  /// tirée au sort ne se devine pas : l'étirer ne protège de rien.
+  algo String @db.VarChar(20)
+
+  /// Les paramètres de `algo`, en JSON.
+  ///
+  /// ⚠️ RANGÉS AVEC LA SERRURE, jamais en constante du code : sans eux, durcir
+  /// les réglages un jour rendrait illisibles toutes les serrures déjà créées
+  /// — on ne saurait plus avec quoi elles ont été fabriquées.
+  parametres String @db.VarChar(200)
+
+  createdAt DateTime @default(now()) @map("create_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("update_at") @db.Timestamptz
+
+  @@unique([userId, type], map: "e2ee_serrures_compte_type_uniq")
+  @@map("e2ee_serrures")
+}
+
+/// UN BLOC D'ARCHIVE — des messages chiffrés, ajoutés au fil de l'eau.
+///
+/// 🔴 LE SERVEUR NE PEUT PAS L'OUVRIR. Il voit sa taille, sa date et le nombre
+/// de messages annoncé — des métadonnées, que le chiffrement ne cache pas plus
+/// ici qu'ailleurs.
+///
+/// ⚠️ DES BLOCS QUI S'AJOUTENT, PAS UN FICHIER QU'ON RÉÉCRIT. Réécrire
+/// l'archive entière à chaque message coûterait sa taille à chaque envoi, et
+/// une coupure au milieu la perdrait tout entière.
+model E2eeArchiveBloc {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("alanyaID") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  iv      String @db.VarChar(32)
+  /// Base64 du bloc chiffré. `Text` : un bloc porte des dizaines de messages.
+  contenu String @db.Text
+
+  /// Annoncé par le client, en clair. Sert à borner une archive sans l'ouvrir.
+  nbMessages Int @map("nb_messages")
+
+  createdAt DateTime @default(now()) @map("create_at") @db.Timestamptz
+
+  @@index([userId, createdAt], map: "e2ee_archive_compte_idx")
+  @@map("e2ee_archive_blocs")
+}
+
 model E2eeEnveloppe {
-  id                 String @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
 
-  convId             String       @map("conversation_id") @db.Uuid
-  conv               Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+  convId String       @map("conversation_id") @db.Uuid
+  conv   Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
 
-  expediteurId       String @map("expediteur_id") @db.Uuid
-  expediteur         User   @relation("E2eeExpediteur", fields: [expediteurId], references: [id], onDelete: Cascade)
-  expediteurDevice   Int    @map("expediteur_device")
+  expediteurId     String @map("expediteur_id") @db.Uuid
+  expediteur       User   @relation("E2eeExpediteur", fields: [expediteurId], references: [id], onDelete: Cascade)
+  expediteurDevice Int    @map("expediteur_device")
 
   destinataireId     String @map("destinataire_id") @db.Uuid
   destinataire       User   @relation("E2eeDestinataire", fields: [destinataireId], references: [id], onDelete: Cascade)
@@ -3089,10 +3170,10 @@ model E2eeEnveloppe {
   /// Les valeurs du protocole, reprises telles quelles plutôt que renommées :
   /// elles voyagent jusqu'à la bibliothèque du client, qui ne connaît que
   /// celles-là.
-  type               Int @db.SmallInt
+  type Int @db.SmallInt
 
   /// Le chiffré, en base64. Opaque pour le serveur, et il doit le rester.
-  corps              String
+  corps String
 
   /// Le message du fil auquel cette enveloppe apporte son contenu.
   ///
@@ -3106,11 +3187,11 @@ model E2eeEnveloppe {
   /// ⚠️ NULLABLE, ET CE N'EST PAS UNE FACILITÉ : une enveloppe peut exister
   /// sans message — c'est le cas du banc d'essai. L'exiger interdirait cet
   /// usage sans rien protéger de plus.
-  messageId          String?   @map("message_id") @db.Uuid
-  message            Message?  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  messageId String?  @map("message_id") @db.Uuid
+  message   Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
-  createdAt          DateTime  @default(now()) @map("create_at") @db.Timestamptz
-  remisLe            DateTime? @map("remis_le") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("create_at") @db.Timestamptz
+  remisLe   DateTime? @map("remis_le") @db.Timestamptz
 
   @@index([convId, createdAt], map: "e2ee_enveloppes_conv_idx")
   @@map("e2ee_enveloppes")
