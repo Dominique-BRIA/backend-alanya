@@ -22,8 +22,12 @@
 | Identités mortes : balayage 30 j + retrait à la déconnexion | ✅ |
 | Cache qui ne perd plus le texte déchiffré | ✅ |
 | Coffre local chiffré, clé non extractible | ✅ |
+| Lot 0 — fuites et manques (traduction, push, aperçu, médias, pré-clés) | ✅ |
+| Lot 1 — codes de sécurité | ✅ |
+| Lot 2 — purge des enveloppes (2.3 reporté sur mesure) | ✅ |
 
-**Bancs** : `e2ee-banc.mjs` (backend), `e2ee-web.mjs` (modules navigateur),
+**Bancs** : `e2ee-banc.mjs`, `e2ee-nonfuite.mjs`, `e2ee-purge.mjs` (backend),
+`e2ee-web.mjs`, `e2ee-empreinte.mjs` (modules navigateur),
 `e2ee-coffre.mjs`, `e2ee-cache.mjs`. Tous verts.
 
 ### Ce qui reste — vue d'ensemble
@@ -151,10 +155,10 @@ cryptographie, seulement l'écran.
 
 | # | ticket |
 |---|---|
-| **2.1** | **Purger les enveloppes remises** au-delà de N jours. Elles sont **définitivement indéchiffrables** — le ratchet a avancé. On conserve des octets que personne ne lira jamais. Ordre de grandeur : ~450 octets par message, doublé par appareil supplémentaire. |
-| **2.2** | ⚠️ Fixer N avec soin : un second appareil doit avoir le temps de relever. 30 jours, aligné sur le balayage des identités mortes. |
-| **2.3** | `corps` en `bytea` au lieu de base64 en colonne texte — 25 % d'économie, aucun changement de protocole. |
-| **2.4** | Suppression de compte : retirer identités, pré-clés et enveloppes. À vérifier, pas encore audité. |
+| **2.1** | ✅ **FAIT.** `purgeEnveloppesChiffrees()` dans `ws-server.mjs`, au démarrage puis toutes les heures — même cadence que la purge des statuts. |
+| **2.2** | ✅ **FAIT, et en DEUX seuils, pas un.** Les **acquittées** partent à 30 jours : `remis_le` n'est posé qu'après un déchiffrement réussi, donc ce délai est une **marge**, pas un besoin. Les **jamais relevées** partent à 90 jours — trois fois plus long, parce qu'ici on supprime un message que le destinataire n'a PAS lu : se tromper coûte un message, pas quelques octets. 🐛 Ce second cas s'accumulait **sans aucune limite** ; les bancs le nettoyaient, la production non. |
+| **2.3** | ⏸️ **REPORTÉ, sur mesure.** ⚠️ Le plan annonçait « 25 % d'économie » : c'était 25 % du **chiffré**, soit **10 % de la ligne** — le reste est fait d'UUID, d'horodatages et d'index. Mesuré après la purge : un utilisateur **très actif** (200 msg/j) garde ~2,6 Mo d'enveloppes, dont `bytea` retirerait **264 Ko**. La purge ayant borné la table, ce changement touche le chemin chaud du chiffrement et impose au mobile de suivre, pour un gain devenu marginal. À reprendre si le volume le justifie un jour. |
+| **2.4** | ✅ **VÉRIFIÉ — rien à faire.** `DELETE /api/account` fait un vrai `prisma.user.delete`, et les **sept** clés étrangères des tables `e2ee_*` sont bien en `ON DELETE CASCADE` **dans la base** (contrôlé par `information_schema`, pas dans le schéma Prisma). Identités, pré-clés signées, pré-clés uniques et enveloppes partent avec le compte. |
 
 ---
 
@@ -290,3 +294,5 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 | 23/09 | Codes de sécurité : modèle WhatsApp | user |
 | 23/09 | Pas de réécriture de l'authentification | user |
 | 23/09 | **Les TROIS serrures**, dont celle du mot de passe — sans réécrire l'authentification | user |
+| 23/09 | Purge en **deux** seuils : 30 j acquittées, 90 j jamais relevées | analyse |
+| 23/09 | `corps` en `bytea` reporté : 10 % de la ligne, pas 25 % — marginal une fois la table bornée | analyse |

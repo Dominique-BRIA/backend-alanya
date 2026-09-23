@@ -394,6 +394,67 @@ async function purgeExpiredStatuses() {
 }
 
 /**
+ * Purge les enveloppes chiffrées dont personne ne fera plus rien.
+ *
+ * 🔴 CE QU'ON SUPPRIME EST DÉJÀ INDÉCHIFFRABLE PAR QUICONQUE, y compris par
+ * nous. Une enveloppe acquittée a été lue ET déchiffrée avec succès — c'est la
+ * condition de l'acquittement — et le ratchet du destinataire a avancé depuis.
+ * La clé de ce message n'existe plus nulle part. On conservait donc des octets
+ * que PERSONNE ne pourra jamais relire.
+ *
+ * Ordre de grandeur : ~450 octets par message avec l'en-tête de ligne et les
+ * index, à multiplier par le nombre d'appareils du destinataire.
+ *
+ * ⚠️ DEUX CAS DISTINCTS, ET ILS N'ONT PAS LE MÊME DÉLAI.
+ */
+async function purgeEnveloppesChiffrees() {
+  /*
+   * ① LES ACQUITTÉES — 30 jours.
+   *
+   * ⚠️ CE DÉLAI EST UNE MARGE, PAS UN BESOIN, et autant le dire : `remis_le`
+   * n'est posé qu'APRÈS un déchiffrement réussi, donc l'enveloppe a fait son
+   * travail. Les trente jours ne couvrent qu'un cas : un client qui aurait
+   * acquitté puis échoué à ranger le clair. Aligné sur le balayage des
+   * identités muettes, pour qu'il n'y ait qu'un seul délai à retenir.
+   */
+  try {
+    const limite = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const res = await prisma.e2eeEnveloppe.deleteMany({
+      where: { remisLe: { lt: limite } },
+    });
+    if (res.count > 0) console.log(`[ws] Enveloppes chiffrées remises purgées : ${res.count}`);
+  } catch (e) {
+    console.error("[ws] purge des enveloppes remises:", e);
+  }
+
+  /*
+   * ② LES JAMAIS RELEVÉES — 90 jours.
+   *
+   * 🐛 CELLES-CI S'ACCUMULAIENT SANS AUCUNE LIMITE. Une enveloppe déposée pour
+   * un appareil qui ne revient jamais — navigateur vidé, déconnexion, poste
+   * abandonné — n'est acquittée par personne et restait donc éternellement.
+   * Les bancs d'essai les nettoyaient ; la production, non.
+   *
+   * ⚠️ TROIS FOIS PLUS LONG QUE L'AUTRE, ET C'EST VOLONTAIRE : ici on supprime
+   * un message que le destinataire n'a PAS lu. Se tromper coûte un message
+   * perdu, pas quelques octets. Quatre-vingt-dix jours dépassent largement le
+   * moment où il devient illisible de toute façon — nous ne gardons que trois
+   * générations de pré-clés signées, et il en naît une à chaque connexion.
+   */
+  try {
+    const limite = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const res = await prisma.e2eeEnveloppe.deleteMany({
+      where: { remisLe: null, createdAt: { lt: limite } },
+    });
+    if (res.count > 0) {
+      console.log(`[ws] Enveloppes chiffrées jamais relevées purgées : ${res.count}`);
+    }
+  } catch (e) {
+    console.error("[ws] purge des enveloppes jamais relevées:", e);
+  }
+}
+
+/**
  * Ferme les appels laissés en sonnerie au-delà du délai.
  *
  * ⚠️ CE BALAYAGE EST INDISPENSABLE, et son absence était le défaut le plus
@@ -5022,6 +5083,13 @@ wss.on("listening", () => {
   // Purge des statuts expirés : une fois au démarrage, puis toutes les heures.
   purgeExpiredStatuses();
   setInterval(purgeExpiredStatuses, 60 * 60 * 1000);
+  /*
+   * ⚠️ MÊME CADENCE QUE LES STATUTS, ET C'EST AMPLEMENT SUFFISANT : les seuils
+   * se comptent en dizaines de jours. Balayer plus souvent ne ferait que
+   * relire une table pour n'y rien trouver.
+   */
+  purgeEnveloppesChiffrees();
+  setInterval(purgeEnveloppesChiffrees, 60 * 60 * 1000);
   // Toutes les 30 s : bien plus court que le délai de 90 s, pour qu'un appel
   // abandonné ne survive jamais longtemps à son échéance.
   fermeAppelsPerimes();
