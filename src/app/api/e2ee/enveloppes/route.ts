@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { pushNewMessage } from "@/../push.mjs";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
@@ -140,6 +141,50 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   });
 
   /*
+   * ══════════════ LA NOTIFICATION POUSSEE ══════════════
+   *
+   * 🐛 UN MESSAGE CHIFFRE NE NOTIFIAIT PERSONNE. `pushNewMessage` n'est appele
+   * que depuis `ws-server.mjs`, et les messages chiffres partent en REST : un
+   * destinataire application fermee ne recevait RIEN. Jamais.
+   *
+   * ⚠️ MEME ENDROIT QUE LA SONNETTE, ET MEME RAISON : c'est le depot qui rend
+   * le message lisible. Notifier a la creation de la ligne reveillerait
+   * quelqu'un pour un message dont le texte n'est pas encore arrive.
+   *
+   * 🔴 AUCUN APERCU, JAMAIS. `preview` reste nul et le type est force a TEXT :
+   * le serveur ne connait pas ce texte, et s'il le connaissait il ne devrait
+   * pas le mettre dans une notification — qui s'affiche sur un ecran
+   * verrouille, transite par Google, et se journalise en chemin.
+   *
+   * ⚠️ LE NOM DE L'EXPEDITEUR, LUI, EST DEJA CONNU du destinataire comme du
+   * serveur. Le taire n'apporterait rien et rendrait la notification inutile.
+   *
+   * ⚠️ ON NE SE NOTIFIE PAS SOI-MEME : l'expediteur est souvent son propre
+   * destinataire, pour ses autres appareils.
+   */
+  const aPrevenir = [...new Set(lues.map((e) => e!.destinataireId))].filter(
+    (id) => id !== userId,
+  );
+  if (aPrevenir.length > 0) {
+    const expediteur = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { nom: true },
+    });
+    for (const destinataire of aPrevenir) {
+      // ⚠️ NE DOIT PAS FAIRE ECHOUER LE DEPOT : le message est ecrit et valide.
+      // Une notification perdue coute une remise differee, pas un message.
+      await pushNewMessage(prisma, {
+        recipientId: destinataire,
+        senderName: expediteur?.nom ?? "",
+        senderId: userId,
+        convId: r.convId as string,
+        convTitle: null,
+        preview: null,
+        messageType: "TEXT",
+      }).catch(() => undefined);
+    }
+  }
+  /*
    * ══════════════ LA SONNETTE, ET ELLE EST ICI POUR UNE RAISON ══════════════
    *
    * 🐛 « LE MESSAGE N'ARRIVE PAS INSTANTANEMENT » — constate par le user le
@@ -177,6 +222,64 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     type: "e2ee_arrivee",
     donnees: { convId: r.convId as string, messageId },
   });
+
+  /*
+   * ══════════════ LA NOTIFICATION POUSSÉE ══════════════
+   *
+   * 🐛 UN MESSAGE CHIFFRÉ NE NOTIFIAIT PERSONNE. `pushNewMessage` n'est appelé
+   * que depuis `ws-server.mjs` ; les messages chiffrés partent en REST, qui ne
+   * notifie personne — et c'est documenté comme voulu dans `creerMessage`.
+   * Application fermée, RIEN n'arrivait. Jamais.
+   *
+   * 🔴 LE CORPS EST GÉNÉRIQUE, ET IL DOIT LE RESTER. Le serveur ne connaît pas
+   * le texte — c'est le principe — donc aucun aperçu n'est possible, et c'est
+   * tant mieux : une notification traverse les serveurs de Google ou d'Apple et
+   * s'affiche sur un écran verrouillé. Le jour où quelqu'un voudra « améliorer
+   * l'aperçu » ici, la réponse est non.
+   *
+   * ⚠️ MÊME ENDROIT QUE LA SONNETTE, ET POUR LA MÊME RAISON : après le dépôt.
+   * Notifier à la création de la ligne enverrait le destinataire ouvrir un
+   * message dont le contenu n'existe pas encore.
+   *
+   * ⚠️ ON NE SE NOTIFIE PAS SOI-MÊME, contrairement à la sonnette. Une relève
+   * de trop ne coûte qu'un aller-retour ; une notification de trop s'affiche à
+   * l'écran de celui qui vient d'écrire. Ses autres appareils la perdent —
+   * c'est le prix, et il est bien plus faible que l'inverse.
+   */
+  const aNotifier = [...new Set(lues.map((e) => e!.destinataireId))].filter(
+    (id) => id !== userId,
+  );
+  if (aNotifier.length > 0) {
+    try {
+      const [{ pushNewMessage }, expediteur] = await Promise.all([
+        import("@/../push.mjs"),
+        prisma.user.findUnique({ where: { id: userId }, select: { nom: true } }),
+      ]);
+      await Promise.all(
+        aNotifier.map((destinataireId) =>
+          pushNewMessage(prisma, {
+            recipientId: destinataireId,
+            senderName: expediteur?.nom ?? "",
+            senderId: userId,
+            convId: r.convId as string,
+            convTitle: null,
+            // ⚠️ NUL, ET C'EST LE POINT. `pushNewMessage` retombe alors sur
+            // « Nouveau message » — le seul texte honnête ici.
+            preview: null,
+            messageType: "TEXT",
+          }),
+        ),
+      );
+    } catch (e) {
+      /*
+       * ⚠️ NE FAIT JAMAIS ÉCHOUER LE DÉPÔT. Le message est écrit et valide ;
+       * au pire il arrivera à la prochaine ouverture. Faire tomber l'envoi
+       * parce que Firebase tousse serait échanger un défaut d'affichage
+       * contre une perte de message.
+       */
+      console.error("[e2ee] notification impossible :", e);
+    }
+  }
 
   return ok({ deposees: lues.length }, 201);
 });

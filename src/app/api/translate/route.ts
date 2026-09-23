@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { prisma } from "@/lib/prisma";
 import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -214,6 +215,55 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   // l'affaire du fournisseur : le figer ici serait faux a la premiere evolution.
   if (!codeLangueValide(cible)) return fail("Langue cible invalide", 400, "BAD_REQUEST");
   if (items.length > LOT_MAX) return fail("Lot trop grand", 413, "TOO_MANY");
+
+  /*
+   * ══════════════ LA GARDE DE FOND DES FILS CHIFFRES ══════════════
+   *
+   * 🔴 LE CLIENT IMPOSE DEJA LE MOTEUR DE L'APPAREIL sur une conversation
+   * chiffree (`traduction-service.ts`). Cette garde-ci ne sert donc JAMAIS en
+   * fonctionnement normal — et c'est exactement pourquoi elle existe : une
+   * garde cote client seul tient tant que le client est celui qu'on a ecrit.
+   * Elle tombe devant un onglet de developpement, une version ancienne restee
+   * en cache, ou un futur appelant qui aura oublie la regle. Or ce qui
+   * traverse ici est du texte DECHIFFRE.
+   *
+   * 🐛 ELLE ETAIT PLACEE APRES `resoudre`, ET C'ETAIT FAUX. Sur un serveur ou
+   * la cle Azure manque, `resoudre` repond PROVIDER_UNAVAILABLE et la garde ne
+   * s'executait jamais. Le banc de non-fuite l'a attrapee : elle ne protegeait
+   * que les serveurs correctement configures, c'est-a-dire pas celui sur lequel
+   * on developpe.
+   *
+   * ⚠️ LA CONFIDENTIALITE NE DOIT PAS DEPENDRE DE LA CONFIGURATION. Elle passe
+   * donc AVANT tout le reste — avant le fournisseur, avant le quota, avant le
+   * cache. Et le refus porte son vrai motif : le client sait quoi faire de
+   * CONVERSATION_CHIFFREE, pas d'une panne de moteur.
+   *
+   * ⚠️ ON REFUSE LE LOT ENTIER, pas seulement les elements fautifs. Traduire la
+   * moitie d'une demande laisserait croire que tout est passe.
+   *
+   * ⚠️ PAS D'ORACLE : on ne lit que les conversations DONT L'APPELANT EST
+   * MEMBRE. Un inconnu qui cite un identifiant au hasard n'apprend rien — la
+   * requete ne trouve rien, et la traduction suit son cours.
+   *
+   * ⚠️ `convId` RESTE FACULTATIF : les traductions hors conversation existent.
+   * Un client qui MENT en l'omettant ne se trahit pas ici — mais il n'a rien
+   * gagne non plus. La vraie barriere reste le chiffrement, qui fait que le
+   * serveur n'a jamais ce texte de son cote.
+   */
+  const convId = typeof corps?.convId === "string" ? corps.convId : "";
+  if (convId !== "") {
+    const fil = await prisma.conversation.findFirst({
+      where: { id: convId, participants: { some: { userId } } },
+      select: { e2eeActif: true },
+    });
+    if (fil?.e2eeActif === true) {
+      return fail(
+        "Une conversation chiffree ne se traduit que sur l'appareil.",
+        403,
+        "CONVERSATION_CHIFFREE",
+      );
+    }
+  }
 
   const resolu = resoudre(demande);
   if ("erreur" in resolu) return resolu.erreur;
