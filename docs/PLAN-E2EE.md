@@ -31,7 +31,7 @@
 | Lot 2 — purge des enveloppes (2.3 reporté sur mesure) | ✅ |
 | **Lot 3 — archive chiffrée, trois serrures** | ✅ |
 | **Lot 4.0 — interopérabilité web ↔ mobile PROUVÉE** | ✅ |
-| Lot 4.2–4.6 — mobile | 🔴 **à peine commencé** — voir §7 |
+| Lot 4 — mobile | ✅ **code écrit et analysé**, non éprouvé sur appareil |
 | **Lot 5.2 — CSP stricte** | ✅ |
 | ↳ sauvegarde **activée par défaut**, refus mémorisé | ✅ |
 | ↳ restauration **automatique** à la connexion | ✅ |
@@ -250,19 +250,26 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 | **4.2** — coffre matériel (Keystore / Keychain) | ✅ écrit, analysé, **jamais exécuté** |
 | **4.3** — code de sécurité (calcul) | ✅ écrit, **et prouvé identique au web** |
 
-### 🔴 Ce qui manque — la majorité
+### Ce qui a été écrit depuis
 
-| # | ticket |
+| # | ticket | état |
+|---|---|---|
+| **4.7–4.8** | branchement au fil : envoi, réception, acquittement | ✅ |
+| **4.9** | périmètre — liste blanche | ✅ |
+| **4.10** | refus du clair — on lève, on ne retombe jamais | ✅ |
+| **4.11** | bannière + bouton bouclier | ✅ |
+| **4.12** | avertissement de changement de clé | ✅ |
+| **4.13** | écran de vérification + QR (format prouvé des deux côtés) | ✅ |
+| **4.14** | archive et ses trois serrures | ✅ |
+| **4.15** | multi-appareil simultané | ⏳ **à éprouver**, rien à écrire |
+
+### 🔴 CE QUI RESTE VRAIMENT
+
+| | |
 |---|---|
-| **4.7** | **Brancher au fil de discussion.** Les services existent mais aucun code ne les appelle : ni à l'envoi, ni à la réception. C'est le plus gros morceau. |
-| **4.8** | **Envoi / réception d'enveloppes** : une enveloppe par appareil destinataire, acquittement, purge. |
-| **4.9** | **Le périmètre** — personnel ↔ personnel. Sans lui, le mobile chiffrerait des conversations que le web refuse. |
-| **4.10** | **Refus du clair** : un fil chiffré ne doit jamais retomber en clair, même en cas d'erreur. |
-| **4.11** | **Bouton bouclier + bannière** « à partir d'ici, chiffré ». |
-| **4.12** | **Avertissement de changement de clé** (le `true` que rend `saveIdentity` ne va nulle part aujourd'hui). |
-| **4.13** | **L'écran de vérification, avec QR** — voir ci-dessous. |
-| **4.14** | **L'archive et ses trois serrures**, le trousseau devenant le coffre matériel. |
-| **4.15** | **Multi-appareil simultané** web + mobile, à éprouver. |
+| **éprouver sur un appareil** | rien de tout ceci n'a tourné sur un téléphone. `dart analyze` dit que le code compile, pas qu'il marche. |
+| **l'archive d'un client à l'autre** | le format est identique PAR CONSTRUCTION, pas encore par mesure. Le banc éprouve le protocole et le QR, pas une archive qui passe du web au mobile. |
+| **brancher les widgets** aux écrans existants de l'application | les éléments existent, les écrans de conversation ne les appellent pas encore. |
 
 ### 4.13 — L'écran de vérification et le QR
 
