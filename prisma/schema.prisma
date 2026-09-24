@@ -3099,11 +3099,30 @@ model E2eeSerrure {
 
   /// `trousseau`, `motdepasse` ou `recuperation`.
   ///
-  /// ⚠️ UNE SEULE PAR TYPE ET PAR COMPTE : reposer la même serrure remplace
-  /// l'ancienne. Sans cette unicité, un changement de mot de passe laisserait
-  /// derrière lui une serrure ouvrable par l'ANCIEN mot de passe — et le
-  /// changer n'aurait alors rien changé.
+  /// ⚠️ DEUX RÈGLES D'UNICITÉ, ET NON UNE SEULE — voir `appareil` ci-dessous.
+  /// `motdepasse` et `recuperation` valent pour toute la personne : une seule
+  /// par compte, et la reposer remplace l'ancienne. Sans cela, changer de mot
+  /// de passe laisserait derrière lui une serrure ouvrable par l'ANCIEN.
   type String @db.VarChar(20)
+
+  /// L'appareil auquel cette serrure est liée — vide si elle n'en dépend pas.
+  ///
+  /// 🔴 POURQUOI CETTE COLONNE EXISTE. `trousseau` n'est PAS de même nature que
+  /// les deux autres : un mot de passe et une clé de récupération suivent la
+  /// PERSONNE, alors qu'un trousseau appartient à UN APPAREIL. Face ID sur le
+  /// téléphone et Windows Hello sur le portable sont deux secrets différents,
+  /// et les deux doivent ouvrir l'archive.
+  ///
+  /// 🐛 SANS ELLE, `@@unique([compte, type])` faisait que poser le trousseau
+  /// sur un second appareil EFFAÇAIT celui du premier — qui cessait alors de
+  /// s'ouvrir tout seul, sans que rien ne le dise. Invisible tant qu'il n'y
+  /// avait qu'un client web ; bloquant dès l'arrivée du mobile.
+  ///
+  /// ⚠️ CHAÎNE VIDE PLUTÔT QUE NULL : dans PostgreSQL, deux NULL ne se
+  /// heurtent pas dans un index unique. Une serrure « mot de passe » à NULL
+  /// aurait donc pu être posée deux fois — exactement ce que l'unicité devait
+  /// empêcher.
+  appareil String @default("") @db.VarChar(64)
 
   /// Base64. Aléatoire, public.
   sel           String @db.VarChar(64)
@@ -3132,7 +3151,11 @@ model E2eeSerrure {
   createdAt DateTime @default(now()) @map("create_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("update_at") @db.Timestamptz
 
-  @@unique([userId, type], map: "e2ee_serrures_compte_type_uniq")
+  /// ⚠️ LA RÈGLE « QUEL TYPE EST LIÉ À UN APPAREIL » EST PORTÉE PAR UNE
+  /// CONTRAINTE `CHECK`, posée dans la migration manuelle — Prisma ne sait pas
+  /// les modéliser. Sans elle, rien n'empêcherait une serrure « mot de passe »
+  /// attachée à un appareil, ou un trousseau qui n'en désigne aucun.
+  @@unique([userId, type, appareil], map: "e2ee_serrures_compte_type_appareil_uniq")
   @@map("e2ee_serrures")
 }
 

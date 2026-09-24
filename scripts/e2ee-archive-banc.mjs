@@ -29,6 +29,40 @@ function titre(t) {
   console.log(`\n\x1b[1m${t}\x1b[0m`);
 }
 
+/**
+ * Se connecte, en acceptant d'attendre si le serveur nous freine.
+ *
+ * 🐛 LA ROUTE DE CONNEXION LIMITE À 5 TENTATIVES PAR MINUTE ET PAR IP — une
+ * protection légitime, et les bancs la déclenchaient : chacun ouvre une ou
+ * deux sessions, et on les enchaîne.
+ *
+ * ⚠️ LE BANC ÉCHOUAIT ALORS SUR UN `429` QUI N'A RIEN À VOIR AVEC CE QU'IL
+ * ÉPROUVE. On cherche le défaut dans le chiffrement, il est dans la cadence.
+ *
+ * ⚠️ ON ATTEND, ON NE CONTOURNE PAS. Désactiver la limite pour les tests
+ * reviendrait à ne plus éprouver le vrai serveur — et la limite est justement
+ * une des choses qu'on veut voir marcher.
+ */
+async function connexion(corps, marque = "") {
+  for (let essai = 1; essai <= 6; essai++) {
+    const r = await fetch(`${API}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(corps),
+    });
+    if (r.ok) return (await r.json()).accessToken;
+
+    const texte = await r.text();
+    if (r.status !== 429) throw new Error(`login ${marque} → ${r.status} ${texte}`);
+
+    const attente = 12_000;
+    console.log(
+      `      [2m(cadence limitée — on patiente ${attente / 1000} s, essai ${essai}/6)[0m`,
+    );
+    await new Promise((ok) => setTimeout(ok, attente));
+  }
+  throw new Error(`login ${marque} → toujours limité après six essais`);
+}
 async function compte(marque, typeCompte = 0) {
   const email = `archive-${marque}@e2ee.test`;
   const motDePasse = "MotDePasseDeTest!2026";
@@ -44,18 +78,16 @@ async function compte(marque, typeCompte = 0) {
       typeCompte,
     },
   });
-  const r = await fetch(`${API}/api/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const jeton = await connexion(
+    {
       identifier: email,
       password: motDePasse,
       deviceId: `archive-${marque}`,
       typeDevice: 0,
-    }),
-  });
-  if (!r.ok) throw new Error(`login ${marque} → ${r.status} ${await r.text()}`);
-  return { user, jeton: (await r.json()).accessToken };
+    },
+    marque,
+  );
+  return { user, jeton };
 }
 
 function appel(jeton) {
@@ -80,8 +112,9 @@ function appel(jeton) {
   };
 }
 
-const SERRURE = (type) => ({
+const SERRURE = (type, appareil = "") => ({
   type,
+  appareil,
   sel: "c2VsLWRlLXNlaXplLW9jdGV0cw==",
   iv: "aXYtZGUtZG91emUh",
   cleEnveloppee: "Y2xlLW1haXRyZXNzZS1jaGlmZnJlZS1pY2k=",
@@ -120,7 +153,10 @@ async function main() {
   /* ── ② LE PÉRIMÈTRE ──────────────────────────────────────────────── */
   titre("② Un compte hors périmètre n'a pas de coffre");
 
-  const refus = await apiAgent("/api/e2ee/coffre", { method: "PUT", body: SERRURE("trousseau") });
+  const refus = await apiAgent("/api/e2ee/coffre", {
+    method: "PUT",
+    body: SERRURE("trousseau", "portable"),
+  });
   verifie(
     "un AGENT (type 2) ne peut pas poser de serrure",
     refus.statut === 403 && refus.corps.includes("HORS_PERIMETRE"),
@@ -137,7 +173,10 @@ async function main() {
   titre("③ Trois serrures, et une seule par type");
 
   for (const type of ["trousseau", "motdepasse", "recuperation"]) {
-    const r = await api("/api/e2ee/coffre", { method: "PUT", body: SERRURE(type) });
+    const r = await api("/api/e2ee/coffre", {
+      method: "PUT",
+      body: SERRURE(type, type === "trousseau" ? "portable" : ""),
+    });
     verifie(`« ${type} » posée`, r.statut === 201, `HTTP ${r.statut} ${r.corps.slice(0, 80)}`);
   }
 
@@ -166,6 +205,71 @@ async function main() {
 
   const inconnu = await api("/api/e2ee/coffre", { method: "PUT", body: SERRURE("porte-derobee") });
   verifie("un type inconnu est refusé", inconnu.statut === 400, `HTTP ${inconnu.statut}`);
+
+  /* ── ③bis DEUX APPAREILS, DEUX TROUSSEAUX ────────────────────────── */
+  titre("③bis Le trousseau est PAR APPAREIL, pas par compte");
+
+  /*
+   * 🐛 LE DÉFAUT QUE CETTE SECTION GARDE FERMÉ.
+   *
+   * Avec `UNIQUE (compte, type)`, poser le trousseau sur un second appareil
+   * EFFAÇAIT celui du premier — qui cessait de s'ouvrir tout seul, sans que
+   * rien ne le dise. Invisible tant qu'il n'y avait qu'un client web ;
+   * bloquant dès l'arrivée du mobile.
+   */
+  const surTelephone = await api("/api/e2ee/coffre", {
+    method: "PUT",
+    body: SERRURE("trousseau", "telephone"),
+  });
+  verifie("un second appareil peut poser SON trousseau", surTelephone.statut === 201);
+
+  const deux = await api("/api/e2ee/coffre");
+  const trousseaux = (deux.json?.serrures ?? []).filter((s) => s.type === "trousseau");
+  verifie(
+    "les DEUX trousseaux coexistent",
+    trousseaux.length === 2,
+    `${trousseaux.length} — le second a effacé le premier`,
+  );
+  verifie(
+    "et chacun désigne son appareil",
+    trousseaux.map((s) => s.appareil).sort().join(",") === "portable,telephone",
+    JSON.stringify(trousseaux.map((s) => s.appareil)),
+  );
+
+  /*
+   * ⚠️ ET LA RÈGLE TIENT DANS L'AUTRE SENS : un mot de passe ne se lie PAS à un
+   * appareil. L'autoriser le rendrait posable plusieurs fois, et changer de mot
+   * de passe laisserait l'ancien ouvrir l'archive.
+   */
+  const mdpAvecAppareil = await api("/api/e2ee/coffre", {
+    method: "PUT",
+    body: SERRURE("motdepasse", "portable"),
+  });
+  verifie(
+    "un mot de passe lié à un appareil est REFUSÉ",
+    mdpAvecAppareil.statut === 400 && mdpAvecAppareil.corps.includes("APPAREIL_INTERDIT"),
+    `HTTP ${mdpAvecAppareil.statut}`,
+  );
+
+  const trousseauSansAppareil = await api("/api/e2ee/coffre", {
+    method: "PUT",
+    body: SERRURE("trousseau"),
+  });
+  verifie(
+    "un trousseau sans appareil est REFUSÉ",
+    trousseauSansAppareil.statut === 400 &&
+      trousseauSansAppareil.corps.includes("APPAREIL_REQUIS"),
+    `HTTP ${trousseauSansAppareil.statut}`,
+  );
+
+  // On retire celui du téléphone : le portable ne doit pas être touché.
+  await api("/api/e2ee/coffre?type=trousseau&appareil=telephone", { method: "DELETE" });
+  const apresRetrait = await api("/api/e2ee/coffre");
+  verifie(
+    "retirer le trousseau d'un appareil laisse l'autre",
+    (apresRetrait.json?.serrures ?? []).filter((s) => s.type === "trousseau").length === 1,
+    "les deux sont partis",
+  );
 
   /* ── ④ DÉPOSER ET RELIRE ─────────────────────────────────────────── */
   titre("④ Déposer des blocs, les relire dans l'ordre");
@@ -208,7 +312,9 @@ async function main() {
    * destruction silencieuse, et elle arriverait à quelqu'un qui « fait le
    * ménage » dans ses réglages.
    */
-  const derniere = await api("/api/e2ee/coffre?type=trousseau", { method: "DELETE" });
+  const derniere = await api("/api/e2ee/coffre?type=trousseau&appareil=portable", {
+    method: "DELETE",
+  });
   verifie(
     "retirer la DERNIÈRE serrure est refusé",
     derniere.statut === 409 && derniere.corps.includes("DERNIERE_SERRURE"),
@@ -236,7 +342,7 @@ async function main() {
   /* ── ⑦ L'ARCHIVE D'AUTRUI ────────────────────────────────────────── */
   titre("⑦ On ne voit que la sienne");
 
-  await api("/api/e2ee/coffre", { method: "PUT", body: SERRURE("trousseau") });
+  await api("/api/e2ee/coffre", { method: "PUT", body: SERRURE("trousseau", "portable") });
   await api("/api/e2ee/archive", {
     method: "POST",
     body: { iv: "aXYtZGUtZG91emUh", contenu: "secret-d-alice", nbMessages: 1 },

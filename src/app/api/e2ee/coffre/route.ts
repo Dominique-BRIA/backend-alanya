@@ -26,6 +26,20 @@ import { estComptePersonnel } from "@/lib/e2ee-perimetre";
 const TYPES = new Set(["trousseau", "motdepasse", "recuperation"]);
 
 /**
+ * Les types liés à UN APPAREIL.
+ *
+ * 🔴 `trousseau` N'EST PAS DE MÊME NATURE QUE LES AUTRES : un mot de passe et
+ * une clé de récupération suivent la PERSONNE ; un trousseau appartient à un
+ * appareil. Face ID sur le téléphone et Windows Hello sur le portable sont
+ * deux secrets différents, et les deux doivent ouvrir l'archive.
+ *
+ * ⚠️ LA BASE PORTE DÉJÀ CETTE RÈGLE (contrainte `CHECK`). Ce contrôle-ci ne la
+ * remplace pas : il la traduit en refus lisible, au lieu d'une erreur 500
+ * venue de PostgreSQL.
+ */
+const TYPES_PAR_APPAREIL = new Set(["trousseau"]);
+
+/**
  * Plafonds de forme.
  *
  * ⚠️ ILS NE SONT PAS DÉCORATIFS : ces colonnes sont des `VARCHAR`, et
@@ -40,6 +54,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     where: { userId },
     select: {
       type: true,
+      appareil: true,
       sel: true,
       iv: true,
       cleEnveloppee: true,
@@ -104,6 +119,22 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
   const type = typeof r.type === "string" ? r.type : "";
   if (!TYPES.has(type)) return fail("Type de serrure inconnu", 400, "BAD_BODY");
 
+  /*
+   * ⚠️ L'APPAREIL EST EXIGÉ POUR UN TROUSSEAU, ET INTERDIT POUR LE RESTE.
+   *
+   * Un trousseau sans appareil redeviendrait unique par compte — le défaut
+   * qu'on vient de corriger. Un mot de passe AVEC appareil deviendrait posable
+   * plusieurs fois, et changer de mot de passe laisserait l'ancien ouvrir.
+   */
+  const appareil = typeof r.appareil === "string" ? r.appareil : "";
+  if (TYPES_PAR_APPAREIL.has(type)) {
+    if (!appareil || appareil.length > 64) {
+      return fail("Cette serrure doit désigner un appareil", 400, "APPAREIL_REQUIS");
+    }
+  } else if (appareil !== "") {
+    return fail("Cette serrure ne se lie pas à un appareil", 400, "APPAREIL_INTERDIT");
+  }
+
   for (const champ of ["sel", "iv", "cleEnveloppee", "algo", "parametres"] as const) {
     const v = r[champ];
     if (typeof v !== "string" || v === "" || v.length > MAX[champ]) {
@@ -120,10 +151,11 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
    * porte la même règle, pour qu'aucun autre chemin ne puisse la contourner.
    */
   const serrure = await prisma.e2eeSerrure.upsert({
-    where: { userId_type: { userId, type } },
+    where: { userId_type_appareil: { userId, type, appareil } },
     create: {
       userId,
       type,
+      appareil,
       sel: r.sel as string,
       iv: r.iv as string,
       cleEnveloppee: r.cleEnveloppee as string,
@@ -137,7 +169,7 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
       algo: r.algo as string,
       parametres: r.parametres as string,
     },
-    select: { type: true, updatedAt: true },
+    select: { type: true, appareil: true, updatedAt: true },
   });
 
   /*
@@ -158,6 +190,13 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
   if (!TYPES.has(type)) return fail("Type de serrure inconnu", 400, "BAD_BODY");
 
   /*
+   * ⚠️ SANS `appareil`, ON RETIRERAIT LE TROUSSEAU DE TOUS LES APPAREILS. Le
+   * paramètre est donc lu ici aussi : retirer le trousseau du téléphone ne
+   * doit rien faire à celui du portable.
+   */
+  const appareil = req.nextUrl.searchParams.get("appareil") ?? "";
+
+  /*
    * 🔴 ON REFUSE DE RETIRER LA DERNIÈRE. Une archive sans serrure ne se rouvre
    * JAMAIS — ni par l'utilisateur, ni par nous. Ce n'est pas une suppression,
    * c'est une destruction silencieuse, et elle se produirait au pire moment :
@@ -175,6 +214,8 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
     );
   }
 
-  const { count } = await prisma.e2eeSerrure.deleteMany({ where: { userId, type } });
+  const { count } = await prisma.e2eeSerrure.deleteMany({
+    where: { userId, type, appareil },
+  });
   return ok({ retiree: count > 0 });
 });
