@@ -155,6 +155,14 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     return {
       id: conv.id,
       isGroup: conv.isGroup,
+      /*
+       * Cette conversation est-elle chiffree de bout en bout ?
+       *
+       * ⚠️ CHAMP FACULTATIF POUR LE CLIENT : celui qui l ignore continue
+       * exactement comme avant. C est ce qui permet de deployer le serveur
+       * avant les clients, sans coordonner les deux.
+       */
+      e2eeActif: conv.e2eeActif,
       /// Mes notes personnelles. Envoyé explicitement : un client qui l'ignore
       /// affiche « Moi » comme titre et se comporte normalement — dégradé,
       /// jamais cassé.

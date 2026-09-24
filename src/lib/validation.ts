@@ -199,6 +199,19 @@ export const createConversationSchema = z.object({
 
 export const sendMessageSchema = z.object({
   /**
+   * Ce message est l'enveloppe VIDE d'un contenu chiffré de bout en bout.
+   *
+   * 🔴 IL N'AUTORISE RIEN — il ANNONCE. Le client dit « je n'apporte pas de
+   * texte, il part par `/api/e2ee/enveloppes` ». C'est `creerMessage` qui
+   * décide, et qui refuse si un contenu accompagne ce drapeau.
+   *
+   * ⚠️ SANS LUI, UN CLIENT À JOUR NE PEUT PLUS ÉCRIRE dans une conversation
+   * chiffrée : la garde de `creerMessage` refuse tout chemin qui ne s'annonce
+   * pas. Le drapeau est donc la seule porte, et elle est étroite par
+   * construction.
+   */
+  chiffre: z.boolean().optional(),
+  /**
    * ⚠️ 8000 N'EST PLUS LA LIMITE RÉELLE — c'est un garde-fou d'entrée.
    *
    * `message.content` est un VARCHAR(500) depuis le 25/08/2026, et c'est

@@ -603,6 +603,67 @@ async function purgeExpiredStatuses() {
 }
 
 /**
+ * Purge les enveloppes chiffrées dont personne ne fera plus rien.
+ *
+ * 🔴 CE QU'ON SUPPRIME EST DÉJÀ INDÉCHIFFRABLE PAR QUICONQUE, y compris par
+ * nous. Une enveloppe acquittée a été lue ET déchiffrée avec succès — c'est la
+ * condition de l'acquittement — et le ratchet du destinataire a avancé depuis.
+ * La clé de ce message n'existe plus nulle part. On conservait donc des octets
+ * que PERSONNE ne pourra jamais relire.
+ *
+ * Ordre de grandeur : ~450 octets par message avec l'en-tête de ligne et les
+ * index, à multiplier par le nombre d'appareils du destinataire.
+ *
+ * ⚠️ DEUX CAS DISTINCTS, ET ILS N'ONT PAS LE MÊME DÉLAI.
+ */
+async function purgeEnveloppesChiffrees() {
+  /*
+   * ① LES ACQUITTÉES — 30 jours.
+   *
+   * ⚠️ CE DÉLAI EST UNE MARGE, PAS UN BESOIN, et autant le dire : `remis_le`
+   * n'est posé qu'APRÈS un déchiffrement réussi, donc l'enveloppe a fait son
+   * travail. Les trente jours ne couvrent qu'un cas : un client qui aurait
+   * acquitté puis échoué à ranger le clair. Aligné sur le balayage des
+   * identités muettes, pour qu'il n'y ait qu'un seul délai à retenir.
+   */
+  try {
+    const limite = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const res = await prisma.e2eeEnveloppe.deleteMany({
+      where: { remisLe: { lt: limite } },
+    });
+    if (res.count > 0) console.log(`[ws] Enveloppes chiffrées remises purgées : ${res.count}`);
+  } catch (e) {
+    console.error("[ws] purge des enveloppes remises:", e);
+  }
+
+  /*
+   * ② LES JAMAIS RELEVÉES — 90 jours.
+   *
+   * 🐛 CELLES-CI S'ACCUMULAIENT SANS AUCUNE LIMITE. Une enveloppe déposée pour
+   * un appareil qui ne revient jamais — navigateur vidé, déconnexion, poste
+   * abandonné — n'est acquittée par personne et restait donc éternellement.
+   * Les bancs d'essai les nettoyaient ; la production, non.
+   *
+   * ⚠️ TROIS FOIS PLUS LONG QUE L'AUTRE, ET C'EST VOLONTAIRE : ici on supprime
+   * un message que le destinataire n'a PAS lu. Se tromper coûte un message
+   * perdu, pas quelques octets. Quatre-vingt-dix jours dépassent largement le
+   * moment où il devient illisible de toute façon — nous ne gardons que trois
+   * générations de pré-clés signées, et il en naît une à chaque connexion.
+   */
+  try {
+    const limite = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const res = await prisma.e2eeEnveloppe.deleteMany({
+      where: { remisLe: null, createdAt: { lt: limite } },
+    });
+    if (res.count > 0) {
+      console.log(`[ws] Enveloppes chiffrées jamais relevées purgées : ${res.count}`);
+    }
+  } catch (e) {
+    console.error("[ws] purge des enveloppes jamais relevées:", e);
+  }
+}
+
+/**
  * Ferme les appels laissés en sonnerie au-delà du délai.
  *
  * ⚠️ CE BALAYAGE EST INDISPENSABLE, et son absence était le défaut le plus
@@ -1063,6 +1124,45 @@ async function handleSend(ws, msg) {
 
   if (!(await isParticipant(convId, ws.userId))) {
     ws.send(JSON.stringify({ type: "error", message: "Conversation interdite", tempId }));
+    return;
+  }
+
+  /*
+   * 🔴 RIEN EN CLAIR DANS UN FIL CHIFFRE — LE TROU DU 22/09/2026.
+   *
+   * La regle etait posee dans `creerMessage` (`src/modules/messaging/envoi.ts`),
+   * donc sur le chemin REST uniquement. Or le client ordinaire envoie par ICI :
+   * le WebSocket ecrit sa ligne lui-meme, avec son propre `prisma.message.create`,
+   * et ne traversait aucune des gardes du module. La regle ne tenait donc que la
+   * porte que PERSONNE n'utilise.
+   *
+   * ⚠️ CE N'ETAIT PAS THEORIQUE : il suffisait qu'un client ignore l'etat chiffre
+   * du fil — le temps d'un aller-retour a l'ouverture, ou parce que le
+   * CORRESPONDANT vient d'activer le chiffrement — pour que son texte parte en
+   * clair et s'ecrive en clair dans `message.content`. Exactement ce que le
+   * chiffrement promet d'empecher.
+   *
+   * ⚠️ ON REFUSE AVEC UN CODE, pas en silence : le client sait rejouer par le
+   * chemin chiffre quand il recoit `CONVERSATION_CHIFFREE`. Se taire laisserait
+   * sa bulle tourner pour toujours.
+   *
+   * ⚠️ LES MEDIAS PASSENT ENCORE — ils ne sont pas chiffres (chantier remis). Ne
+   * bloquer que le TEXTE evite de rendre un fil chiffre muet en pieces jointes,
+   * mais l'ecran doit finir par dire qu'elles ne sont pas protegees.
+   */
+  const filChiffre = await prisma.conversation.findUnique({
+    where: { id: convId },
+    select: { e2eeActif: true },
+  });
+  if (filChiffre?.e2eeActif === true && content && content.trim() !== "") {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        code: "CONVERSATION_CHIFFREE",
+        message: "Cette conversation est chiffree : le texte en clair est refuse.",
+        tempId,
+      }),
+    );
     return;
   }
 
@@ -4744,8 +4844,32 @@ async function envoieRappelsReunion() {
 /// LA LIMITE, a connaitre : l'API et ce serveur doivent vivre sur la MEME
 /// machine. C'est le cas aujourd'hui. Le jour ou on les separera, il faudra
 /// revenir a un port et a un secret — et ce commentaire dira pourquoi.
+/// ⚠️ SOUS WINDOWS, UN TUYAU NOMME — ET CE N'EST PAS UN DETAIL DE CONFORT.
+///
+/// 🐛 CONSTATE LE 22/09/2026 : `listen EACCES ... .ws-interne.sock`. Windows
+/// n'a pas de socket de FICHIER au sens POSIX ; Node y attend un tuyau nomme
+/// (`\\.\pipe\...`). Le pont interne n'a donc JAMAIS fonctionne sur les
+/// postes de developpement — en silence, puisqu'il a le droit d'etre absent.
+/// Tout ce qu'il porte marchait sur le VPS et pas en local, ce qui est la
+/// pire des situations : on ne peut pas tester ce qu'on livre.
+///
+/// ⚠️ LES DEUX BOUTS DOIVENT CALCULER LE MEME DEFAUT. Le jumeau de ces lignes
+/// est dans `src/lib/salle-temps-reel.ts` ; les faire diverger rouvrirait le
+/// defaut sans rien dire.
+///
+/// ⚠️ UN TUYAU NOMME N'A PAS DE PERMISSIONS DE FICHIER. Il est accessible aux
+/// autres sessions de la machine, la ou le `chmod 0600` du monde POSIX ferme
+/// la porte. C'est acceptable sur un poste de developpement, et c'est une
+/// raison de plus pour que la PRODUCTION reste sous Linux.
 const PONT_SOCKET =
-  process.env.WS_INTERNAL_SOCKET ?? path.join(process.cwd(), ".ws-interne.sock");
+  process.env.WS_INTERNAL_SOCKET ||
+  (process.platform === "win32"
+    ? String.raw`\\.\pipe\alanya-ws-interne`
+    : path.join(process.cwd(), ".ws-interne.sock"));
+
+/// Vrai quand le chemin ci-dessus est un tuyau nomme : il ne se supprime pas,
+/// ne se `chmod` pas, et disparait tout seul avec le processus.
+const PONT_EST_TUYAU = PONT_SOCKET.startsWith("\\\\");
 
 /// DEUX MACHINES : on repasse au reseau, et alors le secret redevient
 /// obligatoire.
@@ -4767,8 +4891,22 @@ const PONT_ENTETE = "x-alanya-interne";
 /// Vrai quand on doit ecouter sur le reseau plutot que sur la socket de fichier.
 const PONT_PAR_RESEAU = PONT_PORT !== null;
 
-/// Le seul chemin servi. Tout le reste rend 404.
+/// Le chemin des SALLES. Une diffusion a tous ceux qui y sont inscrits.
 const PONT_CHEMIN = "/interne/salle/diffuser";
+
+/// Le chemin des PERSONNES — ajoute le 22/09/2026 pour le chiffrement.
+///
+/// POURQUOI UNE SECONDE PORTE. Un message chiffre ne passe PAS par le
+/// WebSocket : son texte vit dans des enveloppes deposees par une route REST,
+/// et c'est seulement une fois le depot fait que le destinataire a de quoi
+/// lire. La diffusion doit donc partir de l'API, apres le depot — pas d'ici,
+/// qui ne voit rien passer.
+///
+/// ⚠️ ELLE NE VISE PAS UNE SALLE. C'est toute la difference : `salle` est
+/// obligatoire sur l'autre chemin, et une conversation n'en est pas une. On
+/// ne pouvait donc pas reutiliser la porte existante sans lui faire accepter
+/// `salle: 0`, ce qui aurait affaibli sa propre validation.
+const PONT_CHEMIN_PERSONNES = "/interne/personnes/diffuser";
 
 /// Plafond du corps. Le pont ne transporte que des codes et quelques
 /// identifiants : au-dela, c'est une erreur ou un abus, et lire sans borne
@@ -4781,6 +4919,15 @@ const PONT_CORPS_MAX = 64 * 1024;
 /// Reste ouvert a tout `meeting_*` a venir : rien a modifier ici pour
 /// l'exclusion ou le changement de role.
 const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
+
+/// Les verbes admis sur la porte des PERSONNES.
+///
+/// ⚠️ AUSSI ETROIT QUE CELUI DES SALLES, ET POUR LA MEME RAISON : viser des
+/// personnes nommement est plus puissant que diffuser dans une salle, donc le
+/// vocabulaire doit l'etre moins. Rien ici ne doit pouvoir fabriquer un
+/// `message`, un `ready` ou un `error` — des trames que les clients traitent
+/// a part et qui changeraient leur etat.
+const PONT_VERBE_PERSONNES = /^e2ee_[a-z0-9_]+$/;
 
 /// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
 /// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines
@@ -4850,9 +4997,47 @@ function pontLitLeCorps(req) {
  * AUCUN TEXTE AFFICHABLE n'est fabrique ici, et il ne faut pas commencer : ce
  * qui traverse est un CODE, que le client traduit dans sa langue.
  */
+/**
+ * La porte des PERSONNES : une trame, des destinataires nommes, rien d'autre.
+ *
+ * ⚠️ ELLE NE DECIDE DE RIEN. Qui a le droit de recevoir quoi a deja ete tranche
+ * par l'API avant l'appel — ici on ne sait meme pas de quoi il s'agit. C'est
+ * la raison du vocabulaire etroit : ce point d'entree est un porte-voix, et un
+ * porte-voix ne doit pas pouvoir crier n'importe quoi.
+ */
+function pontVersPersonnes(res, corps) {
+  const verbe = typeof corps?.type === "string" ? corps.type : "";
+  if (!PONT_VERBE_PERSONNES.test(verbe)) {
+    pontRepond(res, 400, { erreur: "BAD_TYPE" });
+    return;
+  }
+  const personnes = Array.isArray(corps?.personnes)
+    ? [...new Set(corps.personnes.filter((p) => typeof p === "string" && p !== ""))]
+    : [];
+  if (personnes.length === 0) {
+    pontRepond(res, 400, { erreur: "NO_RECIPIENT" });
+    return;
+  }
+  const donnees =
+    corps?.donnees && typeof corps.donnees === "object" && !Array.isArray(corps.donnees)
+      ? corps.donnees
+      : {};
+  const message = { ...donnees, type: verbe };
+
+  // Personne de connecte n'est PAS une erreur : le depot est ecrit, et le
+  // destinataire relevera a sa prochaine ouverture. On rend le compte, et
+  // l'API n'a rien a rattraper.
+  let servies = 0;
+  for (const uid of personnes) {
+    if (sendTo(uid, message)) servies++;
+  }
+  pontRepond(res, 200, { ok: true, servies });
+}
+
 async function pontTraite(req, res) {
   const chemin = (req.url ?? "").split("?")[0];
-  if (req.method !== "POST" || chemin !== PONT_CHEMIN) {
+  const versPersonnes = chemin === PONT_CHEMIN_PERSONNES;
+  if (req.method !== "POST" || (chemin !== PONT_CHEMIN && !versPersonnes)) {
     pontRepond(res, 404, { erreur: "NOT_FOUND" });
     return;
   }
@@ -4879,6 +5064,14 @@ async function pontTraite(req, res) {
     } else {
       pontRepond(res, 400, { erreur: "BAD_JSON" });
     }
+    return;
+  }
+
+  // ⚠️ L'AIGUILLAGE EST ICI, APRES LA LECTURE DU CORPS ET LE CONTROLE DU
+  // SECRET : les deux portes partagent exactement les memes protections, et
+  // aucune ne peut les perdre en divergeant.
+  if (versPersonnes) {
+    pontVersPersonnes(res, corps);
     return;
   }
 
@@ -5037,7 +5230,7 @@ if (PONT_PAR_RESEAU) {
   // brutal, le fichier reste et `listen` echouerait sur EADDRINUSE — un pont
   // mort a chaque redemarrage, pour un fichier que plus personne n'ecoute.
   try {
-    fs.unlinkSync(PONT_SOCKET);
+    if (!PONT_EST_TUYAU) fs.unlinkSync(PONT_SOCKET);
   } catch {
     // Le fichier n'existait pas : cas normal d'un premier demarrage.
   }
@@ -5048,11 +5241,14 @@ if (PONT_PAR_RESEAU) {
     // peut pas ouvrir la socket, la ou il aurait pu deviner ou lire un mot de
     // passe.
     try {
-      fs.chmodSync(PONT_SOCKET, 0o600);
+      if (!PONT_EST_TUYAU) fs.chmodSync(PONT_SOCKET, 0o600);
     } catch (err) {
       console.error("[pont] permissions de la socket non posees:", err?.message ?? err);
     }
-    console.log(`[pont] Ecouteur interne a l'ecoute sur ${PONT_SOCKET} (socket de fichier)`);
+    console.log(
+      `[pont] Ecouteur interne a l'ecoute sur ${PONT_SOCKET} ` +
+        `(${PONT_EST_TUYAU ? "tuyau nomme" : "socket de fichier"})`,
+    );
   });
 
   // Retiree a l'arret propre : laisser un fichier mort derriere soi obligerait
@@ -5061,7 +5257,7 @@ if (PONT_PAR_RESEAU) {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
       try {
-        fs.unlinkSync(PONT_SOCKET);
+        if (!PONT_EST_TUYAU) fs.unlinkSync(PONT_SOCKET);
       } catch {
         // Deja parti, ou jamais cree : rien a faire.
       }
@@ -5096,6 +5292,13 @@ wss.on("listening", () => {
   // Purge des statuts expirés : une fois au démarrage, puis toutes les heures.
   purgeExpiredStatuses();
   setInterval(purgeExpiredStatuses, 60 * 60 * 1000);
+  /*
+   * ⚠️ MÊME CADENCE QUE LES STATUTS, ET C'EST AMPLEMENT SUFFISANT : les seuils
+   * se comptent en dizaines de jours. Balayer plus souvent ne ferait que
+   * relire une table pour n'y rien trouver.
+   */
+  purgeEnveloppesChiffrees();
+  setInterval(purgeEnveloppesChiffrees, 60 * 60 * 1000);
   // Toutes les 30 s : bien plus court que le délai de 90 s, pour qu'un appel
   // abandonné ne survive jamais longtemps à son échéance.
   fermeAppelsPerimes();

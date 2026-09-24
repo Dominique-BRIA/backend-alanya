@@ -48,12 +48,12 @@ interface ReponsePont {
 }
 
 /** Par la socket de fichier — le cas courant, sans configuration ni secret. */
-function viaSocket(corps: string): Promise<ReponsePont> {
+function viaSocket(corps: string, chemin: string): Promise<ReponsePont> {
   return new Promise((resoudre, rejeter) => {
     const requete = http.request(
       {
         socketPath: cheminSocket(),
-        path: CHEMIN_PONT,
+        path: chemin,
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -77,8 +77,8 @@ function viaSocket(corps: string): Promise<ReponsePont> {
 }
 
 /** Par le reseau — deux machines, et le secret devient obligatoire. */
-async function viaReseau(corps: string): Promise<ReponsePont> {
-  const rep = await fetch(`${URL_PONT}${CHEMIN_PONT}`, {
+async function viaReseau(corps: string, chemin: string): Promise<ReponsePont> {
+  const rep = await fetch(`${URL_PONT}${chemin}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -94,11 +94,40 @@ async function viaReseau(corps: string): Promise<ReponsePont> {
   return { ok: rep.ok, status: rep.status };
 }
 
+// ⚠️ SOUS WINDOWS, UN TUYAU NOMME — ET CE N'EST PAS UN DETAIL DE CONFORT.
+//
+// 🐛 CONSTATE LE 22/09/2026 : `listen EACCES ... .ws-interne.sock`. Windows
+// n'a pas de socket de FICHIER au sens POSIX ; Node y attend un tuyau nomme
+// (`\\.\pipe\...`). Le pont interne n'a donc JAMAIS fonctionne sur les
+// postes de developpement — en silence, puisqu'il a le droit d'etre absent.
+// Tout ce qu'il porte marchait sur le VPS et pas en local, ce qui est la
+// pire des situations : on ne peut pas tester ce qu'on livre.
+//
+// ⚠️ LES DEUX BOUTS DOIVENT CALCULER LE MEME DEFAUT. Le jumeau de ces lignes
+// est dans `ws-server.mjs` ; les faire diverger rouvrirait le
+// defaut sans rien dire.
+//
+// ⚠️ UN TUYAU NOMME N'A PAS DE PERMISSIONS DE FICHIER. Il est accessible aux
+// autres sessions de la machine, la ou le `chmod 0600` du monde POSIX ferme
+// la porte. C'est acceptable sur un poste de developpement, et c'est une
+// raison de plus pour que la PRODUCTION reste sous Linux.
 function cheminSocket(): string {
-  return SOCKET_PONT || `${process.cwd()}/.ws-interne.sock`;
+  if (SOCKET_PONT) return SOCKET_PONT;
+  if (process.platform === "win32") return String.raw`\\.\pipe\alanya-ws-interne`;
+  return `${process.cwd()}/.ws-interne.sock`;
 }
 
 const CHEMIN_PONT = "/interne/salle/diffuser";
+
+/// La porte des PERSONNES, ouverte le 22/09/2026 pour le chiffrement.
+///
+/// POURQUOI ELLE EXISTE. Un message chiffre ne passe pas par le WebSocket :
+/// sa ligne part en REST, et son TEXTE vit dans des enveloppes deposees juste
+/// apres. Le serveur temps reel ne voit donc rien passer et n'a rien a
+/// annoncer — c'est l'API qui doit sonner, et seulement une fois le depot
+/// fait. Avant, le destinataire serait prevenu d'un message qu'il ne pourrait
+/// pas encore lire.
+const CHEMIN_PONT_PERSONNES = "/interne/personnes/diffuser";
 const ENTETE_PONT = "x-alanya-interne";
 
 /// Delai d'attente. C'est une requete vers un process de la MEME machine : elle
@@ -220,12 +249,12 @@ export async function previensLaSalle(params: {
       ...(personnes && personnes.length > 0 ? { personnes } : {}),
     });
     const reponse = PAR_RESEAU
-      ? await viaReseau(corps)
+      ? await viaReseau(corps, CHEMIN_PONT)
       : // `fetch` ne sait PAS joindre une socket de fichier : il refuse le
         // schema `unix:` par « unknown scheme » — verifie a l'execution, la
         // forme `unix:/chemin:/route` est une convention de curl, pas de Node.
         // `http.request` avec `socketPath`, lui, le fait nativement.
-        await viaSocket(corps);
+        await viaSocket(corps, CHEMIN_PONT);
     if (!reponse.ok) {
       console.error(
         `[salle] pont temps reel : HTTP ${reponse.status} pour ${type} (reunion ${meetingId})`,
@@ -342,4 +371,55 @@ export async function previensDemandeInvitation(params: {
     donnees: { motif: params.motif, parUserId: params.parUserId },
     personnes: params.destinataires,
   });
+}
+
+/* ══════════════════ PREVENIR DES PERSONNES ══════════════════ */
+
+/**
+ * Sonne chez des gens nommement — sans salle, sans reunion.
+ *
+ * 🔴 LA TRAME EST UNE SONNETTE, PAS UN CONTENU. Elle dit « quelque chose est
+ * arrive pour vous, relisez » et rien de plus. C'est ce qui la rend sans
+ * risque : elle ne transporte aucun texte, donc rien qui doive rester secret,
+ * et un client qui la manque ne perd rien — il relevera a sa prochaine
+ * ouverture. Le bus n'est jamais la seule trace d'un fait ; la base l'est.
+ *
+ * ⚠️ ATTENTION A L'ORDRE, ET ICI PLUS QU'AILLEURS : appeler APRES le depot des
+ * enveloppes, jamais entre la creation de la ligne et le depot. Parti trop tot,
+ * l'avis enverrait le destinataire relever du vide, et il ne serait pas
+ * rappele une seconde fois.
+ *
+ * Rend `true` si l'ecouteur a accepte. `false` couvre tout le reste — pont non
+ * configure, process arrete, personne de connecte — et n'est JAMAIS une raison
+ * de faire echouer l'appelant. Ne leve pas.
+ */
+export async function previensDesPersonnes(params: {
+  /// Les comptes a prevenir. Tous leurs appareils connectes recevront la trame.
+  personnes: string[];
+  /// Verbe diffuse, de la forme `e2ee_*`. L'ecouteur refuse le reste.
+  type: string;
+  /// Champs joints. Des identifiants, jamais de texte lisible.
+  donnees?: Record<string, unknown>;
+}): Promise<boolean> {
+  const { personnes, type, donnees } = params;
+  if (personnes.length === 0) return false;
+  if (PAR_RESEAU && !SECRET_PONT) return false;
+
+  try {
+    const corps = JSON.stringify({ personnes, type, donnees });
+    const reponse = PAR_RESEAU
+      ? await viaReseau(corps, CHEMIN_PONT_PERSONNES)
+      : await viaSocket(corps, CHEMIN_PONT_PERSONNES);
+    return reponse.ok;
+  } catch {
+    /*
+     * ⚠️ SILENCIEUX, CONTRAIREMENT A LA DIFFUSION EN SALLE.
+     *
+     * Celle-ci part a CHAQUE message chiffre. Journaliser un pont injoignable
+     * a chaque envoi noierait le journal sous la meme ligne, alors que la
+     * consequence est benigne et deja connue : le destinataire relevera un peu
+     * plus tard. Le demarrage, lui, dit deja si le pont est la.
+     */
+    return false;
+  }
 }
