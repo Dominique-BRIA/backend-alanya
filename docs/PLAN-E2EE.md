@@ -1,9 +1,13 @@
-Je m# Plan d'implémentation — Chiffrement de bout en bout
+# Plan d'implémentation — Chiffrement de bout en bout
 
-> **Établi le 23/09/2026**, après audit du code existant.
+> **Établi le 23/09/2026** après audit du code, **mis à jour le 24/09/2026**.
 >
-> Ce plan ne liste pas ce qu'on imagine : chaque point du **lot 0** a été
-> vérifié dans le code. Les références de fichiers sont exactes.
+> Ce plan ne liste pas ce qu'on imagine : chaque point a été vérifié dans le
+> code, et ce qui est marqué ✅ correspond à un banc qui passe.
+>
+> **Les lots 0 à 3 sont livrés.** Ce qui reste tient dans les sections 7, 8 et
+> 11 — et la section 11 est celle qu'on oublie : elle dit ce qui doit être vrai
+> pour qu'une fonctionnalité « finie » le soit vraiment.
 
 ---
 
@@ -26,6 +30,9 @@ Je m# Plan d'implémentation — Chiffrement de bout en bout
 | Lot 1 — codes de sécurité | ✅ |
 | Lot 2 — purge des enveloppes (2.3 reporté sur mesure) | ✅ |
 | **Lot 3 — archive chiffrée, trois serrures** | ✅ |
+| ↳ sauvegarde **activée par défaut**, refus mémorisé | ✅ |
+| ↳ restauration **automatique** à la connexion | ✅ |
+| ↳ serrure « trousseau » **par appareil** (WebAuthn PRF) | ✅ |
 
 **Bancs** : `e2ee-banc.mjs`, `e2ee-nonfuite.mjs`, `e2ee-purge.mjs` (backend),
 `e2ee-web.mjs`, `e2ee-empreinte.mjs` (modules navigateur),
@@ -34,12 +41,14 @@ Je m# Plan d'implémentation — Chiffrement de bout en bout
 ### Ce qui reste — vue d'ensemble
 
 ```
-  LOT 0  Fuites et manques          🔴 BLOQUANT avant toute mise en production
-  LOT 1  Codes de sécurité          ├─ prérequis du lot 3
-  LOT 2  Rétention serveur          └─ indépendant
-  LOT 3  Archive chiffrée              (historique sur un nouvel appareil)
-  LOT 4  Client mobile
-  LOT 5  Dette de fond
+  LOT 0  Fuites et manques          ✅
+  LOT 1  Codes de sécurité          ✅
+  LOT 2  Rétention serveur          ✅
+  LOT 3  Archive chiffrée           ✅
+
+  LOT 4  Client mobile              ◀── EN COURS
+  LOT 5  Dette de fond              ◀── continu, dont 2 points BLOQUANTS
+  LOT 6  Ce qui manque pour dire « fini »
 ```
 
 ---
@@ -224,26 +233,62 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 
 ## 7. LOT 4 — Le client mobile
 
-| # | ticket |
+> **Débloqué le 24/09/2026** : la licence GPL-3.0 est acceptée (décision du
+> user). Le choix de bibliothèque est donc tranché.
+
+| # | ticket | état |
+|---|---|---|
+| **4.0** | 🔴 **LE BANC D'INTEROPÉRABILITÉ, AVANT TOUT LE RESTE.** Le web chiffre, le mobile déchiffre — et l'inverse. C'est le seul point qui peut encore remettre en cause l'architecture entière, donc il passe en premier, sur un fil de test, avant toute interface. | ⏳ |
+| **4.1** | ~~Choix de bibliothèque~~ → **`libsignal_protocol_dart`** (Mixin, 0.8.2, GPL-3.0). Mieux entretenue que celle du web. | ✅ décidé |
+| **4.2** | Coffre : Android Keystore / iOS Keychain. Le mobile a ici **mieux** que le web — du matériel. | ⏳ |
+| **4.3** | 🔴 **Le code de sécurité, réimplémenté à la main** — la bibliothèque Dart n'a PAS de classe `Fingerprint`. ⚠️ Les 5 200 itérations doivent correspondre EXACTEMENT, sinon web et mobile affichent des codes différents pour les mêmes clés et les gens concluent à une interposition qui n'existe pas. | ⏳ |
+| **4.4** | Parité du reste : périmètre, bannière, avertissement de changement de clé, refus du clair. | ⏳ |
+| **4.5** | **Multi-appareil simultané** web + mobile. Chaque appareil a son identité et reçoit sa propre enveloppe — le modèle le permet déjà. À éprouver, pas à concevoir. | ⏳ |
+| **4.6** | L'archive sur mobile : mot de passe et clé de récupération à l'identique ; le **trousseau** devient le coffre matériel. La serrure est désormais **par appareil**, ce qui rend les deux clients compatibles. | ⏳ |
+
+### Ce qui ne porte pas du web au mobile
+
+| | pourquoi |
 |---|---|
-| **4.1** | **Choix de bibliothèque.** Décision structurante : le web utilise `@privacyresearch/libsignal-protocol-typescript`, non maintenu depuis 3 ans. Le mobile n'a pas à hériter de ce choix. À évaluer avant d'écrire une ligne. |
-| **4.2** | Coffre : Android Keystore / iOS Keychain. Le mobile a ici **mieux** que le web — du matériel. |
-| **4.3** | Parité : périmètre, bannière, avertissement de clé, codes de sécurité. |
-| **4.4** | **Multi-appareil simultané** web + mobile. Chaque appareil a son identité et reçoit sa propre enveloppe — le modèle le permet déjà. À éprouver, pas à concevoir. |
+| le code de sécurité | absent de la bibliothèque Dart — à réécrire, à l'itération près |
+| WebAuthn PRF | n'existe pas en Flutter ; l'équivalent est le coffre matériel, techniquement **meilleur** |
+| le format sur le fil | *devrait* correspondre (même ancêtre Java). « Devrait » n'est pas une mesure → ticket 4.0 |
 
 ---
-
 ## 8. LOT 5 — Dette de fond
 
-| # | ticket |
-|---|---|
-| **5.1** | 🔴 **La bibliothèque non maintenue** — le risque principal de tout l'édifice, écrit en tête de `e2ee-service.ts`. Aucune correction de sécurité depuis 3 ans, et **aucun portage navigateur officiel de libsignal n'existe**. À surveiller, à documenter, à réévaluer. |
-| **5.2** | **CSP stricte.** Le coffre chiffré protège contre l'exfiltration des clés, **pas** contre un script hostile qui s'en sert sur place. La CSP est la défense qui manque. |
-| **5.3** | Recherche dans les messages chiffrés — côté client uniquement, sur le cache. |
-| **5.4** | Chiffrement des médias (remis par décision du user). |
+> Deux de ces points sont **bloquants avant une mise en production**, et ils ne
+> l'étaient pas moins hier : ils étaient simplement moins visibles que les
+> fonctionnalités.
+
+| # | ticket | état |
+|---|---|---|
+| **5.1** | 🔴 **La bibliothèque web n'est plus maintenue** — `@privacyresearch/libsignal-protocol-typescript` 0.0.16, dernière publication il y a 3 ans. Aucune correction de sécurité depuis, et **aucun portage navigateur officiel de libsignal n'existe**. C'est le risque principal de tout l'édifice. | ⏳ **bloquant** |
+| **5.2** | 🔴 **CSP stricte.** Le coffre chiffré empêche d'**emporter** les clés ; il n'empêche pas un script hostile de **s'en servir sur place**. La CSP est la défense qui manque, et elle est indépendante de tout le reste. | ⏳ **bloquant** |
+| **5.3** | Le **cache local en clair** (dette du chapitre 1). Décision du user du 21/09 : on le garde, sans quoi un fil chiffré redeviendrait vide à chaque rechargement. Le jour où il passera en IndexedDB chiffré, la question cesse de se poser. | ⏸️ assumé |
+| **5.4** | Recherche dans les messages chiffrés — côté client uniquement, sur le cache. | ⏳ |
+| **5.5** | Chiffrement des médias (remis par décision du user, 21/09). | ⏸️ remis |
+| **5.6** | `corps` en `bytea` — 10 % de la ligne, marginal depuis la purge. | ⏸️ remis |
+
+### ⚠️ Sur 5.1, ce qu'il faut savoir avant de décider
+
+La licence de cette bibliothèque est **GPL-3.0-only**, et elle s'applique
+**déjà** à Alanya Web aujourd'hui — la GPL se déclenche à la distribution, et
+envoyer un paquet JavaScript à un navigateur en est une.
+
+> Décision du user, 24/09/2026 : **la GPL-3.0 est acceptée.** Ce point est donc
+> tranché, mais il reste écrit ici parce qu'il ne se devine pas à la lecture du
+> code.
+
+Les alternatives, pour mémoire, si la question se rouvrait :
+
+| | licence | compatible avec l'existant ? |
+|---|---|---|
+| `libsignal` officielle (Rust) | AGPL-3.0 | oui, mais pas de portage navigateur |
+| `libsignal_protocol_dart` | GPL-3.0 | oui — **retenue pour le mobile** |
+| `vodozemac` (Matrix, Olm) | Apache-2.0 | **non** — autre protocole, tout serait à refaire |
 
 ---
-
 ## 9. Hors périmètre, et pourquoi
 
 | | raison |
@@ -254,35 +299,82 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 
 ---
 
-## 10. Ordre proposé
+## 10. Ce qu'il reste, dans l'ordre
 
 ```
-  LOT 0 ──────────────────────────────▶ obligatoire avant production
-    │
-    ├──▶ LOT 2  (rétention, en parallèle, indépendant)
-    │
-    └──▶ LOT 1  (codes de sécurité)
+  ✅ LOT 0 ─ LOT 1 ─ LOT 2 ─ LOT 3        livrés et éprouvés
+
+  ┌─ 4.0  BANC D'INTEROPÉRABILITÉ  ◀── d'abord : peut tout remettre en cause
+  │        web chiffre → mobile déchiffre, et l'inverse
+  │
+  ├─ 5.2  CSP STRICTE              ◀── en parallèle, ne dépend de personne
+  │
+  └─ 4.2 → 4.6  le mobile           une fois 4.0 vert
             │
-            └──▶ LOT 3  (archive)
-                    │
-                    └──▶ LOT 4  (mobile)
-
-  LOT 5 : continu
+            └─ LOT 6  ce qui manque pour dire « fini »
 ```
 
-**Les trois décisions sont prises** (user, 23/09/2026) :
+**Pourquoi 4.0 passe avant tout le reste.** Si les deux bibliothèques ne
+produisent pas le même format sur le fil, ce n'est pas un détail à corriger :
+c'est le choix de bibliothèque qui tombe, et avec lui le calendrier du mobile.
+On le découvre en deux jours sur un fil de test, ou en trois semaines une fois
+l'interface écrite.
 
-| ticket | décision |
-|---|---|
-| **0.1** | La traduction est **déjà** sur l'appareil par défaut. Il reste à la **forcer** dans un fil chiffré, quel que soit le réglage. |
-| **1.4** | **Modèle WhatsApp** : on avertit, on ne bloque jamais. |
-| **3.7** | **Les trois serrures**, dont le mot de passe — mais **sans** réécrire l'authentification. La serrure 2 protège au repos, pas contre un serveur compromis ; le produit doit le dire. |
-
-➜ **En cours : lot 0.**
+**Pourquoi 5.2 avance en parallèle.** La CSP ne dépend d'aucun autre ticket, et
+elle protège ce qui est **déjà en production le jour où le web sort**. La
+retarder jusqu'au mobile, c'est la retarder sans raison.
 
 ---
 
-## 12. Journal des décisions
+## 11. LOT 6 — Ce qui manque pour dire « fini »
+
+> 🔴 CETTE SECTION EXISTE PARCE QU'UNE FONCTIONNALITÉ « FINIE » NE SE MESURE PAS
+> AU NOMBRE DE TICKETS FERMÉS. Les points ci-dessous ne sont pas du
+> perfectionnisme : chacun est une façon dont le chiffrement peut être vrai dans
+> le code et faux pour l'utilisateur.
+
+| # | ce qui manque | pourquoi ça compte |
+|---|---|---|
+| **6.1** | **Un banc de bout en bout multi-client** : Alice sur le web, Bob sur mobile, un troisième appareil qui arrive, une archive restaurée. | Aujourd'hui chaque banc éprouve une pièce. Personne n'a encore vu la chaîne entière tourner d'un bout à l'autre. |
+| **6.2** | **La politique de confidentialité**, qui doit porter ce que l'écran ne dit plus : notre serveur reçoit le mot de passe à chaque connexion, donc la serrure « mot de passe » protège l'archive au repos et non contre nous. | Décision du user du 23/09 : le dire là, pas dans les réglages. Tant que ce n'est pas écrit quelque part, **ce n'est écrit nulle part**. |
+| **6.3** | **Ce que voit le serveur, écrit noir sur blanc** : tailles, dates, qui parle à qui, nombre de messages. Le chiffrement ne cache pas les métadonnées. | Laisser croire le contraire est le plus grand risque de réputation de toute la fonctionnalité. |
+| **6.4** | **Les chapitres 8+ du cours** : le mobile, l'interopérabilité, la CSP. | Règle du projet : un chapitre par avancée, erreurs comprises. |
+| **6.5** | **Une relecture par quelqu'un d'autre** — idéalement extérieure. | Tout ce code a été écrit et relu par les deux mêmes. Les bancs prouvent ce qu'on a pensé à éprouver, pas ce à quoi on n'a pas pensé. |
+| **6.6** | **Un chemin de secours documenté** : que fait le support quand quelqu'un perd son mot de passe ET sa clé de récupération ? | La réponse est « rien, et c'est voulu ». Elle doit être écrite AVANT le premier appel, pas improvisée pendant. |
+
+### La définition de « terminé », en une liste
+
+Le chiffrement est fini quand **tout** ceci est vrai :
+
+```
+  ☐ un message part du web et arrive sur mobile, et l'inverse       (4.0)
+  ☐ les deux clients affichent LE MÊME code de sécurité             (4.3)
+  ☐ un troisième appareil rejoint sans casser les deux premiers     (4.5)
+  ☐ l'archive se restaure depuis n'importe lequel des trois         (4.6)
+  ☐ une CSP stricte est en place et le produit marche avec          (5.2)
+  ☐ ce que le serveur voit est écrit publiquement                   (6.3)
+  ☐ le support sait quoi répondre à une clé perdue                  (6.6)
+  ☐ quelqu'un d'autre a relu                                        (6.5)
+```
+
+⚠️ **Aucune de ces cases ne se coche par une opinion.** Chacune correspond à un
+banc qui passe, ou à un document qui existe.
+
+---
+
+## 12. Risques encore ouverts
+
+| risque | portée | ce qu'on fait |
+|---|---|---|
+| 🔴 bibliothèque web non maintenue | tout le chiffrement web | documenté, surveillé — pas de solution connue (5.1) |
+| 🔴 pas de CSP | un script hostile se sert des clés sur place | ticket 5.2, bloquant |
+| 🟠 cache local en clair | vol d'appareil déverrouillé | assumé (décision du 21/09), à revoir |
+| 🟠 serrure « mot de passe » ouvrable par un serveur compromis | l'archive au repos | assumé, à écrire dans la politique (6.2) |
+| 🟠 format sur le fil web ↔ mobile non prouvé | calendrier du lot 4 | ticket 4.0, en premier |
+| 🟡 métadonnées visibles | vie privée | à documenter (6.3) |
+
+---
+## 13. Journal des décisions
 
 | date | décision | par |
 |---|---|---|
@@ -297,3 +389,10 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 | 23/09 | **Les TROIS serrures**, dont celle du mot de passe — sans réécrire l'authentification | user |
 | 23/09 | Purge en **deux** seuils : 30 j acquittées, 90 j jamais relevées | analyse |
 | 23/09 | `corps` en `bytea` reporté : 10 % de la ligne, pas 25 % — marginal une fois la table bornée | analyse |
+| 23/09 | Sauvegarde **activée par défaut**, désactivable — « c'est plus intuitif » | user |
+| 23/09 | Un refus de sauvegarde **tient** : il vit sur le compte, pas sur l'appareil | analyse |
+| 23/09 | La limite de la serrure « mot de passe » sort de l'écran → politique de confidentialité | user |
+| 24/09 | Icône du chiffrement : **bouclier**, le cadenas restant au verrou de conversation | user |
+| 24/09 | Le chiffrement ne se retire pas — l'écran le **dit** au lieu de le suggérer | analyse |
+| 24/09 | **La licence GPL-3.0 est acceptée** → `libsignal_protocol_dart` pour le mobile | user |
+| 24/09 | La serrure « trousseau » est **par appareil**, liée à la clé d'accès et non au stockage local | analyse |
