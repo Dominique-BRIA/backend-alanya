@@ -31,7 +31,7 @@
 | Lot 2 — purge des enveloppes (2.3 reporté sur mesure) | ✅ |
 | **Lot 3 — archive chiffrée, trois serrures** | ✅ |
 | **Lot 4.0 — interopérabilité web ↔ mobile PROUVÉE** | ✅ |
-| **Lot 4.2–4.6 — services Dart** | ✅ écrits, non éprouvés sur appareil |
+| Lot 4.2–4.6 — mobile | 🔴 **à peine commencé** — voir §7 |
 | **Lot 5.2 — CSP stricte** | ✅ |
 | ↳ sauvegarde **activée par défaut**, refus mémorisé | ✅ |
 | ↳ restauration **automatique** à la connexion | ✅ |
@@ -236,28 +236,63 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 
 ## 7. LOT 4 — Le client mobile
 
-> **Débloqué le 24/09/2026** : la licence GPL-3.0 est acceptée (décision du
-> user). Le choix de bibliothèque est donc tranché.
+> 🔴 **CORRECTION DU 24/09/2026, APRÈS COUP.** Ce lot avait été marqué « services
+> écrits » d'une façon qui laissait croire qu'il était largement fait. Il ne
+> l'est pas : **deux fichiers de service existent, et rien ne les appelle**.
+> L'essentiel du travail reste devant.
 
-| # | ticket | état |
-|---|---|---|
-| **4.0** | ✅ **FAIT — LES DEUX BIBLIOTHÈQUES SE COMPRENNENT.** Le web chiffre, le mobile déchiffre — et l'inverse. C'est le seul point qui peut encore remettre en cause l'architecture entière, donc il passe en premier, sur un fil de test, avant toute interface. | ⏳ |
-| **4.1** | ~~Choix de bibliothèque~~ → **`libsignal_protocol_dart`** (Mixin, 0.8.2, GPL-3.0). Mieux entretenue que celle du web. | ✅ décidé |
-| **4.2** | Coffre : Android Keystore / iOS Keychain. Le mobile a ici **mieux** que le web — du matériel. | ⏳ |
-| **4.3** | 🔴 **Le code de sécurité, réimplémenté à la main** — la bibliothèque Dart n'a PAS de classe `Fingerprint`. ⚠️ Les 5 200 itérations doivent correspondre EXACTEMENT, sinon web et mobile affichent des codes différents pour les mêmes clés et les gens concluent à une interposition qui n'existe pas. | ⏳ |
-| **4.4** | Parité du reste : périmètre, bannière, avertissement de changement de clé, refus du clair. | ⏳ |
-| **4.5** | **Multi-appareil simultané** web + mobile. Chaque appareil a son identité et reçoit sa propre enveloppe — le modèle le permet déjà. À éprouver, pas à concevoir. | ⏳ |
-| **4.6** | L'archive sur mobile : mot de passe et clé de récupération à l'identique ; le **trousseau** devient le coffre matériel. La serrure est désormais **par appareil**, ce qui rend les deux clients compatibles. | ⏳ |
+### Ce qui existe
 
-### Ce qui ne porte pas du web au mobile
-
-| | pourquoi |
+| | |
 |---|---|
-| le code de sécurité | absent de la bibliothèque Dart — à réécrire, à l'itération près |
-| WebAuthn PRF | n'existe pas en Flutter ; l'équivalent est le coffre matériel, techniquement **meilleur** |
-| le format sur le fil | *devrait* correspondre (même ancêtre Java). « Devrait » n'est pas une mesure → ticket 4.0 |
+| **4.0** — interopérabilité web ↔ mobile | ✅ **prouvée** (banc Dart pur, sans APK) |
+| **4.1** — choix de bibliothèque | ✅ `libsignal_protocol_dart` 0.8.2 |
+| **4.2** — coffre matériel (Keystore / Keychain) | ✅ écrit, analysé, **jamais exécuté** |
+| **4.3** — code de sécurité (calcul) | ✅ écrit, **et prouvé identique au web** |
+
+### 🔴 Ce qui manque — la majorité
+
+| # | ticket |
+|---|---|
+| **4.7** | **Brancher au fil de discussion.** Les services existent mais aucun code ne les appelle : ni à l'envoi, ni à la réception. C'est le plus gros morceau. |
+| **4.8** | **Envoi / réception d'enveloppes** : une enveloppe par appareil destinataire, acquittement, purge. |
+| **4.9** | **Le périmètre** — personnel ↔ personnel. Sans lui, le mobile chiffrerait des conversations que le web refuse. |
+| **4.10** | **Refus du clair** : un fil chiffré ne doit jamais retomber en clair, même en cas d'erreur. |
+| **4.11** | **Bouton bouclier + bannière** « à partir d'ici, chiffré ». |
+| **4.12** | **Avertissement de changement de clé** (le `true` que rend `saveIdentity` ne va nulle part aujourd'hui). |
+| **4.13** | **L'écran de vérification, avec QR** — voir ci-dessous. |
+| **4.14** | **L'archive et ses trois serrures**, le trousseau devenant le coffre matériel. |
+| **4.15** | **Multi-appareil simultané** web + mobile, à éprouver. |
+
+### 4.13 — L'écran de vérification et le QR
+
+Décision du user, 24/09/2026 : **modèle WhatsApp** — infos du contact →
+« Chiffrement » → code à 60 chiffres **et** QR code.
+
+Le web a déjà un QR. Le mobile doit reprendre le même écran, et il y a une
+raison forte : **le QR n'a de sens qu'entre deux téléphones**, l'un scannant
+l'écran de l'autre.
+
+> 🔴 **LE QR ET LE CODE DOIVENT ENCODER EXACTEMENT LA MÊME CHOSE.** Deux formats
+> différents d'un côté et de l'autre, et un téléphone ne pourra pas scanner
+> l'écran du web — le défaut ne se verrait qu'au moment où quelqu'un essaie
+> vraiment de vérifier, c'est-à-dire quand il s'inquiète.
+
+À faire : figer le format du QR dans un document partagé par les deux clients,
+et l'éprouver par un banc qui génère d'un côté et relit de l'autre — comme le
+ticket 4.0 l'a fait pour le protocole.
+
+### ⚠️ La limite de ce qui peut être fait ici
+
+Le user ne construit pas l'APK localement. Tout ce lot est donc écrit **sans
+pouvoir être exécuté** : `dart analyze` dit que le code compile, il ne dit pas
+qu'il marche.
+
+> **Le protocole est prouvé ; l'application ne l'est pas.** Distinguer les deux
+> évite à la fois de trop promettre et de trop attendre.
 
 ---
+
 ## 8. LOT 5 — Dette de fond
 
 > Deux de ces points sont **bloquants avant une mise en production**, et ils ne
@@ -400,4 +435,5 @@ banc qui passe, ou à un document qui existe.
 | 24/09 | **La licence GPL-3.0 est acceptée** → `libsignal_protocol_dart` pour le mobile | user |
 | 24/09 | `libsignal_protocol_dart` retenue ; interopérabilité PROUVÉE (banc 4.0) | analyse |
 | 24/09 | CSP : `wasm-unsafe-eval` indispensable — sans lui le chiffrement ne démarre pas | analyse |
+| 24/09 | Vérification mobile : modèle WhatsApp, code + QR, depuis les infos du contact | user |
 | 24/09 | La serrure « trousseau » est **par appareil**, liée à la clé d'accès et non au stockage local | analyse |
