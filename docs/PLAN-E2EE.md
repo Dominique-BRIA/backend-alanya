@@ -30,6 +30,9 @@
 | Lot 1 — codes de sécurité | ✅ |
 | Lot 2 — purge des enveloppes (2.3 reporté sur mesure) | ✅ |
 | **Lot 3 — archive chiffrée, trois serrures** | ✅ |
+| **Lot 4.0 — interopérabilité web ↔ mobile PROUVÉE** | ✅ |
+| **Lot 4.2–4.6 — services Dart** | ✅ écrits, non éprouvés sur appareil |
+| **Lot 5.2 — CSP stricte** | ✅ |
 | ↳ sauvegarde **activée par défaut**, refus mémorisé | ✅ |
 | ↳ restauration **automatique** à la connexion | ✅ |
 | ↳ serrure « trousseau » **par appareil** (WebAuthn PRF) | ✅ |
@@ -238,7 +241,7 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 
 | # | ticket | état |
 |---|---|---|
-| **4.0** | 🔴 **LE BANC D'INTEROPÉRABILITÉ, AVANT TOUT LE RESTE.** Le web chiffre, le mobile déchiffre — et l'inverse. C'est le seul point qui peut encore remettre en cause l'architecture entière, donc il passe en premier, sur un fil de test, avant toute interface. | ⏳ |
+| **4.0** | ✅ **FAIT — LES DEUX BIBLIOTHÈQUES SE COMPRENNENT.** Le web chiffre, le mobile déchiffre — et l'inverse. C'est le seul point qui peut encore remettre en cause l'architecture entière, donc il passe en premier, sur un fil de test, avant toute interface. | ⏳ |
 | **4.1** | ~~Choix de bibliothèque~~ → **`libsignal_protocol_dart`** (Mixin, 0.8.2, GPL-3.0). Mieux entretenue que celle du web. | ✅ décidé |
 | **4.2** | Coffre : Android Keystore / iOS Keychain. Le mobile a ici **mieux** que le web — du matériel. | ⏳ |
 | **4.3** | 🔴 **Le code de sécurité, réimplémenté à la main** — la bibliothèque Dart n'a PAS de classe `Fingerprint`. ⚠️ Les 5 200 itérations doivent correspondre EXACTEMENT, sinon web et mobile affichent des codes différents pour les mêmes clés et les gens concluent à une interposition qui n'existe pas. | ⏳ |
@@ -264,7 +267,7 @@ tout l'intérêt de la clé maîtresse tirée au sort.
 | # | ticket | état |
 |---|---|---|
 | **5.1** | 🔴 **La bibliothèque web n'est plus maintenue** — `@privacyresearch/libsignal-protocol-typescript` 0.0.16, dernière publication il y a 3 ans. Aucune correction de sécurité depuis, et **aucun portage navigateur officiel de libsignal n'existe**. C'est le risque principal de tout l'édifice. | ⏳ **bloquant** |
-| **5.2** | 🔴 **CSP stricte.** Le coffre chiffré empêche d'**emporter** les clés ; il n'empêche pas un script hostile de **s'en servir sur place**. La CSP est la défense qui manque, et elle est indépendante de tout le reste. | ⏳ **bloquant** |
+| **5.2** | ✅ **FAIT — CSP stricte.** Le coffre chiffré empêche d'**emporter** les clés ; il n'empêche pas un script hostile de **s'en servir sur place**. La CSP est la défense qui manque, et elle est indépendante de tout le reste. | ⏳ **bloquant** |
 | **5.3** | Le **cache local en clair** (dette du chapitre 1). Décision du user du 21/09 : on le garde, sans quoi un fil chiffré redeviendrait vide à chaque rechargement. Le jour où il passera en IndexedDB chiffré, la question cesse de se poser. | ⏸️ assumé |
 | **5.4** | Recherche dans les messages chiffrés — côté client uniquement, sur le cache. | ⏳ |
 | **5.5** | Chiffrement des médias (remis par décision du user, 21/09). | ⏸️ remis |
@@ -336,11 +339,11 @@ retarder jusqu'au mobile, c'est la retarder sans raison.
 | # | ce qui manque | pourquoi ça compte |
 |---|---|---|
 | **6.1** | **Un banc de bout en bout multi-client** : Alice sur le web, Bob sur mobile, un troisième appareil qui arrive, une archive restaurée. | Aujourd'hui chaque banc éprouve une pièce. Personne n'a encore vu la chaîne entière tourner d'un bout à l'autre. |
-| **6.2** | **La politique de confidentialité**, qui doit porter ce que l'écran ne dit plus : notre serveur reçoit le mot de passe à chaque connexion, donc la serrure « mot de passe » protège l'archive au repos et non contre nous. | Décision du user du 23/09 : le dire là, pas dans les réglages. Tant que ce n'est pas écrit quelque part, **ce n'est écrit nulle part**. |
-| **6.3** | **Ce que voit le serveur, écrit noir sur blanc** : tailles, dates, qui parle à qui, nombre de messages. Le chiffrement ne cache pas les métadonnées. | Laisser croire le contraire est le plus grand risque de réputation de toute la fonctionnalité. |
-| **6.4** | **Les chapitres 8+ du cours** : le mobile, l'interopérabilité, la CSP. | Règle du projet : un chapitre par avancée, erreurs comprises. |
+| **6.2** | ✅ écrit — `docs/E2EE-CE-QUE-NOUS-VOYONS.md` — **La politique de confidentialité**, qui doit porter ce que l'écran ne dit plus : notre serveur reçoit le mot de passe à chaque connexion, donc la serrure « mot de passe » protège l'archive au repos et non contre nous. | Décision du user du 23/09 : le dire là, pas dans les réglages. Tant que ce n'est pas écrit quelque part, **ce n'est écrit nulle part**. |
+| **6.3** | ✅ écrit — même document — **Ce que voit le serveur, écrit noir sur blanc** : tailles, dates, qui parle à qui, nombre de messages. Le chiffrement ne cache pas les métadonnées. | Laisser croire le contraire est le plus grand risque de réputation de toute la fonctionnalité. |
+| **6.4** | chapitre 8 écrit ; 9+ à venir — **Les chapitres 8+ du cours** : le mobile, l'interopérabilité, la CSP. | Règle du projet : un chapitre par avancée, erreurs comprises. |
 | **6.5** | **Une relecture par quelqu'un d'autre** — idéalement extérieure. | Tout ce code a été écrit et relu par les deux mêmes. Les bancs prouvent ce qu'on a pensé à éprouver, pas ce à quoi on n'a pas pensé. |
-| **6.6** | **Un chemin de secours documenté** : que fait le support quand quelqu'un perd son mot de passe ET sa clé de récupération ? | La réponse est « rien, et c'est voulu ». Elle doit être écrite AVANT le premier appel, pas improvisée pendant. |
+| **6.6** | ✅ écrit — même document — **Un chemin de secours documenté** : que fait le support quand quelqu'un perd son mot de passe ET sa clé de récupération ? | La réponse est « rien, et c'est voulu ». Elle doit être écrite AVANT le premier appel, pas improvisée pendant. |
 
 ### La définition de « terminé », en une liste
 
@@ -395,4 +398,6 @@ banc qui passe, ou à un document qui existe.
 | 24/09 | Icône du chiffrement : **bouclier**, le cadenas restant au verrou de conversation | user |
 | 24/09 | Le chiffrement ne se retire pas — l'écran le **dit** au lieu de le suggérer | analyse |
 | 24/09 | **La licence GPL-3.0 est acceptée** → `libsignal_protocol_dart` pour le mobile | user |
+| 24/09 | `libsignal_protocol_dart` retenue ; interopérabilité PROUVÉE (banc 4.0) | analyse |
+| 24/09 | CSP : `wasm-unsafe-eval` indispensable — sans lui le chiffrement ne démarre pas | analyse |
 | 24/09 | La serrure « trousseau » est **par appareil**, liée à la clé d'accès et non au stockage local | analyse |
