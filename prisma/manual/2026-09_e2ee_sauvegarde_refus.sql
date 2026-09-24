@@ -21,8 +21,12 @@
 --
 -- Produit par `prisma migrate diff`, filtré sur cette table.
 
+-- ⚠️ REJOUABLE, ET CE N'EST PAS FACULTATIF. `deployer.sh` applique TOUS les
+-- fichiers de ce dossier à CHAQUE déploiement : un script qui échoue la
+-- seconde fois arrête la mise en ligne. Tout est donc en IF NOT EXISTS,
+-- contraintes comprises.
 BEGIN;
 
-ALTER TABLE "users" ADD COLUMN "e2ee_sauvegarde_refusee" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "e2ee_sauvegarde_refusee" BOOLEAN NOT NULL DEFAULT false;
 
 COMMIT;

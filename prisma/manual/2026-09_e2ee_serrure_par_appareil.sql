@@ -37,25 +37,42 @@
 -- laisser en les rattachant à un appareil arbitraire serait pire : une serrure
 -- qui prétend appartenir à un appareil qui ne peut pas l'ouvrir.
 
+-- ⚠️ REJOUABLE, ET CE N'EST PAS FACULTATIF. `deployer.sh` applique TOUS les
+-- fichiers de ce dossier à CHAQUE déploiement : un script qui échoue la
+-- seconde fois arrête la mise en ligne. Tout est donc en IF NOT EXISTS,
+-- contraintes comprises.
 BEGIN;
 
 ALTER TABLE "e2ee_serrures"
-  ADD COLUMN "appareil" VARCHAR(64) NOT NULL DEFAULT '';
+  ADD COLUMN IF NOT EXISTS "appareil" VARCHAR(64) NOT NULL DEFAULT '';
 
 -- Voir plus haut : un trousseau sans appareil n'a pas de sens.
-DELETE FROM "e2ee_serrures" WHERE "type" = 'trousseau';
+-- 🔴 SEULEMENT CELLES QUI NE DÉSIGNENT AUCUN APPAREIL, jamais toutes.
+--
+-- 🐛 CE FILTRE MANQUAIT. Le script étant rejoué à CHAQUE déploiement, un
+-- DELETE sans condition aurait détruit la serrure « trousseau » de TOUS les
+-- appareils, à chaque mise en ligne — en silence, et sans que personne ne
+-- fasse le lien avec un déploiement.
+--
+-- Avec ce filtre, la première exécution retire les serrures héritées — qui ne
+-- peuvent pas satisfaire la nouvelle contrainte — et les suivantes ne trouvent
+-- plus rien.
+DELETE FROM "e2ee_serrures" WHERE "type" = 'trousseau' AND "appareil" = '';
 
 DROP INDEX IF EXISTS "e2ee_serrures_compte_type_uniq";
 
-CREATE UNIQUE INDEX "e2ee_serrures_compte_type_appareil_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "e2ee_serrures_compte_type_appareil_uniq"
   ON "e2ee_serrures" ("alanyaID", "type", "appareil");
 
 -- La règle, portée par la base et non par la seule bonne volonté du client.
-ALTER TABLE "e2ee_serrures"
-  ADD CONSTRAINT "e2ee_serrures_appareil_selon_type"
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'e2ee_serrures_appareil_selon_type') THEN
+    ALTER TABLE "e2ee_serrures" ADD CONSTRAINT "e2ee_serrures_appareil_selon_type"
   CHECK (
     ("type" = 'trousseau' AND "appareil" <> '')
     OR ("type" IN ('motdepasse', 'recuperation') AND "appareil" = '')
   );
+  END IF;
+END $$;
 
 COMMIT;

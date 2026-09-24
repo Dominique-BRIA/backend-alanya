@@ -31,6 +31,10 @@
 -- écrite de mémoire finit toujours par diverger du schéma, et la dérive ne se
 -- voit qu'au premier `db push` qui propose de détruire quelque chose.
 
+-- ⚠️ REJOUABLE, ET CE N'EST PAS FACULTATIF. `deployer.sh` applique TOUS les
+-- fichiers de ce dossier à CHAQUE déploiement : un script qui échoue la
+-- seconde fois arrête la mise en ligne. Tout est donc en IF NOT EXISTS,
+-- contraintes comprises.
 BEGIN;
 
 -- ── LES SERRURES ────────────────────────────────────────────────────────
@@ -47,7 +51,7 @@ BEGIN;
 -- passe laisserait derrière lui une serrure ouvrable par l'ANCIEN — et le
 -- changer n'aurait alors rien changé du tout.
 
-CREATE TABLE "e2ee_serrures" (
+CREATE TABLE IF NOT EXISTS "e2ee_serrures" (
     "id" UUID NOT NULL,
     "alanyaID" UUID NOT NULL,
     "type" VARCHAR(20) NOT NULL,
@@ -62,12 +66,17 @@ CREATE TABLE "e2ee_serrures" (
     CONSTRAINT "e2ee_serrures_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "e2ee_serrures_compte_type_uniq" ON "e2ee_serrures"("alanyaID", "type");
+CREATE UNIQUE INDEX IF NOT EXISTS "e2ee_serrures_compte_type_uniq" ON "e2ee_serrures"("alanyaID", "type");
 
-ALTER TABLE "e2ee_serrures"
-  ADD CONSTRAINT "e2ee_serrures_alanyaID_fkey"
-  FOREIGN KEY ("alanyaID") REFERENCES "users"("alanyaID")
-  ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                 WHERE conname = 'e2ee_serrures_alanyaID_fkey') THEN
+    ALTER TABLE "e2ee_serrures"
+      ADD CONSTRAINT "e2ee_serrures_alanyaID_fkey"
+      FOREIGN KEY ("alanyaID") REFERENCES "users"("alanyaID")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
 -- ── LES BLOCS D'ARCHIVE ─────────────────────────────────────────────────
 --
@@ -79,7 +88,7 @@ ALTER TABLE "e2ee_serrures"
 -- archive. C'est la seule conduite honnête — l'utilisateur a demandé que tout
 -- parte, et nous ne pourrions de toute façon rien en faire.
 
-CREATE TABLE "e2ee_archive_blocs" (
+CREATE TABLE IF NOT EXISTS "e2ee_archive_blocs" (
     "id" UUID NOT NULL,
     "alanyaID" UUID NOT NULL,
     "iv" VARCHAR(32) NOT NULL,
@@ -90,11 +99,16 @@ CREATE TABLE "e2ee_archive_blocs" (
     CONSTRAINT "e2ee_archive_blocs_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "e2ee_archive_compte_idx" ON "e2ee_archive_blocs"("alanyaID", "create_at");
+CREATE INDEX IF NOT EXISTS "e2ee_archive_compte_idx" ON "e2ee_archive_blocs"("alanyaID", "create_at");
 
-ALTER TABLE "e2ee_archive_blocs"
-  ADD CONSTRAINT "e2ee_archive_blocs_alanyaID_fkey"
-  FOREIGN KEY ("alanyaID") REFERENCES "users"("alanyaID")
-  ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                 WHERE conname = 'e2ee_archive_blocs_alanyaID_fkey') THEN
+    ALTER TABLE "e2ee_archive_blocs"
+      ADD CONSTRAINT "e2ee_archive_blocs_alanyaID_fkey"
+      FOREIGN KEY ("alanyaID") REFERENCES "users"("alanyaID")
+      ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
 COMMIT;
