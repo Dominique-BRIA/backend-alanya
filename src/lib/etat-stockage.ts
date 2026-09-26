@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import { env } from "@/lib/env";
 import { checkB2Connection } from "@/modules/media/b2";
+import { checkB2PublicConnection, publicConfigure } from "@/modules/media/b2-public";
 import { storageRoot, useCloudStorage as stockageNuage } from "@/modules/media/storage";
 
 /**
@@ -26,6 +27,14 @@ export interface EtatStockage {
   fournisseur: "local" | "b2";
   /** Le stockage répond-il ? */
   actif: boolean;
+  /**
+   * Le bucket ouvert — accueils et sonneries.
+   *
+   * `null` quand il n'est pas configuré : ce n'est pas une panne, tout retombe
+   * alors dans le bucket privé et le répondeur fonctionne, un peu plus
+   * lentement. Le dire évite de chercher une optimisation absente.
+   */
+  ouvert: { actif: boolean; raison: string | null } | null;
   /**
    * Pourquoi il ne répond pas, en une phrase.
    *
@@ -58,6 +67,25 @@ function raisonLisible(erreur: unknown): string {
  * ⚠️ NE LÈVE JAMAIS. La panne EST la réponse : la faire remonter ferait tomber
  * le point de santé au moment précis où l'on vient l'interroger.
  */
+/** Le bucket ouvert répond-il ? `null` quand il n'est pas configuré. */
+async function etatOuvert(): Promise<EtatStockage["ouvert"]> {
+  if (!publicConfigure()) return null;
+  try {
+    await Promise.race([
+      checkB2PublicConnection(),
+      new Promise((_, rejeter) =>
+        setTimeout(
+          () => rejeter(Object.assign(new Error("timeout"), { name: "TimeoutError" })),
+          4000,
+        ),
+      ),
+    ]);
+    return { actif: true, raison: null };
+  } catch (err) {
+    return { actif: false, raison: raisonLisible(err) };
+  }
+}
+
 export async function etatStockage(): Promise<EtatStockage> {
   /*
    * ⚠️ « CONFIGURÉ » ET « ACTIF » NE SONT PAS LA MÊME CHOSE. `MEDIA_STORAGE_PROVIDER=b2`
@@ -65,8 +93,15 @@ export async function etatStockage(): Promise<EtatStockage> {
    * comportement voulu du dépôt, et c'est exactement ce qu'il faut savoir :
    * on croit écrire dans le nuage, et tout s'empile sur le VPS.
    */
+  const ouvert = await etatOuvert();
+
   if (env.media.provider === "b2" && !stockageNuage()) {
-    return { fournisseur: "local", actif: false, raison: "B2 demandé mais mal configuré" };
+    return {
+      fournisseur: "local",
+      actif: false,
+      raison: "B2 demandé mais mal configuré",
+      ouvert,
+    };
   }
 
   if (stockageNuage()) {
@@ -82,9 +117,9 @@ export async function etatStockage(): Promise<EtatStockage> {
           setTimeout(() => rejeter(Object.assign(new Error("timeout"), { name: "TimeoutError" })), 4000),
         ),
       ]);
-      return { fournisseur: "b2", actif: true, raison: null };
+      return { fournisseur: "b2", actif: true, raison: null, ouvert };
     } catch (err) {
-      return { fournisseur: "b2", actif: false, raison: raisonLisible(err) };
+      return { fournisseur: "b2", actif: false, raison: raisonLisible(err), ouvert };
     }
   }
 
@@ -97,8 +132,13 @@ export async function etatStockage(): Promise<EtatStockage> {
      */
     await fs.mkdir(storageRoot(), { recursive: true });
     await fs.access(storageRoot(), fs.constants.W_OK);
-    return { fournisseur: "local", actif: true, raison: null };
+    return { fournisseur: "local", actif: true, raison: null, ouvert };
   } catch {
-    return { fournisseur: "local", actif: false, raison: "dossier inaccessible en écriture" };
+    return {
+      fournisseur: "local",
+      actif: false,
+      raison: "dossier inaccessible en écriture",
+      ouvert,
+    };
   }
 }

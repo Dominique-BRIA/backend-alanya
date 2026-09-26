@@ -1238,6 +1238,17 @@ model MediaFile {
   url          String // chemin/URL d'accès (le binaire est stocké hors BD)
   thumbnailUrl String?
   durationMs   Int? // pour audio/vidéo (messages vocaux, appels)
+
+  /// Où vit le binaire : `null` = bucket privé, « public » = bucket ouvert.
+  ///
+  /// 🔴 SANS CETTE COLONNE, ON NE SAURAIT PLUS LE RELIRE. Un fichier public a
+  /// une adresse FIXE ; un fichier privé demande une signature. Le deviner à
+  /// partir du chemin serait une règle de plus à tenir, qui se tromperait le
+  /// jour où le préfixe change.
+  ///
+  /// ⚠️ UNE MARQUE, PAS UN NOM DE BUCKET : renommer le bucket ne doit toucher
+  /// qu'une variable d'environnement, pas des centaines de lignes en base.
+  espace       String? @db.VarChar(16)
   createdAt    DateTime @default(now()) @db.Timestamptz
 
   /// Une plainte vocale s'appuie sur ce média. `Cascade` : supprimer le fichier

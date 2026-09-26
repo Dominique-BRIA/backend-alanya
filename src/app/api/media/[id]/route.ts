@@ -6,10 +6,11 @@ import { withAuth, requireUser, UnauthorizedError } from "@/lib/auth-context";
 import { formesStockeesPour } from "@/lib/avatar";
 import { verifyAccessToken } from "@/lib/jwt";
 import {
+  adressePublique,
   readStored,
   getSignedDownloadUrl,
   deleteStored,
-  useCloudStorage,
+  useCloudStorage as stockageNuage,
 } from "@/modules/media/storage";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 
@@ -119,11 +120,27 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       });
     }
 
+    /*
+     * ⚠️ LE BUCKET OUVERT SE SERT SANS SIGNATURE. Son adresse est fixe, donc
+     * mise en cache par le navigateur : un accueil déjà entendu ne se
+     * retélécharge pas, et repart à l'instant où la sonnerie s'arrête.
+     *
+     * On redirige plutôt que de servir nous-mêmes : le fichier ne transite plus
+     * par ce serveur du tout.
+     */
+    const ouverte = adressePublique(media.url, media.espace);
+    if (ouverte) {
+      return NextResponse.redirect(ouverte, {
+        status: 302,
+        headers: { "Cache-Control": "public, max-age=3600" },
+      });
+    }
+
     const forceDownload = req.nextUrl.searchParams.get("download") === "1";
     const safeName = encodeURIComponent(media.filename || `fichier-${media.id}`);
 
     // ---- Backend cloud (Backblaze B2) : redirection vers une URL présignée.
-    if (useCloudStorage()) {
+    if (stockageNuage()) {
       const signedUrl = await getSignedDownloadUrl(media.url, {
         responseContentDisposition: forceDownload
           ? `attachment; filename*=UTF-8''${safeName}`
@@ -168,7 +185,10 @@ export const DELETE = withAuth(async (_req, userId, ctx) => {
   if (!media) return fail("Média introuvable", 404, "NOT_FOUND");
   if (media.ownerId !== userId) return fail("Accès refusé", 403, "FORBIDDEN");
 
-  await deleteStored(media.url);
+  // ⚠️ AVEC SON ESPACE. Un média public effacé dans le bucket privé ne
+  // disparaîtrait de nulle part, et resterait lisible de tout Internet — le
+  // pire des deux mondes.
+  await deleteStored(media.url, media.espace);
   await prisma.mediaFile.delete({ where: { id } });
 
   return NextResponse.json({ ok: true }, { status: 200 });

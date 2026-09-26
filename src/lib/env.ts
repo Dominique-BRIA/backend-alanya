@@ -121,6 +121,39 @@ export const env = {
         );
       },
     },
+
+    /**
+     * LE BUCKET PUBLIC — accueils de répondeur et sonneries.
+     *
+     * 🔴 CE QUI Y VA EST LU PAR N'IMPORTE QUI, SANS COMPTE. C'est tout
+     * l'intérêt : plus d'URL signée, plus d'aller-retour par le serveur, et le
+     * navigateur peut garder le fichier en cache. Un accueil doit démarrer à
+     * l'instant où la sonnerie s'arrête — chaque étape supprimée compte.
+     *
+     * ⚠️ ET C'EST AUSSI TOUT LE DANGER. N'y placer QUE ce qui est de toute
+     * façon entendu par tous les appelants : l'accueil qu'on enregistre, la
+     * sonnerie qu'on choisit. JAMAIS un message laissé PAR quelqu'un — c'est un
+     * enregistrement privé, il reste dans le bucket fermé.
+     *
+     * ⚠️ SA PROPRE CLÉ. Une clé Backblaze vise UN bucket, ou TOUS. Prendre
+     * « tous » donnerait accès à des buckets qui ne sont pas les nôtres ; on
+     * crée donc une seconde clé, limitée à celui-ci.
+     *
+     * Non configuré = tout retombe dans le bucket privé, et rien ne casse.
+     */
+    b2Public: {
+      bucket: optional("B2_PUBLIC_BUCKET"),
+      keyId: optional("B2_PUBLIC_KEY_ID"),
+      applicationKey: optional("B2_PUBLIC_APPLICATION_KEY"),
+      keyPrefix: optional("B2_PUBLIC_KEY_PREFIX", "public/"),
+      isConfigured(): boolean {
+        return Boolean(
+          optional("B2_PUBLIC_BUCKET") &&
+            optional("B2_PUBLIC_KEY_ID") &&
+            optional("B2_PUBLIC_APPLICATION_KEY"),
+        );
+      },
+    },
   },
 
   // Serveurs ICE : uniquement via Coturn avec identifiants HMAC éphémères

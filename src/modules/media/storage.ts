@@ -4,6 +4,12 @@ import crypto from "crypto";
 import { env } from "@/lib/env";
 import { HttpError } from "@/lib/http";
 import { uploadToB2, getB2SignedUrl, readFromB2, deleteFromB2 } from "./b2";
+import {
+  deleteFromB2Public,
+  publicConfigure,
+  publicUrl,
+  uploadToB2Public,
+} from "./b2-public";
 
 // =============================================================================
 // Couche de stockage des médias — abstraction provider.
@@ -152,15 +158,38 @@ export function buildRelativeUrl(originalName: string, mime: string): {
 }
 
 // Persiste le binaire (disque OU B2) et renvoie la clé canonique stockée.
+/**
+ * `espace` dit OÙ ranger, et il n'a que deux valeurs.
+ *
+ * ⚠️ « public » NE VEUT PAS DIRE « moins important » : il veut dire « lu par
+ * n'importe qui, sans compte ». N'y envoyer QUE ce qui est de toute façon
+ * entendu par tous les appelants — l'accueil qu'on enregistre, la sonnerie
+ * qu'on choisit. Jamais un message laissé PAR quelqu'un.
+ */
+export type EspaceStockage = "prive" | "public";
+
 export async function saveBuffer(
   buffer: Buffer,
   originalName: string,
   mime: string,
-): Promise<{ storedName: string; relativeUrl: string }> {
+  espace: EspaceStockage = "prive",
+): Promise<{ storedName: string; relativeUrl: string; espace: EspaceStockage }> {
   // En serverless sans B2 configuré, on échoue tôt et clairement (cf. assertStorageUsable).
   assertStorageUsable();
 
   const { storedName, relativeUrl } = buildRelativeUrl(originalName, mime);
+
+  /*
+   * ⚠️ LE BUCKET PUBLIC EXIGE D'ÊTRE CONFIGURÉ, sinon on retombe dans le privé
+   * SANS ÉCHOUER. Un accueil servi par URL signée reste parfaitement
+   * fonctionnel — seulement un peu plus lent. Refuser l'envoi rendrait le
+   * répondeur inutilisable pour une optimisation absente, ce qui serait
+   * l'inverse de ce qu'on cherche.
+   */
+  if (espace === "public" && publicConfigure()) {
+    await uploadToB2Public(relativeUrl, buffer, mime);
+    return { storedName, relativeUrl, espace: "public" };
+  }
 
   if (useCloudStorage()) {
     await uploadToB2(buffer, relativeUrl, { contentType: mime });
@@ -170,7 +199,20 @@ export async function saveBuffer(
     await fs.writeFile(path.join(storageRoot(), relativeUrl), buffer);
   }
 
-  return { storedName, relativeUrl };
+  return { storedName, relativeUrl, espace: "prive" };
+}
+
+/**
+ * L'adresse FIXE d'un média public, ou `null` s'il n'en a pas.
+ *
+ * 🔴 C'EST TOUT L'INTÉRÊT DU BUCKET OUVERT. Elle ne change pas, ne porte aucun
+ * jeton, n'expire jamais : le navigateur la met en cache, et un accueil déjà
+ * entendu ne se retélécharge pas. Une URL signée change à chaque demande — le
+ * cache ne peut rien en faire.
+ */
+export function adressePublique(relativeUrl: string, espace: string | null): string | null {
+  if (espace !== "public" || !publicConfigure()) return null;
+  return publicUrl(relativeUrl);
 }
 
 // Lit le binaire (disque OU B2). En mode B2, préférez getSignedDownloadUrl +
@@ -196,9 +238,17 @@ export async function getSignedDownloadUrl(
 
 // Supprime le binaire (disque OU B2) — best-effort, n'échoue jamais
 // (un fichier déjà absent ne doit pas casser la suppression du média en base).
-export async function deleteStored(relativeUrl: string): Promise<void> {
+export async function deleteStored(
+  relativeUrl: string,
+  espace: string | null = null,
+): Promise<void> {
   try {
-    if (useCloudStorage()) {
+    // ⚠️ SUPPRIMER AU BON ENDROIT. Un média public effacé dans le bucket privé
+    // ne disparaîtrait de nulle part, et resterait lisible de tout Internet —
+    // le pire des deux mondes.
+    if (espace === "public" && publicConfigure()) {
+      await deleteFromB2Public(relativeUrl);
+    } else if (useCloudStorage()) {
       await deleteFromB2(relativeUrl);
     } else {
       await fs.unlink(path.join(storageRoot(), relativeUrl));
