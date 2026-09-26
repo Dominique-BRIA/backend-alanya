@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { etatCache } from "@/lib/cache-redis.mjs";
+import { etatStockage } from "@/lib/etat-stockage";
 
 /**
- * GET /api/health — l'état des deux dépendances du backend.
+ * GET /api/health — l'état des trois dépendances du backend.
  *
  * 🔴 SANS CE POINT, LA SATURATION DU CACHE EST INVISIBLE. Redis est configuré en
  * `noeviction` : arrivé à son plafond de deux gigaoctets, il ne supprime RIEN,
@@ -20,6 +21,18 @@ import { etatCache } from "@/lib/cache-redis.mjs";
  *
  * `pourcentage` est ce qu'il faut surveiller : au-delà de 85, il est temps de
  * relever `maxmemory` ou de raccourcir les durées de vie.
+ *
+ * 🔴 LE STOCKAGE A ÉTÉ AJOUTÉ POUR LA MÊME RAISON QUE LE CACHE. Une clé
+ * Backblaze fausse ou révoquée ne se voit NULLE PART tant que personne n'envoie
+ * de fichier : le serveur démarre, répond, sert les messages — et c'est le
+ * premier utilisateur qui joint une photo qui découvre la panne.
+ * `checkB2Connection` existait déjà dans le dépôt, écrite et jamais appelée.
+ * C'est ici qu'elle a sa place.
+ *
+ * ⚠️ UN STOCKAGE EN PANNE NE REND PAS LE SERVICE INDISPONIBLE : on continue de
+ * lire et d'écrire des messages sans lui. Il se dit donc dans la charge, et ne
+ * fait PAS basculer le code HTTP en 503 — sinon le moindre incident chez
+ * Backblaze ferait croire que toute l'application est tombée.
  */
 export async function GET() {
   let base = "ko";
@@ -32,7 +45,10 @@ export async function GET() {
     // On garde « ko » : la panne EST la réponse, elle ne doit pas lever.
   }
 
-  const cache = await etatCache();
+  // En parallèle : deux dépendances indépendantes, et le contrôle du stockage
+  // part sur le réseau. Les enchaîner doublerait le temps de réponse d'un point
+  // qu'on interroge justement quand tout va mal.
+  const [cache, stockage] = await Promise.all([etatCache(), etatStockage()]);
 
   return NextResponse.json(
     {
@@ -43,6 +59,7 @@ export async function GET() {
         etat: cache.actif ? cache.etat : (cache.raison ?? null),
         pourcentage: cache.actif ? cache.pourcentage : null,
       },
+      stockage,
     },
     {
       // Un état mis en cache par un intermédiaire ne vaut rien : c'est
