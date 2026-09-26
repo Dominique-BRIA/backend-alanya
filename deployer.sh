@@ -237,6 +237,25 @@ if command -v pg_dump >/dev/null 2>&1; then
   pg_dump "$URL_BASE" | gzip > "$FICHIER_SAUVEGARDE" \
     || echec "La sauvegarde a échoué — AUCUNE migration n'a été appliquée."
   vert "  $FICHIER_SAUVEGARDE ($(du -h "$FICHIER_SAUVEGARDE" | cut -f1))"
+
+  # ⚠️ ET UNE COPIE HORS DE CETTE MACHINE. Une sauvegarde posée sur le disque
+  # qu'elle protège n'est pas une sauvegarde, c'est une copie : le disque lâche,
+  # et l'on perd la base ET ses sauvegardes le même jour.
+  #
+  # ⚠️ NE FAIT PAS ÉCHOUER LE DÉPLOIEMENT. Backblaze injoignable est une gêne,
+  # pas une raison de laisser le service sur une version périmée — la copie
+  # locale, elle, est déjà là. Le cron quotidien rattrapera.
+  if grep -qE '^\s*B2_BUCKET\s*=\s*\S' .env; then
+    if node --env-file=.env scripts/sauvegarde-b2.mjs --local "$FICHIER_SAUVEGARDE"; then
+      vert "  Copie distante posée sur Backblaze."
+    else
+      jaune "  ⚠ Copie distante ÉCHOUÉE — seule la copie locale existe."
+      jaune "    Le déploiement continue ; vérifie la sauvegarde distante ensuite."
+    fi
+  else
+    jaune "  ⚠ Pas de copie distante : B2_BUCKET n'est pas configuré."
+    jaune "    Cette sauvegarde vit sur la machine qu'elle protège."
+  fi
 else
   rouge "  pg_dump absent : impossible de sauvegarder."
   jaune "  Installe-le (« sudo apt install postgresql-client ») ou sauvegarde à la main."
