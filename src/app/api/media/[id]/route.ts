@@ -112,8 +112,36 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       return fail("Accès refusé", 403, "FORBIDDEN");
     }
 
+    /*
+     * 🔴 `?flux=1` — « SERS-LE TOI-MÊME, NE ME RENVOIE PAS AILLEURS ».
+     *
+     * Toutes les voies ci-dessous REDIRIGENT vers Backblaze. Pour une balise
+     * `<audio>` ou `<img>`, c'est parfait : le navigateur suit, joue, et le
+     * fichier ne traverse jamais ce serveur.
+     *
+     * Mais un `fetch()` de navigateur qui aboutit sur un AUTRE domaine exige des
+     * en-têtes CORS sur le bucket. Sans eux, la requête échoue — et le
+     * préchargement de l'accueil, qui est toute la raison d'être du dispositif,
+     * tombe en silence. Le dépôt connaît déjà ce mur : `media-preview-cache.ts`
+     * a dû se faire un proxy pour la même raison.
+     *
+     * ⚠️ POUR QUE LE SON NE DÉPENDE PAS D'UNE CASE COCHÉE DANS UNE CONSOLE. Le
+     * client réessaie par ici, même origine, aucun CORS en jeu. Régler CORS
+     * devient une ÉCONOMIE de bande passante, plus une condition de bon
+     * fonctionnement.
+     *
+     * ⚠️ ET SEULEMENT SOUS UN PLAFOND DE TAILLE. Servir nous-mêmes, c'est payer
+     * la bande passante deux fois et charger le fichier en mémoire. Un accueil
+     * fait au plus 5 Mo ; au-delà de 8, on redirige quand même — un client qui
+     * demanderait à faire transiter des vidéos par le serveur ne doit pas
+     * pouvoir l'obtenir juste en ajoutant un paramètre.
+     */
+    const PLAFOND_FLUX_OCTETS = 8 * 1024 * 1024;
+    const parFlux =
+      req.nextUrl.searchParams.get("flux") === "1" && media.sizeBytes <= PLAFOND_FLUX_OCTETS;
+
     // Si l'URL du média est une URL HTTP/HTTPS externe (ex: hébergée sur un serveur distant ou transmise via l'API)
-    if (/^https?:\/\//i.test(media.url)) {
+    if (!parFlux && /^https?:\/\//i.test(media.url)) {
       return NextResponse.redirect(media.url, {
         status: 302,
         headers: { "Cache-Control": "public, max-age=86400" },
@@ -128,7 +156,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
      * On redirige plutôt que de servir nous-mêmes : le fichier ne transite plus
      * par ce serveur du tout.
      */
-    const ouverte = adressePublique(media.url, media.espace);
+    const ouverte = parFlux ? null : adressePublique(media.url, media.espace);
     if (ouverte) {
       return NextResponse.redirect(ouverte, {
         status: 302,
@@ -140,7 +168,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const safeName = encodeURIComponent(media.filename || `fichier-${media.id}`);
 
     // ---- Backend cloud (Backblaze B2) : redirection vers une URL présignée.
-    if (stockageNuage()) {
+    if (!parFlux && stockageNuage()) {
       const signedUrl = await getSignedDownloadUrl(media.url, {
         responseContentDisposition: forceDownload
           ? `attachment; filename*=UTF-8''${safeName}`
@@ -158,9 +186,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       }
     }
 
-    // ---- Backend local : on lit le binaire et on le streame.
+    // ---- Lecture par ce serveur : disque local, ou repli `?flux=1` du nuage.
     try {
-      const buffer = await readStored(media.url);
+      // ⚠️ AVEC SON ESPACE : un fichier du bucket ouvert n'est pas dans le bucket
+      // privé, et le chercher là rendrait « fichier manquant » pour un fichier
+      // parfaitement en place.
+      const buffer = await readStored(media.url, media.espace);
       const headers: Record<string, string> = {
         "Content-Type": media.mimeType,
         "Content-Length": String(media.sizeBytes),

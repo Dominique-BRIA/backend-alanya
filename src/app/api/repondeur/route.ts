@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { accueilPourAppelant, aUnAccueil, enAbsence } from "@/lib/repondeur.mjs";
+import { adressePublique } from "@/modules/media/storage";
 
 /**
  * LES MESSAGES D'ACCUEIL DU RÉPONDEUR.
@@ -25,7 +26,16 @@ import { accueilPourAppelant, aUnAccueil, enAbsence } from "@/lib/repondeur.mjs"
  */
 
 const MEDIA = {
-  select: { id: true, url: true, mimeType: true, durationMs: true, filename: true },
+  select: {
+    id: true,
+    url: true,
+    // Pour fabriquer l'adresse ouverte. Ni l'un ni l'autre ne sort tel quel :
+    // voir `mediaPublic`.
+    espace: true,
+    mimeType: true,
+    durationMs: true,
+    filename: true,
+  },
 } as const;
 
 /**
@@ -43,8 +53,22 @@ const MEDIA = {
  * le même média. L'écran annonçait « Message d'accueil… » devant un haut-parleur
  * silencieux — un seul défaut, deux symptômes qui semblaient sans rapport.
  */
-function mediaPublic<T extends { id: string }>(media: T): T {
-  return { ...media, url: `/api/media/${media.id}` };
+function mediaPublic<T extends { id: string; url: string; espace?: string | null }>(
+  media: T,
+): Omit<T, "espace"> & { url: string; urlPublique: string | null } {
+  const { espace, ...reste } = media;
+  return {
+    ...reste,
+    url: `/api/media/${media.id}`,
+    /*
+     * ⚠️ LA VOIE RAPIDE EN PLUS DE LA SÛRE, JAMAIS À SA PLACE. Adresse fixe et
+     * mise en cache un an quand l'accueil est dans le bucket ouvert ; `null`
+     * sinon. Le client essaie celle-ci et retombe sur `url` au moindre échec —
+     * un bucket sans règle CORS, un réseau qui filtre les domaines tiers. Ne
+     * livrer que la rapide ferait dépendre le son d'un réglage de console.
+     */
+    urlPublique: adressePublique(media.url, espace ?? null),
+  };
 }
 
 const ACCUEIL = {
@@ -87,8 +111,10 @@ async function etatRepondeur(userId: string) {
   };
 }
 
-/** Une ligne d'accueil dont le média porte son adresse servie. */
-function avecMediaPublic<T extends { media: { id: string } }>(accueil: T): T {
+/** Une ligne d'accueil dont le média porte ses adresses servies. */
+function avecMediaPublic<
+  T extends { media: { id: string; url: string; espace?: string | null } },
+>(accueil: T) {
   return { ...accueil, media: mediaPublic(accueil.media) };
 }
 

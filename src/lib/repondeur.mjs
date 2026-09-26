@@ -9,6 +9,8 @@
  * sans se contredire un jour.
  */
 
+import { adresseOuverte } from "./adresse-publique.mjs";
+
 /**
  * OÙ EN EST-ON, DANS LE FUSEAU DE QUELQU'UN D'AUTRE ?
  *
@@ -86,7 +88,16 @@ export function enAbsence(jusquA) {
 
 /** Les colonnes du média qu'un client sait lire. */
 const MEDIA = {
-  select: { id: true, url: true, mimeType: true, durationMs: true, filename: true },
+  // `espace` et `url` ne sortent PAS d'ici : ils servent à fabriquer l'adresse
+  // ouverte, puis sont remplacés. Voir la fin de `accueilPourAppelant`.
+  select: {
+    id: true,
+    url: true,
+    espace: true,
+    mimeType: true,
+    durationMs: true,
+    filename: true,
+  },
 };
 
 /**
@@ -228,7 +239,39 @@ export async function accueilPourAppelant(prisma, userId) {
     sansSonnerie,
     absence: sansSonnerie,
     mode: enDuree ? "duree" : plageActive ? "plage" : "defaut",
-    media: { ...retenu.media, url: `/api/media/${retenu.media.id}` },
+    media: mediaPourAppelant(retenu.media),
+  };
+}
+
+/**
+ * CE QUE L'APPELANT REÇOIT POUR ALLER CHERCHER L'ACCUEIL.
+ *
+ * 🔴 DEUX ADRESSES, ET CE N'EST PAS UN DOUBLON.
+ *
+ * `url` est la voie sûre : `/api/media/<id>`, même origine, authentifiée,
+ * fonctionne toujours. C'est elle que les anciens clients lisent, et la retirer
+ * les rendrait muets.
+ *
+ * `urlPublique` est la voie rapide, présente seulement si l'accueil est dans le
+ * bucket ouvert : adresse fixe, aucun jeton, mise en cache par le navigateur
+ * pendant un an. Un accueil déjà entendu ne se retélécharge pas — et au moment
+ * où la sonnerie s'arrête, il n'y a plus une seule requête à faire.
+ *
+ * ⚠️ `url` RESTE PRÉSENTE MÊME QUAND `urlPublique` EXISTE. Le client essaie la
+ * rapide, et retombe sur la sûre au moindre échec — un bucket sans règle CORS,
+ * un réseau qui filtre les domaines tiers. Ne donner que l'adresse rapide
+ * ferait dépendre le son d'un réglage de console.
+ *
+ * ⚠️ `espace` ET LE CHEMIN DE STOCKAGE NE SORTENT PAS. Le premier est un détail
+ * d'implémentation, le second dit l'organisation interne du bucket : ni l'un ni
+ * l'autre n'apprend quoi que ce soit d'utile à un appelant.
+ */
+function mediaPourAppelant(media) {
+  const { url, espace, ...reste } = media;
+  return {
+    ...reste,
+    url: `/api/media/${media.id}`,
+    urlPublique: adresseOuverte(url, espace),
   };
 }
 

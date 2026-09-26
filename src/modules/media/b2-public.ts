@@ -1,5 +1,12 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand, HeadBucketCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  HeadBucketCommand,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 import { env } from "@/lib/env";
+import { adresseOuverte, cleOuverte } from "@/lib/adresse-publique.mjs";
 
 /**
  * LE BUCKET PUBLIC — ACCUEILS DE RÉPONDEUR ET SONNERIES.
@@ -48,9 +55,15 @@ function getB2Public(): S3Client {
   return client;
 }
 
-/** La clé de l'objet dans le bucket public. */
+/**
+ * La clé de l'objet dans le bucket public.
+ *
+ * ⚠️ ELLE VIENT DE `lib/adresse-publique.mjs` ET NON D'ICI. `ws-server.mjs` est
+ * un processus séparé qui ne peut pas importer de TypeScript : il a besoin de la
+ * même règle, et deux copies de la même règle finissent toujours par diverger.
+ */
 export function publicKey(relativeUrl: string): string {
-  return `${env.media.b2Public.keyPrefix}${relativeUrl}`.replace(/\/{2,}/g, "/");
+  return cleOuverte(relativeUrl);
 }
 
 /**
@@ -61,8 +74,14 @@ export function publicKey(relativeUrl: string): string {
  * entendu ne se retélécharge pas. Une URL signée, elle, change à chaque
  * demande — le cache ne peut rien en faire.
  */
-export function publicUrl(relativeUrl: string): string {
-  return `https://${env.media.b2Public.bucket}.${env.media.b2.endpoint}/${publicKey(relativeUrl)}`;
+export function publicUrl(relativeUrl: string): string | null {
+  /*
+   * ⚠️ `null` PLUTÔT QU'UNE CHAÎNE VIDE quand le bucket n'est pas configuré. Une
+   * chaîne vide traverserait les tests de vérité de JavaScript comme une adresse
+   * — jusqu'à une redirection vers nulle part, trois appels plus loin, sans
+   * qu'on sache d'où elle vient.
+   */
+  return adresseOuverte(relativeUrl, "public");
 }
 
 export async function uploadToB2Public(
@@ -105,6 +124,29 @@ export async function deleteFromB2Public(relativeUrl: string): Promise<void> {
   } catch {
     /* déjà parti, ou jamais arrivé */
   }
+}
+
+/**
+ * Lit un objet du bucket ouvert.
+ *
+ * 🔴 SERT LE REPLI, PAS LE CAS NORMAL. Normalement le client va chercher le
+ * fichier DIRECTEMENT chez Backblaze, et ce serveur n'en voit pas un octet.
+ * Mais un `fetch()` de navigateur vers un autre domaine exige des en-têtes CORS
+ * sur le bucket : sans eux, le téléchargement échoue — et le préchargement de
+ * l'accueil, qui est tout l'intérêt du dispositif, tombe silencieusement.
+ *
+ * ⚠️ POUR QUE LA CORRECTION NE DÉPENDE PAS D'UN RÉGLAGE DE CONSOLE. Le client
+ * peut redemander le fichier par ce serveur (`?flux=1`), même origine, aucun
+ * CORS en jeu. CORS bien réglé devient une ÉCONOMIE de bande passante, pas une
+ * condition pour que le son arrive.
+ */
+export async function readFromB2Public(relativeUrl: string): Promise<Buffer> {
+  const objet = await getB2Public().send(
+    new GetObjectCommand({ Bucket: env.media.b2Public.bucket, Key: publicKey(relativeUrl) }),
+  );
+  const corps = objet.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+  if (!corps?.transformToByteArray) throw new Error("corps illisible");
+  return Buffer.from(await corps.transformToByteArray());
 }
 
 /** Les identifiants sont-ils acceptés, et le bucket existe-t-il ? */

@@ -8,6 +8,7 @@ import {
   deleteFromB2Public,
   publicConfigure,
   publicUrl,
+  readFromB2Public,
   uploadToB2Public,
 } from "./b2-public";
 
@@ -211,13 +212,33 @@ export async function saveBuffer(
  * cache ne peut rien en faire.
  */
 export function adressePublique(relativeUrl: string, espace: string | null): string | null {
-  if (espace !== "public" || !publicConfigure()) return null;
+  // La condition « bucket configuré » vit dans `adresseOuverte`, en un seul
+  // endroit. La redoubler ici donnerait deux vérités, et la plus ancienne
+  // finirait par mentir.
+  if (espace !== "public") return null;
   return publicUrl(relativeUrl);
 }
 
-// Lit le binaire (disque OU B2). En mode B2, préférez getSignedDownloadUrl +
-// redirection 302 plutôt que de tout charger en mémoire (cf. route GET /api/media/:id).
-export async function readStored(relativeUrl: string): Promise<Buffer> {
+/**
+ * Lit le binaire (disque, bucket privé OU bucket ouvert).
+ *
+ * En mode B2, préférez `getSignedDownloadUrl` + redirection 302 plutôt que de
+ * tout charger en mémoire (cf. route GET /api/media/:id).
+ *
+ * ⚠️ `espace` N'EST PAS DÉCORATIF. Un fichier du bucket ouvert cherché dans le
+ * bucket privé n'y est PAS : la lecture échoue, la route rend 410 « fichier
+ * manquant », et l'on part chercher un fichier perdu qui est là où il doit
+ * être. Le paramètre est optionnel pour que les appelants qui ne manipulent que
+ * du privé restent inchangés — mais tout appelant qui a l'espace sous la main
+ * doit le passer.
+ */
+export async function readStored(
+  relativeUrl: string,
+  espace: string | null = null,
+): Promise<Buffer> {
+  if (espace === "public" && publicConfigure()) {
+    return readFromB2Public(relativeUrl);
+  }
   if (useCloudStorage()) {
     return readFromB2(relativeUrl);
   }
