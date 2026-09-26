@@ -123,8 +123,25 @@ $$;
 -- index partiel, dont la syntaxe de cible est plus obscure que la condition
 -- elle-meme. Relancer ce fichier ne cree pas de doublon et — c'est le point
 -- important — n'ECRASE PAS un plafond global deja ajuste par le superuser.
-INSERT INTO "limite_reunion" ("idcompany", "max_audio", "max_video", "modifie_par")
-SELECT NULL, 9, 6, 'migration 20260821100000'
+--
+-- ⚠️ `updated_at` EST FOURNI EXPLICITEMENT, ET IL LE FAUT.
+--
+-- 🐛 Constate le 26/09/2026 en rejouant cette serie sur une base NEUVE : cet
+-- INSERT echouait avec « null value in column "updated_at" violates not-null
+-- constraint », et le script s'arretant a la premiere erreur, les VINGT fichiers
+-- suivants n'etaient jamais poses.
+--
+-- La cause est subtile. Sur la base de production, la table a ete creee par le
+-- CREATE TABLE ci-dessus, qui donne un defaut a `updated_at`. Sur une base
+-- neuve, c'est `schema.prisma` qui la cree — et la, `@updatedAt` est tenu par le
+-- CLIENT Prisma, pas par la base : la colonne est NOT NULL SANS defaut. Un
+-- INSERT en SQL brut, qui ne passe pas par le client, n'a donc personne pour la
+-- remplir.
+--
+-- Fournir la valeur ici est juste des deux cotes : sur l'ancienne base elle
+-- remplace un defaut par la meme chose, sur la neuve elle est indispensable.
+INSERT INTO "limite_reunion" ("idcompany", "max_audio", "max_video", "modifie_par", "updated_at")
+SELECT NULL, 9, 6, 'migration 20260821100000', now()
 WHERE NOT EXISTS (
     SELECT 1 FROM "limite_reunion" WHERE "idcompany" IS NULL
 );

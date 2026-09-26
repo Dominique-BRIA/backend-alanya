@@ -286,18 +286,31 @@ vert "  Client Prisma régénéré."
 # Tous ces fichiers sont écrits en IF NOT EXISTS : les rejouer est sans effet.
 etape "7/10  SQL manuel (le vrai mécanisme de migration)"
 
-# Filet : signaler toute migration sans jumeau, plutôt que de la perdre en
-# silence. La correspondance se fait sur le nom, à la convention près.
-MANQUANTES=""
-for DOSSIER in prisma/migrations/2*/; do
-  NOM="$(basename "$DOSSIER" | sed -E 's/^[0-9]+_//')"
-  grep -rqil "$NOM" prisma/manual/ 2>/dev/null || MANQUANTES="$MANQUANTES $NOM"
-done
-if [ -n "$MANQUANTES" ]; then
-  jaune "  ⚠ Migrations sans jumeau dans prisma/manual/ :"
-  for M in $MANQUANTES; do jaune "      $M"; done
-  jaune "    Vérifie qu'elles sont bien déjà en base — sinon ce déploiement ne les posera PAS."
-fi
+# 🐛 UN CONTRÔLE A ÉTÉ RETIRÉ ICI, LE 26/09/2026, PARCE QU'IL MENTAIT.
+#
+# Il listait les dossiers de `prisma/migrations/` sans « jumeau » dans
+# `prisma/manual/`, et en signalait sept à chaque déploiement. Deux défauts :
+#
+#   • il cherchait le nom du dossier DANS LE CONTENU des fichiers manuels
+#     (`grep -rqil`), pas dans leurs noms — `meeting_invitation_auto` était donc
+#     signalé manquant alors que son jumeau s'appliquait trois lignes plus bas ;
+#
+#   • et surtout, il comparait deux choses qui n'ont aucune raison de se
+#     correspondre. `prisma/migrations/` est de l'HISTOIRE MORTE. La structure
+#     d'une base neuve vient de `schema.prisma` ; `prisma/manual/` ne porte que
+#     ce que Prisma ne sait pas exprimer. Les six autres « manquantes » créaient
+#     des objets tous présents dans `schema.prisma` — vérifié.
+#
+# 🔴 UN AVERTISSEMENT QUI CRIE AU LOUP À CHAQUE DÉPLOIEMENT EST PIRE QUE PAS
+# D'AVERTISSEMENT : on apprend à ne plus le lire. Et pendant qu'on ne le lisait
+# plus, DEUX VRAIS DÉFAUTS dormaient dans `prisma/manual/`, que ce contrôle
+# n'aurait jamais pu voir — deux fichiers qui échouaient sur une base NEUVE, donc
+# vingt fichiers jamais posés le jour d'une restauration.
+#
+# Le contrôle qui pose LA BONNE QUESTION est `scripts/verifier-base-neuve.sh` :
+# il bâtit une base jetable depuis `schema.prisma`, y rejoue la série, puis la
+# rejoue une seconde fois. Il n'a pas sa place ici — il crée et détruit une base
+# — mais sur un poste de développement, avant de dépendre d'une restauration.
 
 bash scripts/apply-manual-sql.sh || echec "apply-manual-sql.sh a échoué — la base est dans l'état d'avant."
 vert "  SQL manuel appliqué."

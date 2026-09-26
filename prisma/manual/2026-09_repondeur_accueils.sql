@@ -71,13 +71,43 @@ CREATE UNIQUE INDEX IF NOT EXISTS "repondeur_accueil_actif_key"
 -- sans que rien ne le dise — et son répondeur deviendrait muet tout en se
 -- déclarant actif. Le transfert est idempotent : il ne fait rien si le compte a
 -- déjà une ligne.
-INSERT INTO "repondeur_accueil" ("alanyaID", "mediaID", "actif")
-SELECT u."alanyaID", u."repondeur_media_id", 1
-  FROM "users" u
- WHERE u."repondeur_media_id" IS NOT NULL
-   AND NOT EXISTS (
-       SELECT 1 FROM "repondeur_accueil" a WHERE a."alanyaID" = u."alanyaID"
-   );
+--
+-- ⚠️ ET IL NE S'EXECUTE QUE SI LA COLONNE EXISTE ENCORE.
+--
+-- 🐛 Constate le 26/09/2026 en rejouant cette serie sur une base NEUVE : cette
+-- reprise echouait avec « column u.repondeur_media_id does not exist », et le
+-- script s'arretant a la premiere erreur, tout ce qui suivait n'etait jamais
+-- pose.
+--
+-- C'est normal et c'etait previsible : cette colonne n'existe que sur une base
+-- qui a connu l'ANCIEN repondeur. Une base neuve est batie depuis
+-- `schema.prisma`, ou la colonne a disparu — remplacee par la table que ce
+-- fichier vient de creer. Il n'y a donc rien a reprendre, et la reprise ne doit
+-- pas pour autant faire tomber le deploiement.
+--
+-- 🔴 `EXECUTE` AVEC UNE CHAINE, ET CE N'EST PAS UNE COQUETTERIE. PL/pgSQL
+-- ANALYSE ses instructions a la premiere execution, avant d'evaluer les
+-- conditions : un INSERT ecrit en clair dans un `IF` faux echouerait QUAND MEME,
+-- a l'analyse, pour une colonne qu'on a justement verifie absente. Seule une
+-- instruction construite en chaine echappe a cette analyse.
+DO $reprise$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'users' AND column_name = 'repondeur_media_id'
+    ) THEN
+        EXECUTE $sql$
+            INSERT INTO "repondeur_accueil" ("alanyaID", "mediaID", "actif")
+            SELECT u."alanyaID", u."repondeur_media_id", 1
+              FROM "users" u
+             WHERE u."repondeur_media_id" IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM "repondeur_accueil" a WHERE a."alanyaID" = u."alanyaID"
+               )
+        $sql$;
+    END IF;
+END
+$reprise$;
 
 -- La colonne n'a plus d'emploi : la table la remplace entièrement, et la
 -- laisser donnerait deux endroits où chercher l'accueil actif — avec la
