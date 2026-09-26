@@ -23,6 +23,10 @@
 
 BEGIN;
 
-ALTER TABLE "users" ADD COLUMN "e2ee_sauvegarde_refusee" BOOLEAN NOT NULL DEFAULT false;
+-- ⚠️ `IF NOT EXISTS` : `apply-manual-sql.sh` rejoue TOUS les fichiers à chaque
+-- déploiement. Sans lui, ce fichier s'arrête sur « column already exists » et
+-- bloque tout ce qui vient après, y compris des correctifs sans rapport.
+ALTER TABLE "users"
+  ADD COLUMN IF NOT EXISTS "e2ee_sauvegarde_refusee" BOOLEAN NOT NULL DEFAULT false;
 
 COMMIT;

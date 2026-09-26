@@ -40,22 +40,37 @@
 BEGIN;
 
 ALTER TABLE "e2ee_serrures"
-  ADD COLUMN "appareil" VARCHAR(64) NOT NULL DEFAULT '';
+  ADD COLUMN IF NOT EXISTS "appareil" VARCHAR(64) NOT NULL DEFAULT '';
 
 -- Voir plus haut : un trousseau sans appareil n'a pas de sens.
-DELETE FROM "e2ee_serrures" WHERE "type" = 'trousseau';
+--
+-- ⚠️ REJOUÉ À CHAQUE DÉPLOIEMENT, et c'est sans danger : au second passage il
+-- ne reste aucun trousseau SANS appareil à supprimer, la contrainte ci-dessous
+-- l'interdisant. La condition le dit explicitement, plutôt que de compter sur
+-- ce raisonnement.
+DELETE FROM "e2ee_serrures" WHERE "type" = 'trousseau' AND "appareil" = '';
 
 DROP INDEX IF EXISTS "e2ee_serrures_compte_type_uniq";
 
-CREATE UNIQUE INDEX "e2ee_serrures_compte_type_appareil_uniq"
+CREATE UNIQUE INDEX IF NOT EXISTS "e2ee_serrures_compte_type_appareil_uniq"
   ON "e2ee_serrures" ("alanyaID", "type", "appareil");
 
 -- La règle, portée par la base et non par la seule bonne volonté du client.
-ALTER TABLE "e2ee_serrures"
-  ADD CONSTRAINT "e2ee_serrures_appareil_selon_type"
-  CHECK (
-    ("type" = 'trousseau' AND "appareil" <> '')
-    OR ("type" IN ('motdepasse', 'recuperation') AND "appareil" = '')
-  );
+--
+-- ⚠️ UNE CONTRAINTE N'A PAS D'`IF NOT EXISTS` EN POSTGRES : on interroge le
+-- catalogue, comme le font les autres fichiers de ce dossier.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'e2ee_serrures_appareil_selon_type'
+    ) THEN
+        ALTER TABLE "e2ee_serrures"
+          ADD CONSTRAINT "e2ee_serrures_appareil_selon_type"
+          CHECK (
+            ("type" = 'trousseau' AND "appareil" <> '')
+            OR ("type" IN ('motdepasse', 'recuperation') AND "appareil" = '')
+          );
+    END IF;
+END $$;
 
 COMMIT;
