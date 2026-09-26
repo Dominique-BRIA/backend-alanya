@@ -177,6 +177,7 @@ async function principal() {
     octetsMigres: 0,
     octetsAFaire: 0,
     introuvables: [],
+    donneesEnLigne: [],
   };
 
   /*
@@ -195,8 +196,28 @@ async function principal() {
     });
     if (page.length === 0) break;
 
-    // Les URLs externes ne sont pas à nous : rien à migrer.
-    const locaux = page.filter((m) => !/^https?:\/\//i.test(m.url));
+    /*
+     * ⚠️ TROIS SORTES DE VALEURS DANS `url`, ET UNE SEULE SE MIGRE.
+     *
+     * Les adresses `http(s)` pointent ailleurs : rien à déplacer.
+     *
+     * 🐛 ET DES `data:` — constaté en production le 26/09/2026. Une ligne porte
+     * une image entière encodée en base64 DANS la colonne, au lieu d'un chemin.
+     * Ce média est déjà mort : `readStored` en fait un nom de fichier, ne le
+     * trouve pas, et la route rend 410. La migration le signalait comme
+     * « absent du disque », ce qui était vrai mais trompeur — ce n'est pas un
+     * fichier perdu, c'est une donnée mal écrite, et les deux appellent des
+     * gestes différents.
+     */
+    const locaux = [];
+    for (const m of page) {
+      if (/^https?:\/\//i.test(m.url)) continue;
+      if (/^data:/i.test(m.url)) {
+        compteurs.donneesEnLigne.push(m.id);
+        continue;
+      }
+      locaux.push(m);
+    }
     compteurs.total += locaux.length;
 
     for (let i = 0; i < locaux.length; i += PARALLELE) {
@@ -216,6 +237,19 @@ async function principal() {
     console.log(`  \x1b[32mMigrés              : ${compteurs.migres} (${lisible(compteurs.octetsMigres)})\x1b[0m`);
   } else {
     console.log(`  \x1b[36mÀ migrer            : ${compteurs.aFaire} (${lisible(compteurs.octetsAFaire)})\x1b[0m`);
+  }
+
+  if (compteurs.donneesEnLigne.length > 0) {
+    console.log(
+      `\n  \x1b[33m⚠ ${compteurs.donneesEnLigne.length} ligne(s) portent une image ENCODÉE dans la colonne\x1b[0m`,
+    );
+    console.log("  au lieu d'un chemin de fichier. Ces médias étaient déjà illisibles");
+    console.log("  AVANT cette migration : la route rend 410 pour eux depuis toujours.");
+    console.log("  Identifiants :");
+    for (const id of compteurs.donneesEnLigne.slice(0, 10)) console.log(`      ${id}`);
+    if (compteurs.donneesEnLigne.length > 10) {
+      console.log(`      … et ${compteurs.donneesEnLigne.length - 10} autres`);
+    }
   }
 
   if (compteurs.introuvables.length > 0) {
