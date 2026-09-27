@@ -30,7 +30,30 @@ const TYPE_CENTRE_APPEL = 3;
 const TYPE_CENTRE_VOCAL = 4;
 
 /** Une entreprise « active ». La colonne est nullable, `null` vaut actif. */
-const ACTIVE = { NOT: { actif: 0 } } as const;
+/*
+ * CE QUI COMPTE COMME « ACTIVE ».
+ *
+ * 🐛 `NOT: { actif: 0 }` PERDAIT LES ENTREPRISES DONT `actif` EST NULL. C'est la
+ * logique à trois valeurs de SQL et non un défaut de Prisma : `NOT (NULL = 0)`
+ * vaut NULL, donc « ni vrai ni faux », donc la ligne est écartée. Mesuré le
+ * 27/09/2026 sur une base d'essai — trois entreprises, `actif` à 1, NULL et 0 :
+ * seule la première ressortait.
+ *
+ * La colonne est `Int? @default(1)` : un NULL n'y signifie pas « désactivée »,
+ * il signifie « personne ne s'est prononcé ». Une entreprise dans ce cas
+ * existait en base, ne s'affichait nulle part, et rien ne disait pourquoi.
+ *
+ * ⚠️ SEUL `0` DÉSACTIVE, explicitement. C'est la seule valeur qui exprime une
+ * décision.
+ *
+ * ⚠️ CE `OR` EST AU PREMIER NIVEAU DU `where`. Tout appelant qui a besoin d'un
+ * autre `OR` doit l'envelopper dans un `AND: [...]` — sinon le second écrase le
+ * premier et le filtre disparaît en silence. `chercherEntreprises` le fait déjà,
+ * et son commentaire annonçait précisément ce jour.
+ */
+// ⚠️ PAS DE `as const` ICI : il rendrait le tableau `readonly`, que le type
+// `CompanyWhereInput` de Prisma refuse. L'objet n'est jamais muté de toute façon.
+const ACTIVE = { OR: [{ actif: { not: 0 } }, { actif: null }] };
 
 export interface TypeEntreprise {
   idTypeCompany: number;
@@ -212,12 +235,18 @@ export async function chercherEntreprises(requete: string, idPays: number | null
     where: {
       ...ACTIVE,
       ...filtrePays(idPays),
-      // ⚠️ `AND` EXPLICITE, ET LE GARDER MÊME S'IL PARAÎT SUPERFLU. Le `OR`
-      // ci-dessous porte les deux colonnes fouillées ; `filtrePays` n'en pose
-      // plus, mais le jour où il en reposerait un — c'était le cas quelques
-      // heures durant le 31/08 — les deux `OR` se retrouveraient dans le même
-      // objet et le second écraserait le premier. La recherche cesserait alors
-      // de filtrer sur le pays, en silence.
+      /*
+       * ⚠️ `AND` EXPLICITE, ET IL N'EST PLUS SUPERFLU — IL EST PORTEUR.
+       *
+       * Le `OR` ci-dessous porte les deux colonnes fouillées. Depuis le
+       * 27/09/2026, `ACTIVE` en porte un AUSSI : sans cette enveloppe, les deux
+       * se retrouveraient dans le même objet et le second écraserait le premier.
+       * La recherche cesserait de filtrer sur l'activité, en silence — elle
+       * ressortirait les entreprises désactivées.
+       *
+       * Ce commentaire annonçait ce jour quand `filtrePays` posait un `OR`, en
+       * août. Le garder a évité le défaut ; c'est la raison de l'écrire.
+       */
       AND: [
         {
           OR: [
