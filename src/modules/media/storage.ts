@@ -247,6 +247,36 @@ export async function readStored(
   return fs.readFile(path.join(storageRoot(), safe));
 }
 
+/**
+ * COMBIEN DE TEMPS UN CLIENT PEUT GARDER UNE **REDIRECTION** VERS UNE URL SIGNÉE.
+ *
+ * 🔴 UN EN-TÊTE DE CACHE NE DÉCRIT PAS L'IMAGE, IL DÉCRIT LA RÉPONSE QUI LE
+ * PORTE. Et quand cette réponse est une redirection 302, ce qu'on met en cache
+ * est L'ADRESSE — pas le fichier.
+ *
+ * 🐛 CONSTATÉ LE 27/09/2026 : LES PHOTOS DE PROFIL ONT CESSÉ DE S'AFFICHER.
+ * `/api/avatars/:id` redirigeait vers une URL signée valable UNE HEURE, en
+ * annonçant `public, max-age=604800, immutable` — sept jours, et sans
+ * revalidation possible. Le navigateur rejouait donc, pendant une semaine, une
+ * adresse morte au bout d'une heure : Backblaze répondait 403, et l'image
+ * disparaissait. Aucune erreur côté serveur, rien dans les journaux : le serveur
+ * avait fait exactement ce qu'on lui avait demandé.
+ *
+ * ⚠️ LE DÉFAUT N'EXISTAIT PAS AVANT BACKBLAZE. Ces routes servaient les octets
+ * elles-mêmes, et sept jours de cache étaient alors la bonne réponse. C'est la
+ * bascule vers le nuage qui a transformé un en-tête juste en un en-tête faux,
+ * sans que personne n'ait touché à cette ligne.
+ *
+ * ⚠️ LA VALEUR EST DÉRIVÉE DE LA DURÉE DE SIGNATURE, JAMAIS ÉCRITE EN DUR. Deux
+ * nombres indépendants qui doivent rester cohérents finissent toujours par
+ * diverger : il suffirait de baisser `B2_PRESIGN_EXPIRES_IN_SEC` pour recréer le
+ * même défaut, en silence. Un quart de la durée laisse une marge large même
+ * quand le client suit la redirection tardivement.
+ */
+export function dureeCacheRedirectionSignee(): number {
+  return Math.max(60, Math.floor(env.media.b2.presignExpiresInSec / 4));
+}
+
 // URL présignée d'accès à un objet privé (B2 uniquement).
 // Renvoie null en mode local (le fichier est servi directement par le backend).
 export async function getSignedDownloadUrl(

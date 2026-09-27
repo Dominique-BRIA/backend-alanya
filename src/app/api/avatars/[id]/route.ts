@@ -1,8 +1,8 @@
-import { type NextRequest, NextResponse } from "next/server";
-import { fail, handleError, HttpError } from "@/lib/http";
+import { type NextRequest } from "next/server";
+import { fail, handleError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { formesStockeesPour } from "@/lib/avatar";
-import { readStored, getSignedDownloadUrl, useCloudStorage } from "@/modules/media/storage";
+import { readStored } from "@/modules/media/storage";
 
 /**
  * GET /api/avatars/:id — sert une photo de profil, SANS jeton.
@@ -52,21 +52,37 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     // publique plutôt que de la transporter en base64 dans chaque réponse.
     const cache = "public, max-age=604800, immutable";
 
-    if (useCloudStorage()) {
-      const signedUrl = await getSignedDownloadUrl(media.url).catch((err) => {
-        console.error("[avatars] Échec signature URL :", err);
-        throw new HttpError(502, "Avatar inaccessible sur le stockage", "STORAGE_ERROR");
-      });
-      if (signedUrl) {
-        return NextResponse.redirect(signedUrl, {
-          status: 302,
-          headers: { "Cache-Control": cache },
-        });
-      }
-    }
-
+    /*
+     * 🔴 ON SERT LES OCTETS, ON NE REDIRIGE PLUS. C'est une correction.
+     *
+     * 🐛 LES PHOTOS DE PROFIL ONT CESSÉ DE S'AFFICHER (constaté par le user le
+     * 27/09/2026). Cette route redirigeait vers une URL signée valable UNE HEURE
+     * en annonçant `max-age=604800, immutable` : le navigateur gardait LA
+     * REDIRECTION une semaine, sans droit de revalider, et rejouait une adresse
+     * morte au bout d'une heure. Backblaze répondait 403 et l'image disparaissait
+     * — sans une ligne dans les journaux, le serveur ayant fait exactement ce
+     * qu'on lui demandait.
+     *
+     * 🔴 ET CORRIGER L'EN-TÊTE N'AURAIT PAS SUFFI. Une URL signée porte une
+     * signature DIFFÉRENTE à chaque demande : c'est une adresse neuve chaque
+     * fois, donc le navigateur ne peut RIEN mettre en cache. Rediriger, ici,
+     * revient à interdire le cache des photos de profil — exactement l'inverse du
+     * but.
+     *
+     * ⚠️ POURQUOI C'EST LE BON ARBITRAGE ICI, ET PAS DANS `/api/media/:id`. Un
+     * avatar est une vignette carrée de quelques dizaines de kilo-octets, relue
+     * par tous les contacts, à chaque écran. Servie avec sept jours de cache, elle
+     * ne traverse ce serveur QU'UNE FOIS PAR SEMAINE ET PAR NAVIGATEUR — moins de
+     * trafic au total qu'une redirection rejouée à chaque affichage. Les pièces
+     * jointes de conversation, elles, peuvent peser des centaines de mégaoctets et
+     * ne s'ouvrent qu'une fois : là, la redirection reste la bonne réponse.
+     *
+     * ⚠️ `useCloudStorage` N'A PLUS À ÊTRE TESTÉ : `readStored` sait déjà lire le
+     * disque ou le bucket. Un aiguillage de moins, c'est un endroit de moins où
+     * les deux chemins peuvent diverger imperceptiblement.
+     */
     try {
-      const buffer = await readStored(media.url);
+      const buffer = await readStored(media.url, media.espace);
       return new Response(new Uint8Array(buffer), {
         status: 200,
         headers: {
@@ -75,7 +91,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
           "Cache-Control": cache,
         },
       });
-    } catch {
+    } catch (err) {
+      /*
+       * ⚠️ ON LE DIT DANS LES JOURNAUX AVANT DE RÉPONDRE 410. « Fichier manquant »
+       * est vrai quand le binaire a disparu, et TROMPEUR quand c'est le bucket qui
+       * est injoignable ou la clé refusée — deux pannes qui appellent des gestes
+       * opposés. Sans cette trace, on part chercher un fichier perdu qui est à sa
+       * place. C'est exactement le silence qui a coûté une demi-journée sur la
+       * disparition des photos de profil.
+       */
+      console.error("[avatars] lecture impossible :", err);
       return fail("Fichier manquant sur le serveur", 410, "GONE");
     }
   } catch (err) {

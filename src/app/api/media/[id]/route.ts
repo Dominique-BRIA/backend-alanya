@@ -7,6 +7,7 @@ import { formesStockeesPour } from "@/lib/avatar";
 import { verifyAccessToken } from "@/lib/jwt";
 import {
   adressePublique,
+  dureeCacheRedirectionSignee,
   readStored,
   getSignedDownloadUrl,
   deleteStored,
@@ -181,7 +182,24 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       if (signedUrl) {
         return NextResponse.redirect(signedUrl, {
           status: 302,
-          headers: { "Cache-Control": "private, max-age=86400" },
+          /*
+           * 🐛 CET EN-TÊTE ANNONÇAIT 24 HEURES SUR UNE ADRESSE QUI VIT UNE HEURE.
+           * Même défaut que celui qui a fait disparaître les photos de profil le
+           * 27/09/2026 : ce qu'on met en cache ici est la REDIRECTION, donc une
+           * adresse signée — pas le fichier. Passé l'expiration, le navigateur
+           * rejouait une adresse morte et Backblaze répondait 403.
+           *
+           * Moins visible ici que pour les avatars : une pièce jointe s'ouvre en
+           * général une fois, dans la minute. Le défaut attendait qu'on rouvre la
+           * même photo le lendemain.
+           *
+           * ⚠️ LA DURÉE VIENT DE LA SIGNATURE ELLE-MÊME, pas d'un nombre écrit à
+           * côté. Deux valeurs indépendantes qui doivent rester cohérentes
+           * finissent par diverger.
+           */
+          headers: {
+            "Cache-Control": `private, max-age=${dureeCacheRedirectionSignee()}`,
+          },
         });
       }
     }
