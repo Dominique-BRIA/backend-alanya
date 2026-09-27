@@ -67,10 +67,39 @@ function maintenantDans(fuseau) {
 export function plageCouvreMaintenant(plage) {
   if (new Date(plage.expireLe).getTime() <= Date.now()) return false;
   const ici = maintenantDans(plage.fuseau);
-  if (ici.jour !== plage.jour) return false;
-  // Début inclus, fin EXCLUE : sans cela, une plage 10 h-12 h et une autre
-  // 12 h-14 h se disputeraient la minute de midi.
-  return ici.minutes >= plage.debutMin && ici.minutes < plage.finMin;
+
+  /*
+   * 🔴 UNE PLAGE PEUT TRAVERSER MINUIT, ET C'EST LE CAS LE PLUS NATUREL.
+   *
+   * 🐛 « 21 h à 6 h » NE S'ACTIVAIT JAMAIS. La condition était
+   * `minutes >= 1260 && minutes < 360` — aucune minute de la journée ne
+   * satisfait les deux. La plage était enregistrée (quand la saisie la laissait
+   * passer), s'affichait dans la liste, et ne prenait aucun appel. Rien ne
+   * disait pourquoi : une condition qui ne peut pas être vraie ne lève pas
+   * d'erreur, elle rend `false`.
+   *
+   * ⚠️ ET ELLE NE TIENT PAS DANS UN SEUL JOUR. Une nuit du lundi appartient au
+   * lundi jusqu'à minuit, puis au MARDI. Le test `ici.jour !== plage.jour`
+   * écartait donc d'office la seconde moitié — celle où l'on dort, c'est-à-dire
+   * précisément celle pour laquelle on pose un répondeur de nuit.
+   *
+   * Début inclus, fin EXCLUE dans les deux cas : sans cela, une plage 10 h-12 h
+   * et une autre 12 h-14 h se disputeraient la minute de midi.
+   */
+  const traverseMinuit = plage.finMin <= plage.debutMin;
+
+  if (!traverseMinuit) {
+    if (ici.jour !== plage.jour) return false;
+    return ici.minutes >= plage.debutMin && ici.minutes < plage.finMin;
+  }
+
+  // La soirée du jour choisi : de `debutMin` à minuit.
+  if (ici.jour === plage.jour && ici.minutes >= plage.debutMin) return true;
+
+  // Le petit matin du LENDEMAIN : de minuit à `finMin`. Le modulo referme la
+  // semaine — la nuit du dimanche se termine un lundi.
+  const lendemain = (plage.jour + 1) % 7;
+  return ici.jour === lendemain && ici.minutes < plage.finMin;
 }
 
 /**

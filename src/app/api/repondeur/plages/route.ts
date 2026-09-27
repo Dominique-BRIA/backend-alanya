@@ -61,9 +61,22 @@ function lirePlage(brut: unknown) {
   if (!Number.isInteger(jour) || jour < 0 || jour > 6) return null;
   if (!Number.isInteger(debutMin) || debutMin < 0 || debutMin > 1439) return null;
   if (!Number.isInteger(finMin) || finMin < 1 || finMin > 1440) return null;
-  // Une plage qui finit avant de commencer ne s'ouvrirait jamais, et personne
-  // ne comprendrait pourquoi. Elle est refusée, pas corrigée en silence.
-  if (finMin <= debutMin) return null;
+  /*
+   * 🔴 UNE FIN AVANT LE DÉBUT SIGNIFIE « TRAVERSE MINUIT ».
+   *
+   * 🐛 Ce test disait `finMin <= debutMin` et refusait donc « 21 h → 6 h »,
+   * signalé par le user le 26/09/2026. Une nuit est le cas le plus naturel qu'on
+   * puisse demander à un répondeur, et c'était le seul qu'on interdisait.
+   *
+   * ⚠️ SEULE L'ÉGALITÉ RESTE REFUSÉE. `21 h → 21 h` est ambigu : zéro minute, ou
+   * vingt-quatre heures ? Deux lectures défendables, donc aucune. Qui veut la
+   * journée entière saisit 0 h → 24 h, ce que la borne `finMin <= 1440` autorise.
+   *
+   * ⚠️ REFUSÉE, PAS CORRIGÉE EN SILENCE : rendre `null` fait répondre 400 au
+   * client. Deviner ce qu'il voulait dire lui ferait enregistrer autre chose que
+   * ce qu'il a saisi.
+   */
+  if (finMin === debutMin) return null;
   return {
     jour,
     debutMin,
