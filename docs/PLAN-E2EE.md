@@ -9,6 +9,20 @@
 > 11 — et la section 11 est celle qu'on oublie : elle dit ce qui doit être vrai
 > pour qu'une fonctionnalité « finie » le soit vraiment.
 
+### Où lire quoi
+
+Trois documents, trois usages — les confondre fait chercher au mauvais endroit :
+
+| Document | Répond à |
+|---|---|
+| **Ce plan** | *Qu'est-ce qui reste à faire ?* |
+| [`REGISTRE-DES-DEFAUTS.md`](REGISTRE-DES-DEFAUTS.md) | *Ce défaut, on l'a déjà eu ? Qu'est-ce qui l'empêche de revenir ?* |
+| [`cours/`](cours/) | *Pourquoi c'était ainsi, et qu'est-ce qu'on en apprend ?* |
+
+Le registre porte une section que le plan n'a pas : **pourquoi rien ne l'a vu**.
+Un défaut corrigé revient ; un trou de détection laisse passer tous ses
+successeurs.
+
 ---
 
 ## 1. Où nous en sommes
