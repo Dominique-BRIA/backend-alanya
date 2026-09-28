@@ -140,7 +140,20 @@ model User {
   /// `prisma/manual/2026-08_sessions_par_compte.sql`.
   appareilTotal     Int       @default(2) @map("appareil_total") @db.SmallInt
   fcmToken          String?   @map("fcm_token") @db.VarChar(255)
+  /// Le téléphone LIÉ au compte : son `cookies_WebID`, tiré au sort par
+  /// l'application à sa première ouverture. `null` = aucun téléphone lié.
+  ///
+  /// Colonne du référentiel équipe, vide et lue par aucun code jusqu'au
+  /// 28/09/2026. Un seul téléphone par compte : un autre est refusé à la
+  /// connexion tant que celui-ci n'a pas été dissocié.
   deviceId          String?   @map("device_ID") @db.VarChar(255)
+  /// Vrai = le compte n'est lié à aucun téléphone.
+  ///
+  /// 🔴 REDIT `deviceId == null`, ET LA BASE INTERDIT QU'ILS DIVERGENT
+  /// (contrainte `users_dissocier_coherent`). Les écrire TOUJOURS ensemble.
+  /// ⚠️ Défaut identique ici et en base : Prisma envoie le sien à l'insertion.
+  /// Migration : `prisma/manual/2026-09_telephone_lie.sql`.
+  dissocier         Boolean   @default(true)
   resetOtp          String?   @map("reset_otp") @db.VarChar(6)
   resetOtpExpiresAt DateTime? @map("reset_otp_expires_at") @db.Timestamptz
 
