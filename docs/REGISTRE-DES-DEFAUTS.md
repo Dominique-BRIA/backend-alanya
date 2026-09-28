@@ -421,6 +421,20 @@
 dépose des enveloppes dans une conversation qu'il n'active pas. Le serveur a
 raison ; le banc doit poser `e2eeActif` avant son dépôt. À corriger.
 
+## L. Lot C — ne pas croire le serveur (29/09/2026)
+
+> Le récit est dans le chapitre 21.
+
+| Défaut | Pourquoi rien ne l'a vu | Garde-fou | Commits |
+|---|---|---|---|
+| « Non chiffré » dicté par le serveur → texte en clair | L'état vivait en mémoire ; aucun banc ne jouait un serveur menteur | `e2ee-etat-memorise` ③, test mobile ⑧ | web `5f7fa04`, mobile `803e303` |
+| Texte en clair injecté dans un fil chiffré, affiché | On testait ce que le serveur REFUSE, pas ce qu'il LIVRE | `e2ee-etat-memorise` ④ | idem |
+| Texte de Bob collé sur un message d'Alice | L'identifiant du message semblait une donnée sûre | `e2ee-etat-memorise` ⑤, `fusion_releve_test`, SQL node:sqlite | idem |
+| Avertissement de déconnexion muet après un démarrage à froid | Il comptait une table en mémoire | test mobile ⑧ | mobile `803e303` |
+
+**Ouvert** : identifiant chiffré avec le texte (protocole) ; liaison session ↔
+appareil de chiffrement côté serveur (migration, soumise au user).
+
 ---
 
 ## Les six motifs qui reviennent
