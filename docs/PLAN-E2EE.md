@@ -9,6 +9,34 @@
 > 11 — et la section 11 est celle qu'on oublie : elle dit ce qui doit être vrai
 > pour qu'une fonctionnalité « finie » le soit vraiment.
 
+---
+
+## 🔄 Mise à jour du 28/09/2026 — la campagne de correction
+
+Une analyse complète du code a trouvé une vingtaine de défauts. Ils ont été
+corrigés en six lots, **chacun prouvé rouge avant, vert après**, et mis en
+production (web et backend ; APK construit en CI à chaque lot).
+
+| Lot | Contenu | Chapitre |
+|---|---|---|
+| 1 | La relève : autres fils perdus, relèves simultanées (mobile), illisibles en boucle | [11](cours/11-la-releve-qui-jetait-le-courrier.md) |
+| 2 | Fuites : modifier / transférer dans un fil chiffré ; transfert d'un message d'une conversation étrangère | [12](cours/12-les-portes-laterales.md) |
+| 3 | Une session par message (web) ; pré-clés consommées à chaque envoi ; numéros de pré-clés en collision | [13](cours/13-le-cliquet-qui-ne-tournait-pas.md) |
+| 4 | Clé de récupération : 60 → 132 bits ; bouton « Remplacer » | [14](cours/14-la-longueur-de-la-liste.md) |
+| 5 | Double notification ; copie vers ses propres appareils ; archive tronquée à 2 000 blocs | [15](cours/15-ce-que-le-serveur-avait-prevu.md) |
+| 6 | Alerte « nouvel appareil » ; stock de pré-clés vidé par un inconnu ; identités jamais relevées | [16](cours/16-l-appareil-fantome.md) |
+
+**Ce qui en change dans ce plan** :
+- **4.15 (multi-appareil)** : n'était PAS « rien à écrire » — fait au lot 5.
+- **6.1 (banc multi-client)** : en partie couvert par
+  `STAGE-WEB/scripts/e2ee-releve-multifil.mjs` (3 comptes, 2 navigateurs pour un
+  même compte, 21 contrôles) et `alanya/test/e2ee_releve_test.dart` (vrai code
+  Signal du mobile, 8 groupes). Le passage web ↔ mobile réel, sur appareil, reste
+  à faire.
+- **Toujours ouverts** : le défaut n° 8 (index SQL recréé à chaque déploiement —
+  latent, 0 compte concerné en production), la relecture extérieure (6.5), la
+  vérification sur téléphone réel de tout le lot mobile.
+
 ### Où lire quoi
 
 Trois documents, trois usages — les confondre fait chercher au mauvais endroit :

@@ -24,6 +24,7 @@
 - [F. Les bancs eux-mêmes](#f-les-bancs-eux-mêmes)
 - [G. La relève](#g-la-relève-28092026)
 - [H. Les portes latérales du clair](#h-les-portes-latérales-du-clair-28092026)
+- [I. Lots 3 à 6](#i-lots-3-à-6-28092026)
 - [Les six motifs qui reviennent](#les-six-motifs-qui-reviennent)
 - [Les garde-fous en place](#les-garde-fous-en-place)
 
@@ -367,6 +368,28 @@
 | **Correctif** | Le message doit appartenir au fil de l'adresse, sinon 404. |
 | **Garde-fou** | `scripts/e2ee-clair-banc.mjs` ③ |
 | **Commit** | `609cdda` |
+
+---
+
+## I. Lots 3 à 6 (28/09/2026)
+
+> Une ligne par défaut ; le récit est dans les chapitres 13 à 16.
+
+| Défaut | Pourquoi rien ne l'a vu | Garde-fou | Commits |
+|---|---|---|---|
+| Le web refaisait un X3DH à chaque envoi | Un commentaire affirmait que la bibliothèque ne le faisait pas ; les messages arrivaient quand même (40 sessions gardées) | multifil ⑧ | `6de8890` |
+| Chaque envoi consommait une pré-clé du correspondant (web + mobile) | « Demander le paquet » ressemblait à une lecture | multifil ⑧, test mobile ④ | `dbd5e4f`, `a435380` |
+| Appareil réinstallé : on chiffrait sur la session de l'ancienne identité | On testait « session existe », pas « même clé » | test mobile ④ | `a435380` |
+| Numéros de pré-clés tirés au sort, collisions possibles | Trop rare pour se voir ; `skipDuplicates` muet | multifil ⑨, test mobile ⑤ | `6de8890`, `a435380` |
+| Clé de récupération à 60 bits, non étirée | Un compromis argumenté sur le mauvais levier ; un commentaire disait « 256 bits » | e2ee-serrures, test mobile | `cad9287`, `f863107` |
+| Pas de moyen de remplacer une clé faible | L'écran ne proposait la clé que si absente | e2ee-ecran ④ | `95e43dd`, `e33fe67` |
+| Deux notifications par message chiffré | Deux blocs, deux commentaires convaincants | **aucun** (push inerte en local) — preuve par lecture | `4a981ae` |
+| Aucun envoi vers ses propres autres appareils | Le serveur l'avait prévu, aucun client ne s'en servait | multifil ⑩, test mobile ⑥ | `1cd4e6f`, `63e8d74` |
+| Archive tronquée à 2 000 blocs (les plus récents perdus) | `total` valait le nombre rendu | archive-banc ⑧, serrures ⑩, test mobile | `14d9cf7`, `5d3a86b`, `77db0f4` |
+| Un appareil ajouté chez un correspondant n'alertait pas | Seul le changement de clé d'un appareil connu était pensé | cle-changee ⑤, test mobile ⑦ | `65a4024`, `322f640` |
+| N'importe qui pouvait vider le stock de pré-clés d'un autre | La route n'avait qu'`withAuth` | e2ee-banc ⑬ | `64af118` |
+| Identité jamais relevée servie pour toujours | `null` passait le filtre des 30 jours | e2ee-banc ⑭ | `64af118` |
+| 🔴 Regex `r's+'` au lieu de `r'\s+'` (écrite pendant le lot 4) | `analyze` ne voit pas une regex fausse mais valide | test mobile (clés tirées → normalisées intactes) | attrapé avant commit |
 
 ---
 
