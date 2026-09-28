@@ -9,6 +9,7 @@ import { verifyAccessToken } from "@/lib/jwt";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { recordAccess } from "@/lib/user-access";
 import { normaliserTelephone } from "@/lib/telephone.mjs";
+import { estUnTelephone, lieOuVerifie } from "@/lib/telephone-lie";
 
 // POST /api/auth/setup
 // Étape finale d'inscription : choix du pseudo + mot de passe + pays.
@@ -103,6 +104,19 @@ export async function POST(req: NextRequest) {
 
     // Premiere connexion du compte : elle merite sa ligne au journal.
     await recordAccess(prisma, { userId: user.id, req });
+
+    /*
+     * L'inscription ouvre une session sans passer par `login` : elle doit donc
+     * lier le téléphone elle aussi, sans quoi un compte créé sur mobile
+     * resterait libre et un second téléphone pourrait s'y connecter.
+     *
+     * Le compte vient de naître, il est libre : la liaison ne peut pas échouer
+     * ici. Le résultat est ignoré à dessein — refuser l'inscription après avoir
+     * posé le mot de passe laisserait un compte à moitié créé.
+     */
+    if (deviceId && estUnTelephone(deviceId)) {
+      await lieOuVerifie(user.id, deviceId);
+    }
 
     const tokens = await issueTokenPair(user.id, deviceId);
     return ok(

@@ -7,6 +7,11 @@ import {
   reactiveAppareil,
   typeDeviceDeLAppareil,
 } from "@/lib/sessions";
+import {
+  MESSAGE_TELEPHONE_DEJA_ASSOCIE,
+  estUnTelephone,
+  lieOuVerifie,
+} from "@/lib/telephone-lie";
 import { verifyPassword } from "@/lib/password";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
@@ -49,6 +54,32 @@ export async function POST(req: NextRequest) {
       return fail("Votre compte a été suspendu", 403, "EXCLUDED");
     }
 
+    /*
+     * Un compte, un téléphone : un second téléphone est REFUSÉ, le premier
+     * n'est plus déconnecté. Voir `src/lib/telephone-lie.ts`.
+     *
+     * ⚠️ AVANT tout ce qui suit — présence, journal, éviction, jetons. Un
+     * téléphone refusé ne doit rien laisser derrière lui : ni « en ligne », ni
+     * session fermée chez le téléphone lié.
+     */
+    if (estUnTelephone(deviceId, typeDevice)) {
+      /*
+       * Sans identifiant, impossible de savoir si c'est le téléphone lié :
+       * l'accepter laisserait n'importe quel client contourner la règle en
+       * omettant le champ. L'application l'envoie depuis juillet 2026.
+       */
+      if (!deviceId) {
+        return fail(
+          "Mettez l'application à jour pour vous connecter",
+          400,
+          "TELEPHONE_NON_IDENTIFIE",
+        );
+      }
+      if (!(await lieOuVerifie(user.id, deviceId))) {
+        return fail(MESSAGE_TELEPHONE_DEJA_ASSOCIE, 409, "TELEPHONE_DEJA_ASSOCIE");
+      }
+    }
+
     // F5 : marque l'utilisateur en ligne
     await prisma.user.update({
       where: { id: user.id },
@@ -60,6 +91,10 @@ export async function POST(req: NextRequest) {
 
     /*
      * Session unique par famille d'appareil : au plus un mobile et un poste.
+     *
+     * Côté mobile, l'éviction ne peut plus toucher le téléphone lié : on
+     * n'arrive ici qu'EN ÉTANT lui. Elle ne ferme donc que des restes — une
+     * session d'un autre téléphone ouverte avant la règle du téléphone lié.
      *
      * ⚠️ AVANT `issueTokenPair`, jamais après : la révocation touche les jetons
      * du compte, et le couple qu'on s'apprête à émettre serait emporté avec les

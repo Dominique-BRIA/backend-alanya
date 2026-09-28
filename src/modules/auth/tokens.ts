@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "@/lib/jwt";
 import { RAISON_EVICTION, RAISON_REJEU, RAISON_REVOCATION } from "@/lib/sessions";
+import { estUnTelephone, lieOuVerifie } from "@/lib/telephone-lie";
 
 /**
  * La session a été fermée par l'ouverture d'une autre, sur un appareil de la
@@ -208,6 +209,7 @@ export async function rotateRefreshToken(refreshToken: string): Promise<TokenPai
        * l'autre mourra d'elle-même à l'expiration. Couper le successeur ici
        * déconnecterait précisément le client qu'on cherche à sauver.
        */
+      await verifieTelephoneLie(payload.sub, stored.deviceId);
       return issueTokenPair(payload.sub, stored.deviceId);
     }
 
@@ -218,6 +220,7 @@ export async function rotateRefreshToken(refreshToken: string): Promise<TokenPai
   // Le lien avec l'appareil doit survivre à la rotation : sans ce report, il
   // serait perdu au premier rafraîchissement — donc au bout de 15 minutes — et
   // la session redeviendrait irrévocable.
+  await verifieTelephoneLie(payload.sub, stored.deviceId);
   const suivant = await issueTokenPair(payload.sub, stored.deviceId);
 
   /*
@@ -235,6 +238,32 @@ export async function rotateRefreshToken(refreshToken: string): Promise<TokenPai
   });
 
   return suivant;
+}
+
+/**
+ * Un téléphone qui n'est pas celui lié au compte ne se rafraîchit plus.
+ *
+ * La connexion refuse déjà un second téléphone ; ce contrôle couvre ceux qui
+ * avaient une session AVANT la règle — deux comptes avaient deux téléphones
+ * vivants le 28/09/2026, l'un hors registre, que l'éviction ne voyait pas.
+ *
+ * ⚠️ ON RÉPOND « ÉVINCÉ », ET NON PAR UN CODE NEUF. Les applications déjà
+ * installées ne ferment leur session que sur un verdict qu'elles connaissent ;
+ * un code inconnu les ferait réessayer indéfiniment, bloquées sans explication.
+ * La raison est inscrite sur les jetons pour que les réessais suivants
+ * reçoivent le même verdict.
+ *
+ * Un compte LIBRE adopte le téléphone qui se rafraîchit — voir `lieOuVerifie`.
+ * Après une dissociation, ses jetons sont déjà révoqués : il n'arrive pas ici.
+ */
+async function verifieTelephoneLie(userId: string, deviceId: string | null): Promise<void> {
+  if (!deviceId || !estUnTelephone(deviceId)) return;
+  if (await lieOuVerifie(userId, deviceId)) return;
+  await prisma.refreshToken.updateMany({
+    where: { userId, deviceId, revoked: false },
+    data: { revoked: true, revokedReason: RAISON_EVICTION },
+  });
+  throw new SessionEvinceeError();
 }
 
 /** Le jeton issu d'une rotation a-t-il lui-même déjà servi ? */
