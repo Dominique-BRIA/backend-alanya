@@ -22,6 +22,7 @@
 - [D. Le contrat client/serveur](#d-le-contrat-clientserveur)
 - [E. Les défenses qui ne défendaient rien](#e-les-défenses-qui-ne-défendaient-rien)
 - [F. Les bancs eux-mêmes](#f-les-bancs-eux-mêmes)
+- [G. La relève](#g-la-relève-28092026)
 - [Les six motifs qui reviennent](#les-six-motifs-qui-reviennent)
 - [Les garde-fous en place](#les-garde-fous-en-place)
 
@@ -291,6 +292,45 @@
 
 ---
 
+## G. La relève (28/09/2026)
+
+> Récit complet : [chapitre 11](cours/11-la-releve-qui-jetait-le-courrier.md).
+
+### G-1 · Le texte des autres fils, acquitté puis jeté
+
+| | |
+|---|---|
+| **Symptôme** | « Message chiffré — indisponible sur cet appareil », sur des messages reçus. |
+| **Cause réelle** | La relève rend les enveloppes de TOUS les fils et les acquitte toutes ; l'écran ne rangeait que le fil ouvert. |
+| **Pourquoi rien ne l'a vu** | Tous les bancs n'avaient qu'UN fil chiffré. Et le libellé, juste pour un autre cas, présentait celui-ci comme normal. |
+| **Correctif** | Rangement dans la relève, fil par fil, AVANT l'acquittement (`e2ee-releve.ts`, `PileE2ee.releverEtRanger`). |
+| **Garde-fou** | `STAGE-WEB/scripts/e2ee-releve-multifil.mjs` (Chrome, 3 comptes) ; `alanya/test/e2ee_releve_test.dart` groupe ③ |
+| **Commit** | `d8a7eb8` (web), `3e4ffbb` (mobile) |
+
+### G-2 · Deux relèves simultanées effaçaient la session (mobile)
+
+| | |
+|---|---|
+| **Symptôme** | « 1 message illisible — session réinitialisée » sans raison, puis le message suivant perdu. |
+| **Cause réelle** | Trois relèves lancées sans attente, dont deux pour le même message ; la seconde échoue sur un message déjà ouvert et efface la session. Le coffre, sans verrou, réécrit des tables entières. |
+| **Pourquoi rien ne l'a vu** | Le web est protégé par sa bibliothèque (`SessionLock`), le mobile non. Et un test sans vrai tour de boucle ne fait jamais s'entrelacer deux appels. |
+| **Correctif** | File des relèves dans `E2eeFil` ; accès au coffre sérialisé dans `E2eeService`. |
+| **Garde-fou** | `alanya/test/e2ee_releve_test.dart` groupe ① |
+| **Commit** | `3e4ffbb` |
+
+### G-3 · L'illisible jamais acquittée
+
+| | |
+|---|---|
+| **Symptôme** | Mobile : conversation cassée pour de bon après une seule illisible. Web : plus rien n'arrive après 200 illisibles. |
+| **Cause réelle** | Gardée « pour ne pas la perdre », relue à chaque relève — et, sur mobile, chaque échec effaçait la session rétablie entre-temps. |
+| **Pourquoi rien ne l'a vu** | La règle « ne pas perdre » était juste pour une panne passagère ; personne n'avait distingué passager et définitif. |
+| **Correctif** | Échecs classés : déjà lu / passager (gardé) / définitif (acquitté, session effacée une fois). |
+| **Garde-fou** | Banc web, étape ⑥ ; test mobile, groupe ② |
+| **Commit** | `fa8c882` (web), `3e4ffbb` (mobile) |
+
+---
+
 ## Les six motifs qui reviennent
 
 Si vous ne retenez que cette section, retenez celle-ci.
@@ -347,7 +387,7 @@ n'est pas « est-ce prudent ? » mais « prudent envers quoi ? »**
 | `scripts/e2ee-cle-changee.mjs` | L'alerte d'interposition qui se perd, ou qui se répète | `STAGE-WEB` |
 | `scripts/e2ee-serrures.mjs` §⑨ | Paramètres de dérivation dictés par le serveur | `STAGE-WEB` |
 | `lib/core/erreur_lisible.dart` | Toute panne rangée sous « serveur injoignable » | `alanya` |
-| `flutter test` (185 tests) | **Ne tourne pas en CI** — voir ci-dessous | `alanya` |
+| `flutter test` (189 tests, dont `e2ee_releve_test.dart`) | **Ne tourne pas en CI** — voir ci-dessous | `alanya` |
 
 ### Ce qui manque encore
 
