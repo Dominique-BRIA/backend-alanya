@@ -391,6 +391,20 @@
 | Identité jamais relevée servie pour toujours | `null` passait le filtre des 30 jours | e2ee-banc ⑭ | `64af118` |
 | 🔴 Regex `r's+'` au lieu de `r'\s+'` (écrite pendant le lot 4) | `analyze` ne voit pas une regex fausse mais valide | test mobile (clés tirées → normalisées intactes) | attrapé avant commit |
 
+## J. Lot D — fiabilité (28/09/2026, soir)
+
+> Le récit est dans le chapitre 19.
+
+| Défaut | Pourquoi rien ne l'a vu | Garde-fou | Commits |
+|---|---|---|---|
+| Deux onglets du même compte : le second chiffrait sur un cliquet périmé, message perdu | Chaque banc n'ouvrait qu'un onglet par compte | `e2ee-onglets` ①-⑤ | web `e37f9b1` |
+| Relève : tout le lot déchiffré puis rangé d'un coup — perte si l'onglet/l'app meurt entre les deux | Impossible à provoquer à la main ; la propriété n'était pas testée | `e2ee-onglets` ⑥, test mobile ③ | web `e37f9b1`, mobile `f98152a` |
+| Vérifier un appareil effaçait l'alerte de tout le compte | L'alerte est rangée par compte, la vérification par appareil | `e2ee-cle-changee` ⑥ | web `e37f9b1` |
+| Restauration mobile en `INSERT OR REPLACE` : supprimés et éphémères ressortaient | « upsert » ressemblait à « ajouter si absent » | `restauration_archive_test`, SQL rejoué par node:sqlite | mobile `f98152a` |
+| Texte relevé après la suppression, recollé dans la ligne supprimée | La mise à jour visait l'identifiant seul | `fusion_releve_test` | mobile `f98152a` |
+| Reprise d'archive figée à 2 000 blocs | Le compte de la page passait pour celui de l'archive | `e2ee_archive_pages_test` | mobile `f98152a` |
+| Parité des traductions rouge depuis le matin | **`flutter test` ne tourne pas en CI** | `l10n_parite_test` (manuel) | mobile `a997f52` |
+
 ---
 
 ## Les six motifs qui reviennent
