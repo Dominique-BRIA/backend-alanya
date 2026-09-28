@@ -270,6 +270,12 @@ try {
 
   titre("⑫ « Déconnecter » le téléphone lié, depuis le web");
   const ligneB = await equipe(c1, B);
+  const liste = await appel("/api/appareils", undefined, auth(w2), "GET");
+  const parId = new Map((jetons(liste).appareils ?? []).map((a) => [a.appareilId, a]));
+  verifie("la liste marque le téléphone lié (lie: true)",
+    parId.get(ligneB.appareilId)?.lie === true, jetons(liste));
+  verifie("et pas l'ancien téléphone (lie: false)",
+    parId.get(ligneA.appareilId)?.lie === false);
   const d12 = await appel(`/api/appareils/${ligneB.appareilId}`, undefined, auth(w2), "DELETE");
   verifie("la déconnexion répond 200 et dit « dissocié »",
     d12.statut === 200 && jetons(d12).dissocie === true, d12);

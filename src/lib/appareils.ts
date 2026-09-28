@@ -19,9 +19,21 @@ export type AppareilJson = {
   /// `true` si l'appareil a été déconnecté à distance. La ligne est conservée
   /// pour l'historique, d'où un drapeau plutôt qu'une suppression.
   revoked: boolean;
+  /// `true` si c'est le téléphone LIÉ au compte (`users.device_ID`). Le déconnecter
+  /// depuis « Appareils connectés » le dissocie : le client doit le dire dans
+  /// son libellé, sans quoi le geste ferait plus que ce qu'il annonce.
+  lie: boolean;
 };
 
-export function serializeAppareil(a: Appareil): AppareilJson {
+/**
+ * @param telephoneLie `users.device_ID` du compte. Seule la liste le fournit ;
+ *   ailleurs l'appareil renvoyé vient d'être modifié et `lie` reste faux —
+ *   aucun client ne le lit dans ces réponses.
+ */
+export function serializeAppareil(
+  a: Appareil,
+  telephoneLie: string | null = null,
+): AppareilJson {
   return {
     appareilId: a.appareilId,
     cookiesWebId: a.cookiesWebId,
@@ -43,5 +55,6 @@ export function serializeAppareil(a: Appareil): AppareilJson {
     createAt: a.createAt.toISOString(),
     lastLogin: a.lastLogin ? a.lastLogin.toISOString() : null,
     revoked: a.destroy === 1,
+    lie: a.cookiesWebId !== null && a.cookiesWebId === telephoneLie,
   };
 }

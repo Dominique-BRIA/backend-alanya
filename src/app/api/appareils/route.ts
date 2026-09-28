@@ -20,11 +20,15 @@ const upsertSchema = z.object({
 // puis du plus récemment vu au plus ancien.
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   try {
-    const rows = await prisma.appareil.findMany({
-      where: { alanyaId: userId },
-      orderBy: [{ destroy: "asc" }, { lastLogin: "desc" }],
-    });
-    return ok({ appareils: rows.map(serializeAppareil) });
+    const [rows, compte] = await Promise.all([
+      prisma.appareil.findMany({
+        where: { alanyaId: userId },
+        orderBy: [{ destroy: "asc" }, { lastLogin: "desc" }],
+      }),
+      prisma.user.findUnique({ where: { id: userId }, select: { deviceId: true } }),
+    ]);
+    const lie = compte?.deviceId ?? null;
+    return ok({ appareils: rows.map((a) => serializeAppareil(a, lie)) });
   } catch (err) {
     return handleError(err);
   }
