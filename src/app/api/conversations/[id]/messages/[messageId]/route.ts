@@ -104,6 +104,13 @@ export const DELETE = withAuth(
         where: { id: messageId },
         data: { deletedAt: new Date(), content: null },
       });
+      /*
+       * 🔴 LES ENVELOPPES PARTENT AUSSI. Vider `content` ne supprime rien d'un
+       * message chiffré — il n'en a pas. Ses enveloppes restaient servies, et
+       * un destinataire hors ligne déchiffrait plus tard ce que l'auteur avait
+       * supprimé pour tous. Prouvé par `scripts/e2ee-depot-banc.mjs` ⑤.
+       */
+      await prisma.e2eeEnveloppe.deleteMany({ where: { messageId } });
       await prisma.mediaFile.updateMany({
         where: { messageId },
         data: { messageId: null },

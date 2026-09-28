@@ -412,6 +412,65 @@ async function main() {
     lus.every((c, i) => c === `grand-${i}`),
   );
 
+  /* ── ⑩ UNE ARCHIVE LOURDE NE FAIT PAS TOMBER LE SERVEUR ──────────── */
+  titre("⑩ Une page d'archive est bornée en OCTETS, et l'archive a un plafond");
+  /*
+   * 🐛 LA PAGE N'ÉTAIT BORNÉE QU'EN NOMBRE DE BLOCS (2 000), chacun pouvant
+   * peser 512 Ko : une seule lecture chargeait jusqu'à 1 Go en mémoire, et le
+   * processus Next tombait — pour tout le monde. Et rien ne plafonnait le
+   * dépôt : un compte remplissait le disque.
+   */
+  await prisma.e2eeArchiveBloc.deleteMany({ where: { userId: a.user.id } });
+  const lourd = "x".repeat(500_000);
+  const debutLourd = Date.now() - 5_000_000;
+  await prisma.e2eeArchiveBloc.createMany({
+    data: Array.from({ length: 40 }, (_, i) => ({
+      userId: a.user.id,
+      iv: "aXY=",
+      contenu: `${String(i).padStart(3, "0")}${lourd}`,
+      nbMessages: 1,
+      createdAt: new Date(debutLourd + i * 1000),
+    })),
+  });
+  const premiere = await api("/api/e2ee/archive");
+  verifie(
+    "40 blocs de 500 Ko (20 Mo) : la première page reste sous 9 Mo",
+    premiere.statut === 200 && premiere.corps.length < 9 * 1024 * 1024 && premiere.json?.suivant,
+    `HTTP ${premiere.statut}, ${(premiere.corps.length / 1048576).toFixed(1)} Mo, suivant : ${premiere.json?.suivant}`,
+  );
+  const ordre = [];
+  let curseur = null;
+  for (let tour = 0; tour < 20; tour++) {
+    const p = await api(`/api/e2ee/archive${curseur ? `?apres=${encodeURIComponent(curseur)}` : ""}`);
+    ordre.push(...(p.json?.blocs ?? []).map((b) => Number(b.contenu.slice(0, 3))));
+    curseur = p.json?.suivant ?? null;
+    if (!curseur) break;
+  }
+  verifie(
+    "et les pages suivantes rendent les 40, dans l'ordre",
+    ordre.length === 40 && ordre.every((n, i) => n === i),
+    `${ordre.length} relu(s)`,
+  );
+
+  // Le plafond : on remplit l'archive jusqu'à lui, par la base (la compression
+  // de PostgreSQL rend ces blocs répétitifs peu coûteux à stocker).
+  await prisma.e2eeArchiveBloc.deleteMany({ where: { userId: a.user.id } });
+  const plein = "y".repeat(512 * 1024);
+  for (let i = 0; i < 26; i++) {
+    await prisma.e2eeArchiveBloc.createMany({
+      data: Array.from({ length: 20 }, () => ({ userId: a.user.id, iv: "aXY=", contenu: plein, nbMessages: 1 })),
+    });
+  }
+  const deborde = await api("/api/e2ee/archive", {
+    method: "POST",
+    body: { iv: "aXY=", contenu: "encore", nbMessages: 1 },
+  });
+  verifie(
+    "une archive pleine (260 Mo) refuse un bloc de plus",
+    deborde.statut === 413 && deborde.json?.error?.code === "ARCHIVE_PLEINE",
+    `HTTP ${deborde.statut} ${deborde.corps.slice(0, 120)}`,
+  );
+
   /* ── NETTOYAGE ───────────────────────────────────────────────────── */
   await api("/api/e2ee/archive", { method: "DELETE" });
 

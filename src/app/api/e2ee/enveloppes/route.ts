@@ -66,6 +66,24 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   if (!moi) return fail("Conversation inconnue", 404, "NOT_FOUND");
 
   /*
+   * 🔴 ON NE DÉPOSE QUE DANS UN FIL CHIFFRÉ.
+   *
+   * 🐛 RIEN NE LE VÉRIFIAIT. Dans un fil ordinaire, une enveloppe rattachée à
+   * un message EN CLAIR faisait marquer ce message `chiffre: true` à la
+   * lecture — un cadenas affiché sur un texte que le serveur lit. Et le dépôt
+   * sonne et notifie : une porte de plus pour déranger quelqu'un. Le fil
+   * n'est chiffré qu'après la route `/e2ee`, qui vérifie le périmètre ; le
+   * dépôt s'appuie donc sur elle. Prouvé par `scripts/e2ee-depot-banc.mjs` ②.
+   */
+  const fil = await prisma.conversation.findUnique({
+    where: { id: r.convId },
+    select: { e2eeActif: true },
+  });
+  if (fil?.e2eeActif !== true) {
+    return fail("Cette conversation n'est pas chiffrée", 409, "CONVERSATION_NON_CHIFFREE");
+  }
+
+  /*
    * ⚠️ LE MESSAGE DOIT APPARTENIR À CETTE CONVERSATION, et le vérifier n'est
    * pas du zèle : sans ce contrôle, on rattacherait le contenu chiffré d'un
    * fil au message d'un AUTRE. Le destinataire verrait alors apparaître, dans
@@ -119,11 +137,34 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   // s'en servirait pour déposer chez n'importe qui.
   const membres = await prisma.participant.findMany({
     where: { convId: r.convId },
-    select: { userId: true },
+    select: { userId: true, sourdine: true },
   });
   const autorises = new Set(membres.map((m) => m.userId));
   if (lues.some((e) => !autorises.has(e!.destinataireId))) {
     return fail("Destinataire hors de la conversation", 403, "FORBIDDEN");
+  }
+
+  /*
+   * 🔴 UN BLOCAGE ARRÊTE AUSSI LE CHIFFRÉ, dans les deux sens — même règle que
+   * `creerMessage` et que le WebSocket.
+   *
+   * 🐛 LE DÉPÔT NE LE REGARDAIT PAS. La ligne du message était bien refusée
+   * ailleurs… mais le dépôt, lui, acceptait sans ligne, puis sonnait et
+   * notifiait : une personne bloquée faisait vibrer, en boucle, le téléphone de
+   * celle qui l'avait bloquée. Prouvé par `scripts/e2ee-depot-banc.mjs` ③.
+   */
+  const autres = [...new Set(lues.map((e) => e!.destinataireId))].filter((id) => id !== userId);
+  if (autres.length > 0) {
+    const blocage = await prisma.blocked.findFirst({
+      where: {
+        OR: [
+          { alanyaID: userId, idCallerBlock: { in: autres } },
+          { alanyaID: { in: autres }, idCallerBlock: userId },
+        ],
+      },
+      select: { idBlock: true },
+    });
+    if (blocage) return fail("Message non distribuable", 403, "BLOCKED");
   }
 
   await prisma.e2eeEnveloppe.createMany({
@@ -172,6 +213,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * jamais et rend `false` quand le pont est absent : le message est ecrit, il
    * est valide, et au pire il arrivera a la prochaine ouverture.
    */
+  /*
+   * ⚠️ SANS LIGNE DE MESSAGE, NI SONNETTE NI NOTIFICATION. Un dépôt sans
+   * `messageId` reste permis (bancs, futur échange de clés hors fil), mais il
+   * n'annonce rien à personne : sonner pour rien, c'était la moitié du
+   * harcèlement possible par cette route. Prouvé par `e2ee-depot-banc.mjs` ④.
+   */
+  if (messageId === null) return ok({ deposees: lues.length }, 201);
+
   await previensDesPersonnes({
     personnes: [...new Set(lues.map((e) => e!.destinataireId))],
     type: "e2ee_arrivee",
@@ -207,9 +256,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * l'écran de celui qui vient d'écrire. Ses autres appareils la perdent —
    * c'est le prix, et il est bien plus faible que l'inverse.
    */
-  const aNotifier = [...new Set(lues.map((e) => e!.destinataireId))].filter(
-    (id) => id !== userId,
-  );
+  /*
+   * ⚠️ LA SOURDINE VAUT AUSSI ICI. Le WebSocket la respecte pour les messages
+   * ordinaires ; le dépôt l'ignorait, et un fil chiffré mis en sourdine
+   * sonnait quand même. Même règle : elle coupe la notification, jamais la
+   * sonnette temps réel (on reste à jour dans un fil qu'on regarde).
+   */
+  const enSourdine = new Set(membres.filter((m) => m.sourdine === 1).map((m) => m.userId));
+  const aNotifier = autres.filter((id) => !enSourdine.has(id));
   if (aNotifier.length > 0) {
     try {
       const [{ pushNewMessage }, expediteur] = await Promise.all([

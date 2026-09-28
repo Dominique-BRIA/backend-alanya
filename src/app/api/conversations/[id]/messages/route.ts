@@ -124,7 +124,9 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   )];
   const replyTargets = replyIds.length > 0
     ? await prisma.message.findMany({
-        where: { id: { in: replyIds } },
+        // ⚠️ `convId` AUSSI : une citation d'un autre fil, écrite avant la garde
+        // de `creerMessage`, ne doit pas rendre son texte. Voir `envoi.ts`.
+        where: { id: { in: replyIds }, convId },
         select: { id: true, senderId: true, content: true, type: true, deletedAt: true },
       })
     : [];
@@ -373,6 +375,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
         409,
         "CONVERSATION_CHIFFREE",
       );
+    }
+    if (envoi.motif === "CITATION_ETRANGERE") {
+      return fail("Message cité introuvable dans cette conversation", 404, "REPLY_NOT_FOUND");
     }
     if (envoi.motif === "CONTENU_EN_CLAIR") {
       return fail(

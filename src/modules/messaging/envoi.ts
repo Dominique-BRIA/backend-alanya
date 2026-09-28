@@ -47,7 +47,9 @@ export type ResultatEnvoi =
         // La conversation est chiffree : ce chemin-la ne peut pas y ecrire.
         | "CONVERSATION_CHIFFREE"
         // Le chemin chiffre a presente du texte, ce qu il ne doit jamais faire.
-        | "CONTENU_EN_CLAIR";
+        | "CONTENU_EN_CLAIR"
+        // Le message cité n'est pas dans cette conversation.
+        | "CITATION_ETRANGERE";
     };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
@@ -242,6 +244,23 @@ export async function creerMessage(params: {
       });
       if (blocage) return { ok: false, motif: "BLOQUE" };
     }
+  }
+
+  /*
+   * 🔴 ON NE CITE QU'UN MESSAGE DE CETTE CONVERSATION.
+   *
+   * 🐛 `replyToId` N'ÉTAIT JAMAIS VÉRIFIÉ, et la citation se résout par le
+   * seul identifiant à la lecture : Bob, dans SON fil, citait un message
+   * d'Alice à Carole, et le serveur lui rendait le texte cité. Même famille
+   * que le transfert d'un message étranger (H-3), par une autre porte.
+   * Prouvé par `scripts/e2ee-clair-banc.mjs` ④ le 28/09/2026.
+   */
+  if (replyToId) {
+    const cite = await prisma.message.findFirst({
+      where: { id: replyToId, convId },
+      select: { id: true },
+    });
+    if (!cite) return { ok: false, motif: "CITATION_ETRANGERE" };
   }
 
   /*

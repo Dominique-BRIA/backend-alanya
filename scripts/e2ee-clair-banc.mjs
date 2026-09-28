@@ -9,7 +9,9 @@
  *   ② transférer — REST et WebSocket, dans les deux sens :
  *        · d'un fil chiffré (le serveur n'a pas le texte : bulle vide) ;
  *        · VERS un fil chiffré (du clair y entrerait sans chiffrement) ;
- *   ③ transférer un message d'une conversation dont on n'est PAS membre.
+ *   ③ transférer un message d'une conversation dont on n'est PAS membre ;
+ *   ④ RÉPONDRE en citant un message d'une conversation dont on n'est pas
+ *     membre — REST, WebSocket, et la lecture d'une citation déjà en base.
  *
  * ⚠️ CHAQUE REFUS A SON TÉMOIN : le même geste sur un fil ORDINAIRE doit
  * passer. Une garde qui refuse tout passerait les refus sans rien protéger.
@@ -254,6 +256,61 @@ async function main() {
     "REST : refusé, et rien n'est copié",
     fuite === null && (await compter(filCaroleBob)) === avant,
     `HTTP ${r6.statut} — Bob a copié un message d'une conversation où il n'est pas`,
+  );
+
+  /* ── ④ CITER UN MESSAGE D'UNE CONVERSATION ÉTRANGÈRE ─────────────── */
+  titre("④ Répondre en citant un message d'une conversation dont on n'est pas membre");
+  /*
+   * 🐛 `replyToId` N'ÉTAIT JAMAIS VÉRIFIÉ, et la citation se résolvait par le
+   * seul identifiant : Bob, dans SON fil, citait un message d'Alice à Carole,
+   * et le serveur lui renvoyait le texte cité. Même famille que ③, autre porte.
+   */
+  const fuiteDans = (texte) => texte.includes("PRIVÉ-ALICE-CAROLE");
+  const r7 = await rest(bob, "POST", `/api/conversations/${filCaroleBob}/messages`, {
+    content: "je réponds",
+    type: "TEXT",
+    replyToId: prive.id,
+  });
+  const citeRest = await prisma.message.count({ where: { convId: filCaroleBob, replyToId: prive.id } });
+  verifie(
+    "REST : refusé, et le texte cité ne revient pas",
+    r7.statut >= 400 && citeRest === 0 && !fuiteDans(r7.texte),
+    `HTTP ${r7.statut}, ${citeRest} ligne(s) — ${r7.texte.slice(0, 160)}`,
+  );
+
+  const avantWs = B.recus.length;
+  B.ws.send(JSON.stringify({ type: "send", convId: filCaroleBob, content: "je réponds ws", tempId: "t-reply-ws", replyToId: prive.id }));
+  await pause(1200);
+  const recusWs = JSON.stringify(B.recus.slice(avantWs));
+  const citeWs = await prisma.message.count({ where: { convId: filCaroleBob, replyToId: prive.id } });
+  verifie(
+    "WebSocket : refusé, et le texte cité ne revient pas",
+    citeWs === 0 && !fuiteDans(recusWs),
+    `${citeWs} ligne(s) — ${recusWs.slice(0, 200)}`,
+  );
+
+  // Une citation étrangère DÉJÀ en base (écrite avant le correctif) ne doit
+  // pas se lire non plus.
+  await prisma.message.create({
+    data: { convId: filCaroleBob, senderId: bob.user.id, content: "ancienne", type: "TEXT", status: "SENT", replyToId: prive.id },
+  });
+  const r8 = await rest(bob, "GET", `/api/conversations/${filCaroleBob}/messages`);
+  verifie("lecture REST : une citation étrangère en base ne rend pas son texte", !fuiteDans(r8.texte), r8.texte.slice(0, 160));
+  await prisma.message.deleteMany({ where: { convId: filCaroleBob, replyToId: prive.id } });
+
+  // Témoin : citer un message du MÊME fil passe.
+  const local = await message(filCaroleBob, carole, "TEXTE-DU-FIL");
+  const r9 = await rest(bob, "POST", `/api/conversations/${filCaroleBob}/messages`, {
+    content: "je réponds au fil",
+    type: "TEXT",
+    replyToId: local.id,
+  });
+  // ⚠️ La réponse de création ne porte pas la citation : on relit le fil.
+  const r10 = await rest(bob, "GET", `/api/conversations/${filCaroleBob}/messages`);
+  verifie(
+    "témoin : citer un message du même fil passe, et la citation se lit",
+    r9.statut === 201 && r10.texte.includes("TEXTE-DU-FIL") && r10.texte.includes(`"replyTo":{"id":"${local.id}"`),
+    `HTTP ${r9.statut}`,
   );
 
   A.ws.close();

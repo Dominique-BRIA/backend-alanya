@@ -31,6 +31,28 @@ const BLOC_MAX = 512 * 1024;
 /** Plafond d'une restitution, pour borner la réponse. */
 const BLOCS_MAX = 2000;
 
+/**
+ * Plafond d'une page EN OCTETS, en plus du nombre de blocs.
+ *
+ * 🐛 LA PAGE N'ÉTAIT BORNÉE QU'EN NOMBRE : 2 000 blocs de 512 Ko, c'est 1 Go
+ * chargé et sérialisé par UNE lecture — le processus Next tombait, pour tout le
+ * monde. Prouvé par `scripts/e2ee-archive-banc.mjs` ⑩ le 28/09/2026.
+ *
+ * ⚠️ UN BLOC PASSE TOUJOURS, même seul au-dessus du plafond (512 Ko < 8 Mo de
+ * toute façon) : une page vide avec un `suivant` ferait tourner le client en
+ * rond.
+ */
+const PAGE_OCTETS = 8 * 1024 * 1024;
+
+/**
+ * Plafond d'une archive entière, en caractères base64.
+ *
+ * 🐛 RIEN NE LIMITAIT LE DÉPÔT : un compte pouvait remplir le disque du
+ * serveur. 256 Mo couvrent plusieurs centaines de milliers de messages — un
+ * usage réel n'en approche pas ; un abus, si.
+ */
+const VOLUME_MAX = 256 * 1024 * 1024;
+
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const moi = await prisma.user.findUnique({
     where: { id: userId },
@@ -87,6 +109,17 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     return fail("« nbMessages » doit être un entier positif", 400, "BAD_BODY");
   }
 
+  const [{ volume }] = await prisma.$queryRaw<{ volume: bigint }[]>`
+    SELECT COALESCE(SUM(LENGTH(contenu)), 0)::bigint AS volume
+    FROM e2ee_archive_blocs WHERE "alanyaID" = ${userId}::uuid`;
+  if (Number(volume) + r.contenu.length > VOLUME_MAX) {
+    return fail(
+      "Archive pleine : effacez-la ou désactivez la sauvegarde.",
+      413,
+      "ARCHIVE_PLEINE",
+    );
+  }
+
   const bloc = await prisma.e2eeArchiveBloc.create({
     data: { userId, iv: r.iv, contenu: r.contenu, nbMessages },
     select: { id: true, createdAt: true },
@@ -129,9 +162,15 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     if (!repere) return fail("« apres » inconnu", 400, "BAD_BODY");
   }
 
-  const blocs = await prisma.e2eeArchiveBloc.findMany({
+  /*
+   * ⚠️ EN TROIS TEMPS, pour ne jamais charger ce qu'on ne rendra pas : les
+   * identifiants de la page (un de plus, pour savoir s'il reste des blocs),
+   * puis leur TAILLE seulement, puis le contenu des seuls blocs retenus sous
+   * `PAGE_OCTETS`.
+   */
+  const tete = await prisma.e2eeArchiveBloc.findMany({
     where: { userId },
-    select: { id: true, iv: true, contenu: true },
+    select: { id: true },
     /*
      * ⚠️ DU PLUS ANCIEN AU PLUS RÉCENT. Le client dédoublonne par identifiant de
      * message et garde le DERNIER vu : dans cet ordre, une correction déposée
@@ -139,11 +178,35 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
      * première écriture.
      */
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    take: BLOCS_MAX,
+    take: BLOCS_MAX + 1,
     ...(apres ? { cursor: { id: apres }, skip: 1 } : {}),
   });
 
-  const suivant = blocs.length === BLOCS_MAX ? blocs[blocs.length - 1].id : null;
+  const candidats = tete.slice(0, BLOCS_MAX).map((b) => b.id);
+  const tailles =
+    candidats.length > 0
+      ? await prisma.$queryRaw<{ id: string; n: number }[]>`
+          SELECT id::text AS id, LENGTH(contenu)::int AS n
+          FROM e2ee_archive_blocs WHERE id = ANY(${candidats}::uuid[])`
+      : [];
+  const taille = new Map(tailles.map((t) => [t.id, t.n]));
+  const retenus: string[] = [];
+  let octets = 0;
+  for (const id of candidats) {
+    const n = taille.get(id) ?? 0;
+    if (retenus.length > 0 && octets + n > PAGE_OCTETS) break;
+    retenus.push(id);
+    octets += n;
+  }
+  const lignes = await prisma.e2eeArchiveBloc.findMany({
+    where: { id: { in: retenus } },
+    select: { id: true, iv: true, contenu: true },
+  });
+  const parId = new Map(lignes.map((l) => [l.id, l]));
+  const blocs = retenus.map((id) => parId.get(id)).filter((b) => b !== undefined);
+
+  // Un bloc de plus existe au-delà de ceux rendus : on donne le curseur.
+  const suivant = retenus.length < tete.length ? retenus[retenus.length - 1] : null;
   /*
    * 🔴 LE NOMBRE TOTAL DE BLOCS, pour la barre de progression de l'écran de
    * restauration (28/09/2026). `total` ne compte que CETTE page — le nom est

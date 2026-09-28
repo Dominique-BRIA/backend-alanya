@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { rateLimit } from "@/lib/rate-limit";
 
 /**
  * LE PAQUET DE PRÉ-CLÉS D'UN CORRESPONDANT — `GET /api/e2ee/cles/<userId>`.
@@ -102,6 +103,57 @@ export const GET = withAuth(
         .slice(0, APPAREILS_MAX);
       if (seulement.length === 0) {
         return fail("« deviceIds » ne contient aucun appareil valide", 400, "BAD_BODY");
+      }
+    }
+
+    /*
+     * 🔴 CONSOMMER EXIGE PLUS QU'UNE CONVERSATION EN COMMUN.
+     *
+     * 🐛 N'IMPORTE QUI POUVAIT ENCORE VIDER UN STOCK : une conversation se crée
+     * avec un simple numéro public, et elle suffisait. Le banc ⑬ de
+     * `e2ee-banc.mjs` ne testait qu'un inconnu SANS conversation — une fausse
+     * assurance. Prouvé par `scripts/e2ee-prekeys-banc.mjs` le 28/09/2026.
+     *
+     * Pour recevoir un paquet (ce qui consomme), il faut désormais :
+     *   · un fil CHIFFRÉ en commun — les clients n'ouvrent de session qu'au
+     *     moment d'envoyer dans un fil chiffré, et l'activation, elle, lit les
+     *     identités sans passer par ici ;
+     *   · aucun blocage, dans un sens ou dans l'autre ;
+     *   · un débit raisonnable par paire : une session s'ouvre une fois par
+     *     appareil, et se rouvre à une réinstallation — pas vingt fois l'heure.
+     *
+     * ⚠️ LA LISTE (`?liste=1`) NE CONSOMME RIEN : elle garde la règle de la
+     * conversation en commun, mais tombe elle aussi devant un blocage — elle
+     * dirait sinon à quelqu'un qu'on a bloqué combien d'appareils on utilise.
+     *
+     * ⚠️ TOUJOURS LE MÊME 404 « PAS_DE_CLES », pour ne rien dire de plus.
+     */
+    if (userId !== moi) {
+      const blocage = await prisma.blocked.findFirst({
+        where: {
+          OR: [
+            { alanyaID: moi, idCallerBlock: userId },
+            { alanyaID: userId, idCallerBlock: moi },
+          ],
+        },
+        select: { idBlock: true },
+      });
+      if (blocage) return fail("Aucune clé publiée pour ce compte", 404, "PAS_DE_CLES");
+
+      if (!listeSeule) {
+        const filChiffre = await prisma.participant.findFirst({
+          where: {
+            userId: moi,
+            conv: { e2eeActif: true, participants: { some: { userId } } },
+          },
+          select: { id: true },
+        });
+        if (!filChiffre) return fail("Aucune clé publiée pour ce compte", 404, "PAS_DE_CLES");
+
+        const frein = await rateLimit(`e2ee-paquet:${moi}:${userId}`, 20, 60 * 60 * 1000);
+        if (!frein.allowed) {
+          return fail("Trop de demandes de clés pour ce compte", 429, "RATE_LIMITED");
+        }
       }
     }
 

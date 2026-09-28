@@ -923,8 +923,9 @@ async function serializeMessage(m, media) {
 
   // MODIFICATION : inclut les médias du message cité pour le preview reply
   if (m.replyToId) {
-    const target = await prisma.message.findUnique({
-      where: { id: m.replyToId },
+    // ⚠️ `convId` AUSSI : une citation d'un autre fil ne rend pas son texte.
+    const target = await prisma.message.findFirst({
+      where: { id: m.replyToId, convId: m.convId },
       select: { senderId: true, content: true, type: true, deletedAt: true, media: true },
     });
     if (target) {
@@ -1126,6 +1127,29 @@ async function handleSend(ws, msg) {
   if (!(await isParticipant(convId, ws.userId))) {
     ws.send(JSON.stringify({ type: "error", message: "Conversation interdite", tempId }));
     return;
+  }
+
+  /*
+   * 🔴 ON NE CITE QU'UN MESSAGE DE CETTE CONVERSATION — même garde que
+   * `creerMessage` (envoi.ts), que ce chemin ne traverse pas. Sans elle, citer
+   * l'identifiant d'un message d'un fil étranger en rendait le texte.
+   */
+  if (msg.replyToId) {
+    const cite = await prisma.message.findFirst({
+      where: { id: String(msg.replyToId), convId },
+      select: { id: true },
+    });
+    if (!cite) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          code: "REPLY_NOT_FOUND",
+          message: "Message cité introuvable dans cette conversation",
+          tempId,
+        }),
+      );
+      return;
+    }
   }
 
   /*
@@ -3868,6 +3892,9 @@ async function handleDeleteMessage(ws, msg) {
       where: { id: messageId },
       data: { deletedAt: new Date(), content: null },
     });
+    // Les enveloppes d'un message chiffré partent aussi : voir la route REST
+    // jumelle (`messages/[messageId]/route.ts`).
+    await prisma.e2eeEnveloppe.deleteMany({ where: { messageId } });
     await prisma.mediaFile.updateMany({
       where: { messageId },
       data: { messageId: null },
