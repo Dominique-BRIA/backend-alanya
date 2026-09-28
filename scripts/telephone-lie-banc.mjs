@@ -49,16 +49,16 @@ function titre(t) {
  * Une adresse différente par requête : la connexion est plafonnée à 5 essais
  * par minute et par adresse, et ce banc en fait bien plus.
  */
-async function appel(chemin, corps, entetes = {}) {
+async function appel(chemin, corps, entetes = {}, methode = "POST") {
   ip++;
   const r = await fetch(`${API}${chemin}`, {
-    method: "POST",
+    method: methode,
     headers: {
       "content-type": "application/json",
       "x-forwarded-for": `10.99.${Math.floor(ip / 250)}.${ip % 250}`,
       ...entetes,
     },
-    body: JSON.stringify(corps),
+    body: corps === undefined ? undefined : JSON.stringify(corps),
   });
   const json = await r.json().catch(() => ({}));
   return { statut: r.status, code: json?.error?.code ?? json?.code, json };
@@ -74,6 +74,28 @@ const connexion = (compte, deviceId, typeDevice) =>
 
 const rafraichir = (refreshToken) => appel("/api/auth/refresh", { refreshToken });
 const jetons = (r) => r.json?.data ?? r.json;
+const auth = (r) => ({ authorization: `Bearer ${jetons(r).accessToken}` });
+
+/** Ce que la dissociation doit couper : une ligne au registre, un jeton push. */
+async function equipe(compte, deviceId, typeDevice = 1) {
+  const ligne = await prisma.appareil.create({
+    data: { alanyaId: compte.id, cookiesWebId: deviceId, typeDevice, libelle: "Banc" },
+  });
+  await prisma.pushDevice.create({
+    data: {
+      userId: compte.id,
+      deviceId,
+      token: `banc-push-${deviceId}`,
+      platform: typeDevice === 0 ? "web" : "android",
+    },
+  });
+  return ligne;
+}
+
+const pushDe = (compte, deviceId) =>
+  prisma.pushDevice.count({ where: { userId: compte.id, deviceId } });
+const ligneDe = (ligne) =>
+  prisma.appareil.findUnique({ where: { appareilId: ligne.appareilId } });
 
 async function lie(compte) {
   const u = await prisma.user.findUnique({
@@ -117,13 +139,10 @@ try {
   const l2 = await lie(c1);
   verifie("A reste lié après la déconnexion", l2.deviceId === A && !l2.dissocier, l2);
   /*
-   * ⚠️ UNE SECONDE D'ÉCART, ET CE N'EST PAS DU CONFORT. Un jeton de session ne
-   * porte que le compte et l'heure à la seconde : deux connexions du même
-   * compte dans la même seconde reçoivent le MÊME jeton. Sans ce délai, le
-   * serveur retrouve celui qu'on vient de révoquer et refuse le nouveau.
-   * Défaut antérieur à ce banc, relevé le 28/09/2026.
+   * Reconnexion IMMÉDIATE, à dessein : dans la même seconde que la connexion
+   * précédente. Avant le `jti` des jetons de rafraîchissement, les deux
+   * recevaient le même jeton et la seconde session était refusée.
    */
-  await new Promise((r) => setTimeout(r, 1100));
   const a2 = await connexion(c1, A, 1);
   verifie("A se reconnecte", a2.statut === 200, a2);
 
@@ -140,15 +159,29 @@ try {
   const ra = await rafraichir(jetons(a2).refreshToken);
   verifie("A n'est PAS déconnecté : il se rafraîchit", ra.statut === 200, ra);
 
-  titre("④ Dissociation (simulée en base — lot 3)");
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: c1.id }, data: { deviceId: null, dissocier: true } }),
-    prisma.refreshToken.updateMany({
-      where: { userId: c1.id, deviceId: A, revoked: false },
-      data: { revoked: true, revokedReason: "revoked" },
-    }),
-  ]);
-  verifie("le compte est libre", (await lie(c1)).dissocier === true);
+  titre("④ « Dissocier ce téléphone », depuis A");
+  const ligneA = await equipe(c1, A);
+  const web0 = `banc-web0-${Date.now()}`;
+  const w0 = await connexion(c1, web0, 0);
+  verifie("un navigateur est ouvert à côté", w0.statut === 200, w0);
+  const d4 = await appel("/api/account/dissocier", undefined, auth(ra));
+  verifie("la dissociation répond 200", d4.statut === 200, d4);
+  verifie("elle renvoie A à annoncer au temps réel",
+    jetons(d4).telephones?.includes(A), jetons(d4));
+  const l4 = await lie(c1);
+  verifie("le compte est libre", l4.dissocier === true && l4.deviceId === null, l4);
+  const ra1 = await rafraichir(jetons(ra).refreshToken);
+  verifie("A est déconnecté (SESSION_REVOQUEE, pas « ouvert ailleurs »)",
+    ra1.statut === 401 && ra1.code === "SESSION_REVOQUEE", ra1);
+  verifie("A ne reçoit plus de notifications", (await pushDe(c1, A)) === 0);
+  verifie("la ligne de A passe en « déconnecté »", (await ligneDe(ligneA)).destroy === 1);
+  const w0r = await rafraichir(jetons(w0).refreshToken);
+  verifie("le navigateur n'est PAS touché", w0r.statut === 200, w0r);
+  const d4bis = await appel("/api/account/dissocier", undefined, auth(w0));
+  verifie("répéter le geste sur un compte libre ne nuit pas",
+    d4bis.statut === 200 && (await lie(c1)).dissocier === true, d4bis);
+  const d4sans = await appel("/api/account/dissocier", undefined, {});
+  verifie("sans session, la route refuse (401)", d4sans.statut === 401, d4sans);
 
   titre("⑤ B après dissociation");
   const b2 = await connexion(c1, B, 1);
@@ -174,6 +207,8 @@ try {
   const [p, q] = await Promise.all([connexion(c2, gagnant, 1), connexion(c2, gagnant, 1)]);
   verifie("double appui du téléphone lié : les deux passent",
     p.statut === 200 && q.statut === 200, [p.statut, q.statut]);
+  verifie("et reçoivent deux jetons DIFFÉRENTS",
+    jetons(p).refreshToken !== jetons(q).refreshToken);
 
   titre("⑦ Session d'un téléphone non lié, ouverte avant la règle");
   const c3 = await nouveauCompte();
@@ -226,6 +261,28 @@ try {
   verifie("le téléphone lié n'a pas changé", (await lie(c1)).deviceId === B);
   const w2 = await rafraichir(jetons(w1).refreshToken);
   verifie("le navigateur se rafraîchit", w2.statut === 200, w2);
+
+  titre("⑪ « Déconnecter » un téléphone NON lié, depuis le web");
+  const d11 = await appel(`/api/appareils/${ligneA.appareilId}`, undefined, auth(w2), "DELETE");
+  verifie("la déconnexion répond 200", d11.statut === 200, d11);
+  verifie("elle ne dissocie pas", jetons(d11).dissocie !== true, jetons(d11));
+  verifie("le compte reste lié à B", (await lie(c1)).deviceId === B);
+
+  titre("⑫ « Déconnecter » le téléphone lié, depuis le web");
+  const ligneB = await equipe(c1, B);
+  const d12 = await appel(`/api/appareils/${ligneB.appareilId}`, undefined, auth(w2), "DELETE");
+  verifie("la déconnexion répond 200 et dit « dissocié »",
+    d12.statut === 200 && jetons(d12).dissocie === true, d12);
+  const l12 = await lie(c1);
+  verifie("le compte est libre", l12.dissocier === true && l12.deviceId === null, l12);
+  const rb = await rafraichir(jetons(b2).refreshToken);
+  verifie("B est déconnecté", rb.statut === 401 && rb.code === "SESSION_REVOQUEE", rb);
+  verifie("B ne reçoit plus de notifications", (await pushDe(c1, B)) === 0);
+  const w3 = await rafraichir(jetons(w2).refreshToken);
+  verifie("le navigateur reste connecté", w3.statut === 200, w3);
+  const a12 = await connexion(c1, A, 1);
+  verifie("A peut de nouveau se connecter", a12.statut === 200, a12);
+  verifie("et le compte est lié à A", (await lie(c1)).deviceId === A);
 } finally {
   for (const c of comptes) {
     await prisma.user.delete({ where: { id: c.id } }).catch(() => undefined);

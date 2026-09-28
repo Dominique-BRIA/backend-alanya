@@ -5,6 +5,7 @@ import { ok, fail, handleError } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { revokeDeviceSessions } from "@/modules/auth/tokens";
 import { serializeAppareil } from "@/lib/appareils";
+import { dissocie } from "@/lib/telephone-lie";
 
 const updateSchema = z.object({
   libelle: z.string().trim().min(1).max(45).optional(),
@@ -75,6 +76,31 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) =>
 
     const found = await ownedAppareil(appareilId, userId);
     if (found.error) return found.error;
+
+    /*
+     * Déconnecter le téléphone LIÉ, c'est le dissocier — décision du user du
+     * 28/09/2026. Sans cela, le geste fermerait sa session sans libérer le
+     * compte : le téléphone pourrait se reconnecter, et aucun autre ne le
+     * pourrait. C'est aussi la seule issue, depuis le web, pour un téléphone
+     * perdu ou réinstallé.
+     *
+     * Un AUTRE téléphone du registre (ancienne installation, reste d'avant la
+     * règle) n'est pas lié : le déconnecter ne doit pas libérer le compte.
+     */
+    const lie = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { deviceId: true },
+    });
+    if (found.appareil.cookiesWebId && found.appareil.cookiesWebId === lie?.deviceId) {
+      const { telephones } = await dissocie(userId);
+      const apres = await prisma.appareil.findUniqueOrThrow({ where: { appareilId } });
+      return ok({
+        appareil: serializeAppareil(apres),
+        sessionsRevoquees: telephones.length,
+        dissocie: true,
+        telephones,
+      });
+    }
 
     const updated = await prisma.appareil.update({
       where: { appareilId },

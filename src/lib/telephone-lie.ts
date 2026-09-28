@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { TYPES_MOBILE } from "@/lib/sessions";
+import {
+  PLATEFORMES_MOBILE,
+  RAISON_REVOCATION,
+  TYPES_MOBILE,
+} from "@/lib/sessions";
 
 /**
  * Un compte, un téléphone.
@@ -82,4 +86,114 @@ async function telephoneLie(userId: string): Promise<string | null> {
     select: { deviceId: true },
   });
   return u?.deviceId ?? null;
+}
+
+/**
+ * « Dissocier ce téléphone » : le compte redevient libre, et le téléphone qui
+ * était lié perd tout accès.
+ *
+ * Appelée depuis le téléphone lui-même (Paramètres, ou sa propre ligne dans
+ * « Appareils connectés »), ou depuis une autre session du compte — le web
+ * peut dissocier le téléphone, décision du user du 28/09/2026. C'est aussi, en
+ * attendant mieux, la seule issue pour un téléphone perdu ou réinstallé.
+ *
+ * Quatre effets, et chacun manque si on l'oublie :
+ *
+ *  - le compte est libéré (`device_ID` vide, `dissocier` vrai, ensemble) ;
+ *  - les sessions de TOUS les téléphones du compte sont révoquées, pas
+ *    seulement celle du téléphone lié : une session d'avant la règle, sur un
+ *    autre téléphone, adopterait sinon le compte libre à son prochain
+ *    rafraîchissement ;
+ *  - leurs notifications sont coupées — un téléphone dissocié qui sonne encore
+ *    donne l'impression que rien n'a marché ;
+ *  - leurs lignes du registre passent en « déconnecté », et les conversations
+ *    qu'ils réservaient sont rendues.
+ *
+ * ⚠️ RAISON `revoked`, NON `evicted` : le téléphone doit afficher « session
+ * fermée », pas « compte ouvert sur un autre appareil » — personne ne l'a
+ * ouvert ailleurs.
+ *
+ * ⚠️ L'IDENTITÉ DE CHIFFREMENT N'EST PAS RETIRÉE ICI. Elle est rangée sous le
+ * numéro d'appareil Signal, que rien côté serveur ne relie à l'identifiant du
+ * téléphone. L'application la retire elle-même en se déconnectant ; si la
+ * dissociation vient d'ailleurs, le balayage des identités inactives s'en
+ * charge.
+ *
+ * Sans effet sur un compte déjà libre, hormis la coupure des sessions
+ * téléphone : répéter le geste ne peut pas nuire.
+ *
+ * @returns les identifiants des téléphones coupés, pour que le client les
+ *   annonce au serveur temps réel — l'API et `ws-server.mjs` n'ont pas de canal
+ *   entre eux, comme pour la déconnexion à distance.
+ */
+export async function dissocie(userId: string): Promise<{ telephones: string[] }> {
+  return prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: userId },
+      data: { deviceId: null, dissocier: true },
+    });
+
+    const sessions = await tx.refreshToken.findMany({
+      where: {
+        userId,
+        revoked: false,
+        deviceId: { startsWith: PREFIXE_TELEPHONE },
+      },
+      select: { deviceId: true },
+    });
+    const telephones = [...new Set(sessions.map((s) => s.deviceId!))];
+
+    await tx.refreshToken.updateMany({
+      where: { userId, revoked: false, deviceId: { in: telephones } },
+      data: { revoked: true, revokedReason: RAISON_REVOCATION },
+    });
+
+    /*
+     * Tous les appareils téléphone du registre, pas seulement ceux qui avaient
+     * une session : le téléphone lié peut n'en avoir aucune au moment du geste
+     * (déconnecté normalement), et sa ligne doit quand même dire qu'il n'est
+     * plus lié. Même critère que `estUnTelephone`.
+     */
+    const lignes = await tx.appareil.findMany({
+      where: {
+        alanyaId: userId,
+        OR: [
+          { typeDevice: { in: TYPES_MOBILE } },
+          { cookiesWebId: { startsWith: PREFIXE_TELEPHONE } },
+        ],
+      },
+      select: { appareilId: true, cookiesWebId: true },
+    });
+    const idsLignes = lignes.map((l) => l.appareilId);
+    await tx.appareil.updateMany({
+      where: { appareilId: { in: idsLignes } },
+      data: { destroy: 1, isOnline: 0 },
+    });
+    await tx.conversationLock.deleteMany({
+      where: { userId, appareilId: { in: idsLignes } },
+    });
+
+    const aCouper = [
+      ...new Set([
+        ...telephones,
+        ...lignes.map((l) => l.cookiesWebId).filter((c): c is string => Boolean(c)),
+      ]),
+    ];
+    await tx.pushDevice.deleteMany({
+      where: {
+        userId,
+        OR: [
+          { deviceId: { in: aCouper } },
+          /*
+           * Les jetons push sans identifiant d'appareil sont ceux d'APK
+           * anciens. Côté téléphone, ils ne peuvent appartenir qu'à un
+           * téléphone — et il n'y en a plus aucun de lié.
+           */
+          { deviceId: null, platform: { in: PLATEFORMES_MOBILE } },
+        ],
+      },
+    });
+
+    return { telephones: aCouper };
+  });
 }
