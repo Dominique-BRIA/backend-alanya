@@ -1,5 +1,4 @@
 import { type NextRequest } from "next/server";
-import { pushNewMessage } from "@/../push.mjs";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
@@ -141,50 +140,6 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   });
 
   /*
-   * ══════════════ LA NOTIFICATION POUSSEE ══════════════
-   *
-   * 🐛 UN MESSAGE CHIFFRE NE NOTIFIAIT PERSONNE. `pushNewMessage` n'est appele
-   * que depuis `ws-server.mjs`, et les messages chiffres partent en REST : un
-   * destinataire application fermee ne recevait RIEN. Jamais.
-   *
-   * ⚠️ MEME ENDROIT QUE LA SONNETTE, ET MEME RAISON : c'est le depot qui rend
-   * le message lisible. Notifier a la creation de la ligne reveillerait
-   * quelqu'un pour un message dont le texte n'est pas encore arrive.
-   *
-   * 🔴 AUCUN APERCU, JAMAIS. `preview` reste nul et le type est force a TEXT :
-   * le serveur ne connait pas ce texte, et s'il le connaissait il ne devrait
-   * pas le mettre dans une notification — qui s'affiche sur un ecran
-   * verrouille, transite par Google, et se journalise en chemin.
-   *
-   * ⚠️ LE NOM DE L'EXPEDITEUR, LUI, EST DEJA CONNU du destinataire comme du
-   * serveur. Le taire n'apporterait rien et rendrait la notification inutile.
-   *
-   * ⚠️ ON NE SE NOTIFIE PAS SOI-MEME : l'expediteur est souvent son propre
-   * destinataire, pour ses autres appareils.
-   */
-  const aPrevenir = [...new Set(lues.map((e) => e!.destinataireId))].filter(
-    (id) => id !== userId,
-  );
-  if (aPrevenir.length > 0) {
-    const expediteur = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { nom: true },
-    });
-    for (const destinataire of aPrevenir) {
-      // ⚠️ NE DOIT PAS FAIRE ECHOUER LE DEPOT : le message est ecrit et valide.
-      // Une notification perdue coute une remise differee, pas un message.
-      await pushNewMessage(prisma, {
-        recipientId: destinataire,
-        senderName: expediteur?.nom ?? "",
-        senderId: userId,
-        convId: r.convId as string,
-        convTitle: null,
-        preview: null,
-        messageType: "TEXT",
-      }).catch(() => undefined);
-    }
-  }
-  /*
    * ══════════════ LA SONNETTE, ET ELLE EST ICI POUR UNE RAISON ══════════════
    *
    * 🐛 « LE MESSAGE N'ARRIVE PAS INSTANTANEMENT » — constate par le user le
@@ -240,6 +195,12 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * ⚠️ MÊME ENDROIT QUE LA SONNETTE, ET POUR LA MÊME RAISON : après le dépôt.
    * Notifier à la création de la ligne enverrait le destinataire ouvrir un
    * message dont le contenu n'existe pas encore.
+   *
+   * 🐛 CE BLOC EXISTAIT EN DOUBLE (commit 445266e) : un premier, à import
+   * statique, juste avant la sonnette, et celui-ci. Chaque message chiffré
+   * notifiait donc DEUX FOIS chaque destinataire. Retiré le 28/09/2026 — par
+   * lecture : l'envoi push est inerte en local, on n'a pas pu compter les
+   * notifications, seulement voir les deux appels. UN seul appel par dépôt.
    *
    * ⚠️ ON NE SE NOTIFIE PAS SOI-MÊME, contrairement à la sonnette. Une relève
    * de trop ne coûte qu'un aller-retour ; une notification de trop s'affiche à
