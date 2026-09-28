@@ -435,6 +435,21 @@ raison ; le banc doit poser `e2eeActif` avant son dépôt. À corriger.
 **Ouvert** : identifiant chiffré avec le texte (protocole) ; liaison session ↔
 appareil de chiffrement côté serveur (migration, soumise au user).
 
+## M. Lot A — le coffre et son propriétaire (29/09/2026)
+
+> Le récit est dans le chapitre 22.
+
+| Défaut | Pourquoi rien ne l'a vu | Garde-fou |
+|---|---|---|
+| Web : le compte suivant publiait l'identité privée du précédent (session expirée, « déconnecter partout », suppression) | Seule la déconnexion simple était pensée | `e2ee-coffre-compte` ①-④ |
+| Web : `viderCoffre` sans effet si la base n'était pas encore ouverte dans la page | L'étape testée avait, par hasard, ouvert le coffre | `e2ee-coffre-compte` ③ |
+| Mobile : `CoffreE2ee.oublier()` n'avait aucun appelant | Le commentaire (et l'écran) disaient le contraire — motif ⑤ | test mobile « quitter l'appareil » |
+| Mobile : boucle qui supprime en parcourant la table de `readAll` | Invisible tant que `readAll` rend une copie | idem |
+| Mobile : appareil oublié du serveur jamais republié | Le réapprovisionnement ignorait l'absence | test mobile ⑨ |
+
+**Ouvert** : `android:allowBackup` (sauvegarde Drive, question au user) ;
+`e2ee-banc.mjs` à adapter au lot B.
+
 ---
 
 ## Les six motifs qui reviennent
