@@ -71,7 +71,25 @@ CREATE TABLE IF NOT EXISTS "e2ee_serrures" (
     CONSTRAINT "e2ee_serrures_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS "e2ee_serrures_compte_type_uniq" ON "e2ee_serrures"("alanyaID", "type");
+-- 🐛 L'ANCIEN INDEX UNIQUE (compte, type) N'EST PLUS CRÉÉ ICI.
+--
+-- Ce fichier le posait, et `2026-09_e2ee_serrure_par_appareil.sql` le retire
+-- pour le remplacer par (compte, type, appareil). Mais `apply-manual-sql.sh`
+-- rejoue TOUS les fichiers à chaque déploiement, dans l'ordre alphabétique :
+-- celui-ci passe AVANT l'autre, et recréait l'index que l'autre avait retiré.
+--
+-- Anodin tant que personne n'a deux trousseaux. Dès qu'un compte pose le sien
+-- sur un second appareil — exactement ce que la serrure par appareil permet —,
+-- la création échoue sur un doublon, `ON_ERROR_STOP` arrête le script, et PLUS
+-- AUCUN déploiement ne passe, correctifs sans rapport compris.
+--
+-- PROUVÉ le 28/09/2026 sur la base locale : deux trousseaux pour un compte,
+-- puis ce fichier dans sa version d'avant →
+--   « n'a pas pu créer l'index unique e2ee_serrures_compte_type_uniq —
+--     la clé (alanyaID, type) est dupliquée ».
+--
+-- ⚠️ SUR UNE BASE NEUVE, RIEN NE MANQUE : l'unicité est posée par
+-- `serrure_par_appareil`, qui passe juste après.
 
 DO $$
 BEGIN
