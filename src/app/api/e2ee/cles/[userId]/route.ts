@@ -43,7 +43,7 @@ export const GET = withAuth(
   // signature que `withAuth` impose a tous ses appelants. La resserrer ici la
   // rendrait incompatible — TypeScript refuse un parametre plus EXIGEANT que
   // celui du contrat.
-  async (req: NextRequest, _moi: string, ctx: { params: Promise<Record<string, string>> }) => {
+  async (req: NextRequest, moi: string, ctx: { params: Promise<Record<string, string>> }) => {
     const { userId } = await ctx.params;
     if (!userId) return fail("Destinataire manquant", 400, "BAD_BODY");
 
@@ -64,6 +64,32 @@ export const GET = withAuth(
      * ⚠️ SANS PARAMÈTRE, RIEN NE CHANGE : les APK déjà installés appellent
      * encore la route nue, et doivent continuer de recevoir leurs paquets.
      */
+    /*
+     * 🔴 LE PAQUET N'EST SERVI QU'À QUI PARLE À CE COMPTE — ou à lui-même.
+     *
+     * 🐛 N'IMPORTE QUEL COMPTE POUVAIT APPELER CETTE ROUTE EN BOUCLE. Chaque
+     * appel consomme une pré-clé : vider le stock de quelqu'un dégradait toutes
+     * ses sessions suivantes (X3DH sans pré-clé unique), et la liste disait qui
+     * chiffre, et depuis combien d'appareils. Prouvé par `e2ee-banc.mjs` ⑬.
+     *
+     * ⚠️ UNE CONVERSATION EN COMMUN SUFFIT, et elle existe toujours avant le
+     * chiffrement : on n'active celui-ci que sur une conversation, et on
+     * n'envoie que dans une conversation.
+     *
+     * ⚠️ SOI-MÊME EST TOUJOURS SERVI : un client chiffre aussi pour ses propres
+     * autres appareils (lot 5).
+     *
+     * ⚠️ 404 « PAS_DE_CLES », LA MÊME RÉPONSE qu'un compte sans clés : un 403
+     * dirait à l'inconnu que ce compte chiffre.
+     */
+    if (userId !== moi) {
+      const enCommun = await prisma.participant.findFirst({
+        where: { userId: moi, conv: { participants: { some: { userId } } } },
+        select: { id: true },
+      });
+      if (!enCommun) return fail("Aucune clé publiée pour ce compte", 404, "PAS_DE_CLES");
+    }
+
     const params = req.nextUrl.searchParams;
     const listeSeule = params.get("liste") === "1";
     const brutDevices = params.get("deviceIds");

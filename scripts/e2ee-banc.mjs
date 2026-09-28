@@ -407,6 +407,18 @@ async function main() {
     "les clés d'identité rangées ont bien la taille d'une clé publique",
   )
 
+  // ⚠️ LA CONVERSATION D'ABORD, comme dans l'application : depuis le lot 6,
+  // le paquet de clés d'un compte n'est servi qu'à qui partage une
+  // conversation avec lui (ou à lui-même, pour ses autres appareils).
+  const conv = await prisma.conversation.create({
+    data: {
+      isGroup: false,
+      participants: {
+        create: [{ userId: a.user.id }, { userId: b.user.id }],
+      },
+    },
+  })
+
   console.log("\n⑤ Alice ouvre une session vers Bob (X3DH)")
   const { devices, paquets } = await alice.ouvrirVers(b.user.id)
   verifier(devices.length === 1, `un paquet reçu, pour l'appareil ${devices[0]}`)
@@ -419,14 +431,6 @@ async function main() {
   verifier(resteB === 4, `il reste ${resteB} pré-clés libres chez Bob (4 attendu)`)
 
   console.log("\n⑦ Alice chiffre et dépose")
-  const conv = await prisma.conversation.create({
-    data: {
-      isGroup: false,
-      participants: {
-        create: [{ userId: a.user.id }, { userId: b.user.id }],
-      },
-    },
-  })
   const SECRET = "Rendez-vous à 14h, porte B. — message de contrôle"
   const enveloppes = await alice.envoyer(conv.id, b.user.id, devices, SECRET)
   verifier(enveloppes.length === 1, "une enveloppe par appareil destinataire")
@@ -786,6 +790,65 @@ async function main() {
   verifier(rejoue2.retiree === false, "se déconnecter deux fois ne produit pas d'erreur")
 
   await prisma.e2eeIdentite.deleteMany({ where: { deviceId: 999000001 } })
+  console.log("\n⑬ Un inconnu ne vide pas le stock de Bob")
+  /*
+   * 🐛 N'IMPORTE QUEL COMPTE POUVAIT APPELER `GET /api/e2ee/cles/<bob>` EN
+   * BOUCLE : chaque appel consomme une pré-clé. Vider le stock de quelqu'un
+   * dégradait toutes ses sessions suivantes (X3DH sans pré-clé unique), et la
+   * route disait aussi qui chiffre et depuis combien d'appareils.
+   *
+   * ⚠️ TÉMOINS : Alice, qui partage une conversation avec Bob, reçoit bien son
+   * paquet ; et chacun peut lister SES propres appareils (copie vers ses
+   * autres appareils, lot 5).
+   */
+  // ⚠️ BOB DOIT AVOIR DES CLÉS VIVANTES : une étape précédente a retiré son
+  // identité, et un 404 pour tous rendrait le refus de l'inconnu sans valeur
+  // (c'est le témoin d'Alice qui l'a révélé au premier essai).
+  await bob.publierCles()
+  const c = await compteDeTest("carole")
+  const sessionC = await appel("/api/auth/login", {
+    methode: "POST",
+    corps: {
+      identifier: c.email,
+      password: c.motDePasse,
+      deviceId: `banc-carole-${Date.now()}`,
+      typeDevice: 0,
+    },
+  })
+  const libres = () =>
+    prisma.e2eePrekeyUnique.count({ where: { identite: { userId: b.user.id }, consommeLe: null } })
+  const avantInconnu = await libres()
+  const reponseInconnu = await fetch(`${API}/api/e2ee/cles/${b.user.id}`, {
+    headers: { Authorization: `Bearer ${sessionC.accessToken}` },
+  })
+  verifier(reponseInconnu.status === 404, `un inconnu est éconduit (HTTP ${reponseInconnu.status})`)
+  verifier((await libres()) === avantInconnu, "et le stock de Bob n'a pas bougé")
+  const listePourAlice = await fetch(`${API}/api/e2ee/cles/${b.user.id}?liste=1`, {
+    headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+  })
+  verifier(listePourAlice.status === 200, `témoin : Alice, qui lui parle, est servie (HTTP ${listePourAlice.status})`)
+  const pourSoi = await fetch(`${API}/api/e2ee/cles/${a.user.id}?liste=1`, {
+    headers: { Authorization: `Bearer ${sessionA.accessToken}` },
+  })
+  verifier(pourSoi.status === 200, `témoin : Alice liste ses propres appareils (HTTP ${pourSoi.status})`)
+
+  console.log("\n⑭ Une identité publiée est datée dès sa publication")
+  /*
+   * 🐛 `derniere_releve` N'ÉTAIT POSÉE QU'À LA RELÈVE, et une identité jamais
+   * relevée (`null`) était servie POUR TOUJOURS : le balayage des trente jours
+   * ne la voyait pas. Un navigateur qui publie puis disparaît avant sa
+   * première relève restait une cible éternelle, qui consommait des pré-clés
+   * et recevait des enveloppes que personne ne lirait.
+   */
+  const carole = new Client("Carole", c.user.id, sessionC.accessToken)
+  await carole.publierCles()
+  const idCarole = await prisma.e2eeIdentite.findFirst({
+    where: { userId: c.user.id },
+    select: { derniereReleve: true },
+  })
+  verifier(idCarole?.derniereReleve != null, "la publication prouve que l'appareil existe : elle date l'identité")
+  await prisma.e2eeIdentite.deleteMany({ where: { userId: c.user.id } })
+
   /*
    * 🧹 ON RETIRE CE QU'ON A PUBLIÉ.
    *

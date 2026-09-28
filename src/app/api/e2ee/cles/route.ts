@@ -141,15 +141,27 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
    */
   const identite = await prisma.e2eeIdentite.upsert({
     where: { userId_deviceId: { userId, deviceId: r.deviceId } },
+    /*
+     * ⚠️ `derniereReleve` EST POSÉE À LA PUBLICATION AUSSI.
+     *
+     * 🐛 ELLE NE L'ÉTAIT QU'À LA RELÈVE, et une identité jamais relevée
+     * (`null`) était servie POUR TOUJOURS : le filtre des trente jours laisse
+     * passer `null`, pour ne pas refuser le tout premier message. Un navigateur
+     * qui publie puis disparaît avant sa première relève restait une cible
+     * éternelle. Publier prouve autant que relever que l'appareil existe, À CET
+     * INSTANT : le silence se compte à partir d'ici. Prouvé par `e2ee-banc` ⑭.
+     */
     create: {
       userId,
       deviceId: r.deviceId,
       registrationId: r.registrationId,
       cleIdentite: r.cleIdentite,
+      derniereReleve: new Date(),
     },
     update: {
       registrationId: r.registrationId,
       cleIdentite: r.cleIdentite,
+      derniereReleve: new Date(),
     },
     select: { id: true },
   });
