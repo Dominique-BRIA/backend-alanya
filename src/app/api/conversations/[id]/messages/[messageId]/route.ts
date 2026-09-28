@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
 import { rafraichirApercuApresEdition } from "@/lib/apercu-conversation.mjs";
 import { LONGUEUR_MAX_CONTENU } from "@/lib/message-payload.mjs";
+import { refusModification } from "@/lib/e2ee-clair.mjs";
 
 // PATCH /api/conversations/:convId/messages/:messageId — modifier un message.
 // Repli REST (la diffusion temps réel est gérée par le serveur WS). Seul
@@ -32,6 +33,28 @@ export const PATCH = withAuth(
     if (message.deletedAt) return fail("Message supprimé", 400, "DELETED");
     if (message.type !== "TEXT") {
       return fail("Seuls les messages texte sont modifiables", 400, "NOT_TEXT");
+    }
+
+    /*
+     * 🔴 UN FIL CHIFFRÉ NE SE MODIFIE PAS EN CLAIR — même règle que le
+     * WebSocket (`handleEditMessage`), écrite une seule fois dans
+     * `e2ee-clair.mjs`. Sans elle, le repli REST du mobile écrivait le texte
+     * modifié en clair dans `message.content`.
+     *
+     * ⚠️ LE FIL DU MESSAGE, PAS CELUI DE L'ADRESSE : c'est lui qui est
+     * modifié, et les deux ne sont comparés nulle part ci-dessus.
+     */
+    const fil = await prisma.conversation.findUnique({
+      where: { id: message.convId },
+      select: { e2eeActif: true },
+    });
+    const refus = refusModification({ filChiffre: fil?.e2eeActif === true });
+    if (refus) {
+      return fail(
+        "Cette conversation est chiffrée : un message ne peut pas y être modifié.",
+        409,
+        refus,
+      );
     }
 
     const updated = await prisma.message.update({

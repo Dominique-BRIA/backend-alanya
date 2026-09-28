@@ -67,6 +67,7 @@ import {
   LONGUEUR_MAX_CONTENU,
 } from "./src/lib/message-payload.mjs";
 import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
+import { refusModification, refusTransfert } from "./src/lib/e2ee-clair.mjs";
 import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
@@ -1809,6 +1810,34 @@ async function handleEditMessage(ws, msg) {
     return;
   }
   if (message.deletedAt || message.type !== "TEXT") return;
+
+  /*
+   * 🔴 UN FIL CHIFFRÉ NE SE MODIFIE PAS EN CLAIR.
+   *
+   * 🐛 Le nouveau texte s'écrivait dans `message.content`, remontait dans
+   * l'aperçu de la liste et partait à tous les participants — alors que le
+   * mobile proposait « Modifier » sur une bulle chiffrée. Voir
+   * `src/lib/e2ee-clair.mjs`.
+   *
+   * ⚠️ ON LE DIT À L'AUTEUR : son écran a déjà affiché la modification. Se
+   * taire la laisserait croire faite.
+   */
+  const filEdite = await prisma.conversation.findUnique({
+    where: { id: message.convId },
+    select: { e2eeActif: true },
+  });
+  const refusEdition = refusModification({ filChiffre: filEdite?.e2eeActif === true });
+  if (refusEdition) {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        code: refusEdition,
+        messageId,
+        message: "Cette conversation est chiffrée : un message ne peut pas y être modifié.",
+      }),
+    );
+    return;
+  }
 
   const editedAt = new Date();
   await prisma.message.update({
@@ -3882,9 +3911,35 @@ async function handleForwardMessage(ws, msg) {
 
   if (!(await isParticipant(original.convId, ws.userId))) return;
 
+  /*
+   * 🔴 LE TRANSFERT RECOPIE `content`, ET UN FIL CHIFFRÉ N'EN A PAS.
+   *
+   * 🐛 Depuis un fil chiffré, on fabriquait une bulle VIDE chez le
+   * destinataire. VERS un fil chiffré, on y écrivait du texte en CLAIR, par
+   * une porte que la garde de l'envoi ne voyait pas. Voir
+   * `src/lib/e2ee-clair.mjs`.
+   */
+  const etats = await prisma.conversation.findMany({
+    where: { id: { in: [original.convId, ...targetConvIds] } },
+    select: { id: true, e2eeActif: true },
+  });
+  const chiffree = new Map(etats.map((c) => [c.id, c.e2eeActif === true]));
+  const refuses = [];
+
   const results = [];
   for (const targetConvId of targetConvIds) {
     if (!(await isParticipant(targetConvId, ws.userId))) continue;
+
+    const motif = refusTransfert({
+      sourceChiffree: chiffree.get(original.convId) === true,
+      cibleChiffree: chiffree.get(targetConvId) === true,
+      type: original.type,
+      contenu: original.content,
+    });
+    if (motif) {
+      refuses.push({ convId: targetConvId, motif });
+      continue;
+    }
 
     const mediaIds = [];
     for (const m of original.media) {
@@ -3947,7 +4002,26 @@ async function handleForwardMessage(ws, msg) {
     results.push({ convId: targetConvId, messageId: created.id });
   }
 
-  sendTo(ws.userId, { type: "forwarded", results });
+  /*
+   * ⚠️ LES REFUS SONT DITS, UN PAR UN. `forwarded` ne liste que les réussites :
+   * sans cet avis, l'auteur croirait son message parti partout. Le code est
+   * celui que les clients connaissent déjà à l'envoi.
+   */
+  if (refuses.length > 0) {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        code: "CONVERSATION_CHIFFREE",
+        messageId,
+        refuses,
+        message:
+          "Transfert impossible vers ou depuis une conversation chiffrée pour " +
+          `${refuses.length} conversation(s).`,
+      }),
+    );
+  }
+
+  sendTo(ws.userId, { type: "forwarded", results, refuses });
 }
 
 // ---------------------------------------------------------------------------

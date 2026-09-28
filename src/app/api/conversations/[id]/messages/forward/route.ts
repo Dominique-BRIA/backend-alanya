@@ -6,6 +6,7 @@ import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
 import { apercuMessage } from "@/lib/message-payload.mjs";
 import { MEDIA_ORDONNE } from "@/lib/media-ordre";
+import { refusTransfert } from "@/lib/e2ee-clair.mjs";
 
 const forwardSchema = z.object({
   messageId: z.string().uuid(),
@@ -31,9 +32,33 @@ export const POST = withAuth(
         // désordre propagerait le défaut au message transféré.
         include: { media: MEDIA_ORDONNE },
       });
-      if (!original) return fail("Message introuvable", 404, "NOT_FOUND");
+      /*
+       * 🔴 LE MESSAGE DOIT ÊTRE DU FIL DE L'ADRESSE — c'est là seulement que
+       * l'appartenance a été vérifiée.
+       *
+       * 🐛 CE CONTRÔLE MANQUAIT : on vérifiait que l'utilisateur était membre
+       * de `:id`, puis on allait chercher le message par son SEUL identifiant,
+       * dans n'importe quelle conversation. Il suffisait de connaître l'UUID
+       * d'un message — il circule dans les notifications, les réponses citées,
+       * les journaux — pour le recopier chez soi et le lire. Prouvé par
+       * `scripts/e2ee-clair-banc.mjs` ③. Le WebSocket, lui, faisait ce contrôle.
+       *
+       * ⚠️ 404 ET NON 403 : répondre « interdit » confirmerait que ce message
+       * existe.
+       */
+      if (!original || original.convId !== convId) {
+        return fail("Message introuvable", 404, "NOT_FOUND");
+      }
       // On ne transfère pas un message déjà supprimé.
       if (original.deletedAt) return fail("Ce message a été supprimé", 410, "GONE");
+
+      // Même règle que le WebSocket, écrite une seule fois : `e2ee-clair.mjs`.
+      const etats = await prisma.conversation.findMany({
+        where: { id: { in: [convId, ...targetConvIds] } },
+        select: { id: true, e2eeActif: true },
+      });
+      const chiffree = new Map(etats.map((c) => [c.id, c.e2eeActif === true]));
+      const refuses: Array<{ convId: string; motif: string }> = [];
 
       const results: Array<{ convId: string; messageId: string }> = [];
 
@@ -43,6 +68,17 @@ export const POST = withAuth(
           await assertParticipant(targetConvId, userId);
         } catch {
           continue; // ignore les conversations interdites
+        }
+
+        const motif = refusTransfert({
+          sourceChiffree: chiffree.get(convId) === true,
+          cibleChiffree: chiffree.get(targetConvId) === true,
+          type: original.type,
+          contenu: original.content,
+        });
+        if (motif) {
+          refuses.push({ convId: targetConvId, motif });
+          continue;
         }
 
         // Copie les médias (nouvelles entrées pointant vers le même binaire B2/local).
@@ -103,7 +139,18 @@ export const POST = withAuth(
         results.push({ convId: targetConvId, messageId: created.id });
       }
 
-      return ok({ forwarded: true, results }, 201);
+      /*
+       * ⚠️ TOUT REFUSÉ → 409, avec le motif que les clients connaissent : un
+       * 201 vide laisserait croire le message parti.
+       */
+      if (results.length === 0 && refuses.length > 0) {
+        return fail(
+          "Transfert impossible vers ou depuis une conversation chiffrée.",
+          409,
+          "CONVERSATION_CHIFFREE",
+        );
+      }
+      return ok({ forwarded: true, results, refuses }, 201);
     } catch (err) {
       return handleError(err);
     }
