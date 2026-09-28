@@ -20,7 +20,8 @@ import { dissocie } from "@/lib/telephone-lie";
  * autre téléphone exige toujours le mot de passe à la connexion.
  *
  * Réponse : `telephones`, à annoncer au serveur temps réel par le client
- * (`session_revoked`) — l'API ne peut pas joindre `ws-server.mjs` elle-même.
+ * (`session_revoked`, raison `dissociation`) — l'API ne peut pas joindre
+ * `ws-server.mjs` elle-même.
  */
 export const POST = withAuth(async (_req: NextRequest, userId: string) => {
   try {

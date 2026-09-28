@@ -115,9 +115,10 @@ async function telephoneLie(userId: string): Promise<string | null> {
  *
  * ⚠️ L'IDENTITÉ DE CHIFFREMENT N'EST PAS RETIRÉE ICI. Elle est rangée sous le
  * numéro d'appareil Signal, que rien côté serveur ne relie à l'identifiant du
- * téléphone. L'application la retire elle-même en se déconnectant ; si la
- * dissociation vient d'ailleurs, le balayage des identités inactives s'en
- * charge.
+ * téléphone. Quand le téléphone se dissocie lui-même, l'application la retire
+ * juste après cet appel (`DELETE /api/e2ee/cles`) — la déconnexion ordinaire,
+ * elle, ne la retire PAS. Si la dissociation vient d'ailleurs, le balayage des
+ * identités inactives s'en charge.
  *
  * Sans effet sur un compte déjà libre, hormis la coupure des sessions
  * téléphone : répéter le geste ne peut pas nuire.
