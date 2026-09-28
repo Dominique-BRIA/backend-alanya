@@ -43,13 +43,46 @@ export const GET = withAuth(
   // signature que `withAuth` impose a tous ses appelants. La resserrer ici la
   // rendrait incompatible — TypeScript refuse un parametre plus EXIGEANT que
   // celui du contrat.
-  async (_req: NextRequest, _moi: string, ctx: { params: Promise<Record<string, string>> }) => {
+  async (req: NextRequest, _moi: string, ctx: { params: Promise<Record<string, string>> }) => {
     const { userId } = await ctx.params;
     if (!userId) return fail("Destinataire manquant", 400, "BAD_BODY");
+
+    /*
+     * ══════════════ DEUX QUESTIONS DISTINCTES ══════════════
+     *
+     * 🐛 LES CLIENTS APPELAIENT CETTE ROUTE À CHAQUE ENVOI, pour savoir quels
+     * appareils viser. Or chaque appel CONSOMME une pré-clé par appareil : un
+     * correspondant perdait une pré-clé par message reçu, même quand la
+     * session existait déjà et que le paquet ne servait à rien. Prouvé par
+     * `STAGE-WEB/scripts/e2ee-releve-multifil.mjs` ⑧ le 28/09/2026.
+     *
+     * On sépare donc :
+     *   · `?liste=1`          → QUELS appareils vivants — ne consomme RIEN ;
+     *   · `?deviceIds=1,2`    → le paquet de CES appareils seulement, ceux pour
+     *                           qui le client n'a pas encore de session.
+     *
+     * ⚠️ SANS PARAMÈTRE, RIEN NE CHANGE : les APK déjà installés appellent
+     * encore la route nue, et doivent continuer de recevoir leurs paquets.
+     */
+    const params = req.nextUrl.searchParams;
+    const listeSeule = params.get("liste") === "1";
+    const brutDevices = params.get("deviceIds");
+    let seulement: number[] | null = null;
+    if (brutDevices !== null) {
+      seulement = brutDevices
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n > 0)
+        .slice(0, APPAREILS_MAX);
+      if (seulement.length === 0) {
+        return fail("« deviceIds » ne contient aucun appareil valide", 400, "BAD_BODY");
+      }
+    }
 
     const identites = await prisma.e2eeIdentite.findMany({
       where: {
         userId,
+        ...(seulement ? { deviceId: { in: seulement } } : {}),
         /*
          * ⚠️ ON ÉCARTE LES IDENTITÉS QUI N'ONT PLUS DONNÉ SIGNE DE VIE.
          *
@@ -87,6 +120,24 @@ export const GET = withAuth(
        * l'envoi en clair, ou de refuser d'écrire, selon ce qu'on aura décidé.
        */
       return fail("Aucune clé publiée pour ce compte", 404, "PAS_DE_CLES");
+    }
+
+    if (listeSeule) {
+      /*
+       * ⚠️ LA CLÉ D'IDENTITÉ VOYAGE AVEC LA LISTE. Elle est publique, et elle
+       * permet au client de voir qu'un appareil a été RÉINSTALLÉ — même numéro,
+       * clé neuve — sans consommer de pré-clé : sa session existante ne vaut
+       * alors plus rien, et il faut en ouvrir une autre.
+       *
+       * ⚠️ SEULS LES APPAREILS UTILISABLES : sans pré-clé signée, aucun paquet
+       * ne pourrait être servi ensuite.
+       */
+      return ok({
+        userId,
+        appareils: identites
+          .filter((i) => i.prekeysSignees.length > 0)
+          .map((i) => ({ deviceId: i.deviceId, cleIdentite: i.cleIdentite })),
+      });
     }
 
     const paquets = [];
