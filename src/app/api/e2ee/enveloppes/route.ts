@@ -310,10 +310,58 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
    * sans lui, un identifiant qui fuite suffirait à faire disparaître le message
    * de quelqu'un d'autre avant qu'il ne l'ait lu.
    */
+  const cible = { id: { in: ids }, destinataireId: userId, remisLe: null };
+  const acquittees = await prisma.e2eeEnveloppe.findMany({
+    where: cible,
+    select: { messageId: true },
+  });
   const { count } = await prisma.e2eeEnveloppe.updateMany({
-    where: { id: { in: ids }, destinataireId: userId, remisLe: null },
+    where: cible,
     data: { remisLe: new Date() },
   });
+
+  /*
+   * 🔴 « DISTRIBUÉ » : UN APPAREIL DU DESTINATAIRE A REÇU LE MESSAGE.
+   *
+   * 🐛 UN MESSAGE CHIFFRÉ NE PASSAIT JAMAIS À « DISTRIBUÉ » (user, 28/09/2026).
+   * Pour un message ordinaire, `handleSend` le fait au moment de l'envoi si le
+   * destinataire est en ligne. Un message chiffré, lui, est créé par la route
+   * REST, qui ne le fait pas : il restait « envoyé » jusqu'à la lecture.
+   *
+   * ⚠️ L'ACQUITTEMENT EST LE BON MOMENT, pas le dépôt : c'est la preuve qu'un
+   * appareil du destinataire a relevé l'enveloppe. Déposer ne prouve rien —
+   * le destinataire peut être hors ligne pendant des jours.
+   *
+   * ⚠️ `SENT` SEULEMENT : un message déjà « lu » ne redescend pas. Et jamais
+   * nos propres messages — ce sont les copies vers nos autres appareils.
+   */
+  const messageIds = [
+    ...new Set(acquittees.map((e) => e.messageId).filter((id): id is string => !!id)),
+  ];
+  if (messageIds.length > 0) {
+    const aPasser = await prisma.message.findMany({
+      where: { id: { in: messageIds }, status: "SENT", senderId: { not: userId } },
+      select: { id: true, convId: true, senderId: true },
+    });
+    if (aPasser.length > 0) {
+      await prisma.message.updateMany({
+        where: { id: { in: aPasser.map((m) => m.id) }, status: "SENT" },
+        data: { status: "DELIVERED" },
+      });
+      /*
+       * ⚠️ LE PONT N'ACCEPTE QUE LES VERBES `e2ee_*` : d'où `e2ee_distribue`
+       * et non `message_status`. Les clients le traitent comme ce dernier.
+       * Un échec du pont ne fait pas échouer l'acquittement.
+       */
+      for (const m of aPasser) {
+        await previensDesPersonnes({
+          personnes: [m.senderId],
+          type: "e2ee_distribue",
+          donnees: { convId: m.convId, messageId: m.id, status: "DELIVERED" },
+        });
+      }
+    }
+  }
 
   return ok({ acquittees: count });
 });
