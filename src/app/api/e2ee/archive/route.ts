@@ -95,21 +95,60 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   return ok({ bloc }, 201);
 });
 
-export const GET = withAuth(async (_req: NextRequest, userId: string) => {
+export const GET = withAuth(async (req: NextRequest, userId: string) => {
+  /*
+   * ══════════════ PAR PAGES, JUSQU'AU BOUT ══════════════
+   *
+   * 🐛 LA LECTURE S'ARRÊTAIT À 2 000 BLOCS, du plus ancien au plus récent :
+   * au-delà, la restauration perdait les messages les PLUS RÉCENTS, et `total`
+   * valait le nombre RENDU, pas le nombre existant — rien ne le signalait. À
+   * 10 messages par bloc côté web, c'est 20 000 messages. Prouvé par
+   * `scripts/e2ee-archive-banc.mjs` ⑧ (2 000 relus sur 2 100).
+   *
+   * → `suivant` : l'identifiant du dernier bloc rendu quand la page est pleine,
+   *   `null` sinon. Le client rappelle avec `?apres=<suivant>` jusqu'à `null`.
+   *
+   * ⚠️ UN CURSEUR, PAS UN DÉCALAGE (`skip`) : un bloc déposé pendant la lecture
+   * décalerait les pages suivantes, et un bloc serait lu deux fois ou jamais.
+   *
+   * ⚠️ `id` DEPARTAGE LES EX-ÆQUO : deux blocs déposés la même milliseconde
+   * n'ont pas d'ordre défini sur `createdAt` seul, et un curseur a besoin d'un
+   * ordre TOTAL.
+   *
+   * ⚠️ SANS `apres`, LA PREMIÈRE PAGE EST CELLE D'AVANT : un client antérieur
+   * reçoit exactement ce qu'il recevait, et ignore `suivant`.
+   */
+  const apres = req.nextUrl.searchParams.get("apres");
+  if (apres !== null) {
+    // Le curseur doit être à MOI : sans ce contrôle, un identifiant de bloc
+    // d'un autre compte ferait partir la lecture d'un point quelconque.
+    const repere = await prisma.e2eeArchiveBloc.findFirst({
+      where: { id: apres, userId },
+      select: { id: true },
+    });
+    if (!repere) return fail("« apres » inconnu", 400, "BAD_BODY");
+  }
+
   const blocs = await prisma.e2eeArchiveBloc.findMany({
     where: { userId },
-    select: { iv: true, contenu: true },
+    select: { id: true, iv: true, contenu: true },
     /*
      * ⚠️ DU PLUS ANCIEN AU PLUS RÉCENT. Le client dédoublonne par identifiant de
      * message et garde le DERNIER vu : dans cet ordre, une correction déposée
      * plus tard l'emporte sur la version d'origine. L'ordre inverse figerait la
      * première écriture.
      */
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: BLOCS_MAX,
+    ...(apres ? { cursor: { id: apres }, skip: 1 } : {}),
   });
 
-  return ok({ blocs, total: blocs.length });
+  const suivant = blocs.length === BLOCS_MAX ? blocs[blocs.length - 1].id : null;
+  return ok({
+    blocs: blocs.map(({ iv, contenu }) => ({ iv, contenu })),
+    total: blocs.length,
+    suivant,
+  });
 });
 
 export const DELETE = withAuth(async (_req: NextRequest, userId: string) => {

@@ -357,6 +357,44 @@ async function main() {
     "l'archive d'un autre compte est visible",
   );
 
+  /* ── ⑧ UNE GRANDE ARCHIVE SE RELIT EN ENTIER ─────────────────────── */
+  titre("⑧ Au-delà de 2 000 blocs, rien ne se perd");
+  /*
+   * 🐛 LA LECTURE S'ARRÊTAIT À 2 000 BLOCS (`take: BLOCS_MAX`), du plus
+   * ancien au plus récent : au-delà, les messages les PLUS RÉCENTS
+   * manquaient à la restauration, sans que rien ne le dise — `total` valait
+   * le nombre rendu, pas le nombre existant. À 10 messages par bloc côté web,
+   * c'est 20 000 messages : un compte actif y arrive en quelques mois.
+   */
+  // L’étape ⑦ a laissé un bloc : on repart d’une archive vide pour compter juste.
+  await prisma.e2eeArchiveBloc.deleteMany({ where: { userId: a.user.id } });
+  const depart = Date.now() - 10_000_000;
+  await prisma.e2eeArchiveBloc.createMany({
+    data: Array.from({ length: 2100 }, (_, i) => ({
+      userId: a.user.id,
+      iv: "aXY=",
+      contenu: `grand-${i}`,
+      nbMessages: 1,
+      createdAt: new Date(depart + i * 1000),
+    })),
+  });
+  const lus = [];
+  let suivant = null;
+  for (let tour = 0; tour < 10; tour++) {
+    const page = await api(
+      `/api/e2ee/archive${suivant ? `?apres=${encodeURIComponent(suivant)}` : ""}`,
+    );
+    lus.push(...(page.json?.blocs ?? []).map((b) => b.contenu));
+    suivant = page.json?.suivant ?? null;
+    if (!suivant) break;
+  }
+  verifie("les 2 100 blocs sont relus", lus.length === 2100, `${lus.length} relu(s)`);
+  verifie("le plus récent compris", lus.at(-1) === "grand-2099", `dernier : ${lus.at(-1)}`);
+  verifie(
+    "dans l'ordre, sans doublon",
+    lus.every((c, i) => c === `grand-${i}`),
+  );
+
   /* ── NETTOYAGE ───────────────────────────────────────────────────── */
   await api("/api/e2ee/archive", { method: "DELETE" });
 
