@@ -384,6 +384,23 @@ async function main() {
     const page = await api(
       `/api/e2ee/archive${suivant ? `?apres=${encodeURIComponent(suivant)}` : ""}`,
     );
+    /*
+     * ⑨ LE TOTAL DE L'ARCHIVE, pour la barre de progression de l'écran de
+     * restauration : sur la première page seulement.
+     */
+    if (tour === 0) {
+      verifie(
+        "la première page annonce le total de l'archive (2 100)",
+        page.json?.totalArchive === 2100,
+        `totalArchive : ${page.json?.totalArchive}`,
+      );
+    } else if (tour === 1) {
+      verifie(
+        "les pages suivantes ne recomptent pas",
+        page.json?.totalArchive === undefined,
+        `totalArchive : ${page.json?.totalArchive}`,
+      );
+    }
     lus.push(...(page.json?.blocs ?? []).map((b) => b.contenu));
     suivant = page.json?.suivant ?? null;
     if (!suivant) break;

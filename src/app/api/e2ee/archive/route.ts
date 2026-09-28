@@ -144,9 +144,20 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   });
 
   const suivant = blocs.length === BLOCS_MAX ? blocs[blocs.length - 1].id : null;
+  /*
+   * 🔴 LE NOMBRE TOTAL DE BLOCS, pour la barre de progression de l'écran de
+   * restauration (28/09/2026). `total` ne compte que CETTE page — le nom est
+   * trompeur, mais les clients le lisent déjà : on ne le change pas.
+   *
+   * ⚠️ SUR LA PREMIÈRE PAGE SEULEMENT : c'est là que le client en a besoin,
+   * et un `count` par page ne servirait à rien.
+   */
+  const totalArchive =
+    apres === null ? await prisma.e2eeArchiveBloc.count({ where: { userId } }) : undefined;
   return ok({
     blocs: blocs.map(({ iv, contenu }) => ({ iv, contenu })),
     total: blocs.length,
+    ...(totalArchive !== undefined ? { totalArchive } : {}),
     suivant,
   });
 });
