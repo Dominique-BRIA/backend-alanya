@@ -405,6 +405,22 @@
 | Reprise d'archive figée à 2 000 blocs | Le compte de la page passait pour celui de l'archive | `e2ee_archive_pages_test` | mobile `f98152a` |
 | Parité des traductions rouge depuis le matin | **`flutter test` ne tourne pas en CI** | `l10n_parite_test` (manuel) | mobile `a997f52` |
 
+## K. Lot B — les portes du serveur (28/09/2026, nuit)
+
+> Le récit est dans le chapitre 20.
+
+| Défaut | Pourquoi rien ne l'a vu | Garde-fou | 
+|---|---|---|
+| `replyToId` jamais vérifié : citer un message d'un fil étranger rendait son texte (REST + WS) | H-3 avait fermé le transfert, pas la citation — même famille, autre porte | `e2ee-clair-banc` ④ |
+| Dépôt d'enveloppes : ni blocage, ni sourdine, ni fil chiffré exigé ; sonnette sans message | La garde du blocage vivait dans `creerMessage` et le WS, pas dans la troisième porte | `e2ee-depot-banc` ①-④ |
+| « Supprimer pour tous » laissait les enveloppes servies | Vider `content` semblait supprimer ; un message chiffré n'en a pas | `e2ee-depot-banc` ⑤ |
+| Pré-clés vidables par quiconque crée une conversation | Le banc ⑬ jouait un inconnu SANS conversation | `e2ee-prekeys-banc` |
+| Archive : une page jusqu'à 1 Go en mémoire, dépôt illimité | Bornée en nombre, jamais en octets | `e2ee-archive-banc` ⑩ |
+
+⚠️ **`e2ee-banc.mjs` s'arrête désormais** sur la garde « fil chiffré exigé » : il
+dépose des enveloppes dans une conversation qu'il n'active pas. Le serveur a
+raison ; le banc doit poser `e2eeActif` avant son dépôt. À corriger.
+
 ---
 
 ## Les six motifs qui reviennent
