@@ -23,6 +23,7 @@
 - [E. Les défenses qui ne défendaient rien](#e-les-défenses-qui-ne-défendaient-rien)
 - [F. Les bancs eux-mêmes](#f-les-bancs-eux-mêmes)
 - [G. La relève](#g-la-relève-28092026)
+- [H. Les portes latérales du clair](#h-les-portes-latérales-du-clair-28092026)
 - [Les six motifs qui reviennent](#les-six-motifs-qui-reviennent)
 - [Les garde-fous en place](#les-garde-fous-en-place)
 
@@ -328,6 +329,44 @@
 | **Correctif** | Échecs classés : déjà lu / passager (gardé) / définitif (acquitté, session effacée une fois). |
 | **Garde-fou** | Banc web, étape ⑥ ; test mobile, groupe ② |
 | **Commit** | `fa8c882` (web), `3e4ffbb` (mobile) |
+
+---
+
+## H. Les portes latérales du clair (28/09/2026)
+
+> Récit complet : [chapitre 12](cours/12-les-portes-laterales.md).
+
+### H-1 · Modifier un message chiffré l'écrivait en clair
+
+| | |
+|---|---|
+| **Symptôme** | Aucun à l'écran. Le texte modifié était lisible en base, dans l'aperçu et chez les participants. |
+| **Cause réelle** | `edit_message` et `PATCH` n'avaient aucune garde E2EE ; le mobile proposait « Modifier » sur une bulle chiffrée. |
+| **Pourquoi rien ne l'a vu** | La garde du clair était posée sur l'ENVOI, pas sur la colonne `message.content`. |
+| **Correctif** | Refus serveur `CONVERSATION_CHIFFREE` + menu masqué sur mobile. |
+| **Garde-fou** | `scripts/e2ee-clair-banc.mjs` ① |
+| **Commit** | `609cdda` (backend), `3430bd4` (mobile) |
+
+### H-2 · Transférer : bulle vide depuis un fil chiffré, clair vers un fil chiffré
+
+| | |
+|---|---|
+| **Cause réelle** | Le transfert recopie `content`, vide pour un chiffré et en clair pour les autres. |
+| **Pourquoi rien ne l'a vu** | Même trou que H-1. |
+| **Correctif** | `refusTransfert` dans `src/lib/e2ee-clair.mjs`, partagé REST/WebSocket ; menus masqués (web, mobile) ; sélecteur mobile sans fils chiffrés pour un texte. |
+| **Garde-fou** | `scripts/e2ee-clair-banc.mjs` ② |
+| **Commit** | `609cdda`, `c71e286` (web), `3430bd4` |
+
+### H-3 · 🔴 Recopier le message d'une conversation dont on n'est pas membre
+
+| | |
+|---|---|
+| **Symptôme** | Aucun. Bob pouvait copier chez lui un message Alice–Carole et le lire. |
+| **Cause réelle** | La route REST de transfert vérifiait l'appartenance au fil de l'ADRESSE, puis cherchait le message par son seul identifiant. |
+| **Pourquoi rien ne l'a vu** | Le WebSocket faisait le contrôle ; le « repli » REST était relu comme une copie. |
+| **Correctif** | Le message doit appartenir au fil de l'adresse, sinon 404. |
+| **Garde-fou** | `scripts/e2ee-clair-banc.mjs` ③ |
+| **Commit** | `609cdda` |
 
 ---
 
