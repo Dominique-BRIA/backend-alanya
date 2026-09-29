@@ -222,6 +222,8 @@ model User {
   blockedUsers          Blocked[]              @relation("BlockOwner")
   blockedByUsers        Blocked[]              @relation("BlockedUser")
   conversationLocks     ConversationLock[]
+  invitationsQrCreees   InvitationQr[]         @relation("InvitationQrCreateur")
+  invitationsQrUtilisees InvitationQr[]        @relation("InvitationQrUtilisateur")
 
   // --- Espace Développeur ---
   developerAccount DeveloperAccount?
@@ -3254,4 +3256,34 @@ model E2eeEnveloppe {
 
   @@index([convId, createdAt], map: "e2ee_enveloppes_conv_idx")
   @@map("e2ee_enveloppes")
+}
+
+// ---------------------------------------------------------------------------
+// INVITATION_QR — le QR code à usage unique (15 minutes), partageable
+// ---------------------------------------------------------------------------
+
+/// Une invitation à usage unique : un lien https://alanyavox.com/i/<jeton>
+/// qu'on partage sur WhatsApp, Facebook… Celui qui l'utilise et son créateur
+/// s'ajoutent MUTUELLEMENT aux contacts, et leur conversation s'ouvre.
+///
+/// Table À NOUS (pas au référentiel équipe). SQL : `prisma/manual/2026-09_invitation_qr.sql`.
+///
+/// 🔒 L'USAGE UNIQUE EST TENU PAR LA BASE, pas par le code : l'utilisation est
+/// UN `UPDATE … WHERE utilisee_le IS NULL AND expire_le > now()`. Deux
+/// personnes qui cliquent au même instant ne peuvent pas l'utiliser toutes
+/// les deux — la seconde trouve la ligne déjà prise et ne modifie rien.
+model InvitationQr {
+  /// Jeton aléatoire (128 bits en base64url, 22 caractères). Il ne dit rien du
+  /// créateur : l'Alanya ID n'apparaît pas dans le lien.
+  jeton       String    @id @db.VarChar(43)
+  createurId  String    @map("createur_id") @db.Uuid
+  createur    User      @relation("InvitationQrCreateur", fields: [createurId], references: [id], onDelete: Cascade)
+  creeLe      DateTime  @default(now()) @map("cree_le") @db.Timestamptz
+  expireLe    DateTime  @map("expire_le") @db.Timestamptz
+  utiliseeLe  DateTime? @map("utilisee_le") @db.Timestamptz
+  utiliseePar String?   @map("utilisee_par") @db.Uuid
+  utilisateur User?     @relation("InvitationQrUtilisateur", fields: [utiliseePar], references: [id], onDelete: Cascade)
+
+  @@index([expireLe])
+  @@map("invitation_qr")
 }
