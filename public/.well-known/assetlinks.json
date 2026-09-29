@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.alanya237.work",
+      "sha256_cert_fingerprints": [
+        "F7:36:6E:BF:CF:00:4E:9A:19:56:C0:AC:1F:20:B1:92:E5:1C:1C:83:F7:07:B2:EA:6A:57:BE:4A:8F:4A:47:B6"
+      ]
+    }
+  }
+]

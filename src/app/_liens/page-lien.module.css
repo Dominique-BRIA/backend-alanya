@@ -1,0 +1,98 @@
+/* Page de secours des liens Alanya. Couleurs du logo : vert #098084
+   (AlanyaColors.logoVert du mobile) et orange du combiné. */
+
+.page {
+  --vert: #098084;
+  --texte: #1f2328;
+  --doux: #5b6168;
+  --carte: #ffffff;
+  --fond: #eef5f5;
+  --bord: #d6e6e6;
+
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: var(--fond);
+}
+
+@media (prefers-color-scheme: dark) {
+  .page {
+    --vert: #3fb5b8;
+    --texte: #eceff1;
+    --doux: #a4adb4;
+    --carte: #1b2124;
+    --fond: #111517;
+    --bord: #2b3438;
+  }
+}
+
+.carte {
+  width: 100%;
+  max-width: 400px;
+  background: var(--carte);
+  border: 1px solid var(--bord);
+  border-radius: 20px;
+  padding: 32px 24px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.marque {
+  margin-top: 10px;
+  font-weight: 700;
+  color: var(--vert);
+  letter-spacing: 0.5px;
+}
+
+.titre {
+  margin-top: 18px;
+  font-size: 22px;
+  line-height: 1.3;
+  color: var(--texte);
+}
+
+.sousTitre {
+  margin-top: 8px;
+  font-size: 15px;
+  color: var(--doux);
+}
+
+.actions {
+  width: 100%;
+  margin-top: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.principal,
+.secondaire {
+  display: block;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.principal {
+  background: var(--vert);
+  color: #ffffff;
+}
+
+.secondaire {
+  border: 1.5px solid var(--vert);
+  color: var(--vert);
+}
+
+.note {
+  margin-top: 20px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--doux);
+}
