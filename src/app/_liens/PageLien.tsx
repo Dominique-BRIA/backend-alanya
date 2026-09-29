@@ -19,7 +19,7 @@ import styles from "./page-lien.module.css";
  * Pas de lien de téléchargement de l'APK pour le moment (décision du user).
  *
  * Dossier `_liens` : le soulignement le rend privé, Next ne le sert pas comme
- * une route. Il est partagé par `/u/<ID>` et, plus tard, `/i/<jeton>`.
+ * une route. Il est partagé par `/u/<ID>` et `/i/<jeton>`.
  */
 
 const PAQUET_ANDROID = "com.alanya237.work";

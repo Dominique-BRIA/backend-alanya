@@ -230,6 +230,26 @@ try {
     .update({ where: { jeton: j13 }, data: { utiliseeLe: new Date(), utiliseePar: C.id } })
     .then(() => true, () => false);
   verifie("témoin : une utilisation complète est acceptée", ok13);
+
+  titre("⑭ Page web de secours /i/<jeton>");
+  const ANDROID = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/128 Mobile Safari/537.36";
+  const page = async (j) => {
+    const r = await fetch(`${API}/i/${j}`, { headers: { "user-agent": ANDROID } });
+    return { statut: r.status, html: await r.text() };
+  };
+  const j14 = (await creer(A)).json.jeton;
+  const p14 = await page(j14);
+  verifie("valide : 200", p14.statut === 200, p14.statut);
+  verifie("valide : invitation annoncée", p14.html.includes("Vous êtes invité"));
+  verifie("valide : bouton d'ouverture Android", p14.html.includes(`intent://alanyavox.com/i/${j14}#Intent`));
+  verifie("ni le nom ni l'Alanya ID du créateur", !p14.html.includes(A.pseudo) && !p14.html.includes(A.publicNumber));
+  verifie("afficher la page ne consomme pas", (await ligne(j14)).utiliseeLe === null);
+  const p14u = await page(j1);
+  verifie("utilisée : plus valable, sans bouton d'ouverture", p14u.statut === 200 && p14u.html.includes("plus valable") && p14u.html.includes("déjà été utilisée") && !p14u.html.includes("intent://"), p14u.statut);
+  const p14e = await page(j8);
+  verifie("expirée : plus valable", p14e.html.includes("plus valable") && p14e.html.includes("expiré"));
+  verifie("inconnue : 404", (await page("AAAAAAAAAAAAAAAAAAAAAA")).statut === 404);
+  verifie("mal formée : 404", (await page("pas-un-jeton!")).statut === 404);
 } finally {
   // CASCADE : supprimer les comptes emporte leurs invitations, contacts,
   // blocages. Les conversations, elles, restent (sans participants utiles).
