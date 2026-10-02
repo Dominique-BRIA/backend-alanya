@@ -60,6 +60,8 @@ export function conditionMedias(userId: string, criteres: Criteres) {
       is: {
         senderId: { not: userId },
         deletedAt: null,
+        // Une vue unique ne s'archive pas : l'exporter la rendrait permanente.
+        vueUnique: false,
         type: { in: types as ("IMAGE" | "VIDEO" | "AUDIO" | "FILE")[] },
         ...(Object.keys(quand).length > 0 ? { createdAt: quand } : {}),
         conv: {

@@ -280,6 +280,12 @@ export const sendMessageSchema = z.object({
   mentionneTous: z.boolean().optional(),
 
   /**
+   * Photo, vidéo ou vocal À VUE UNIQUE. `creerMessage` vérifie le reste :
+   * type média, un seul fichier, aucune légende.
+   */
+  vueUnique: z.boolean().optional(),
+
+  /**
    * Le texte tapé après le « @ », sans le « @ ».
    *
    * Sert à surligner la mention à l'affichage. L'application parle neuf langues

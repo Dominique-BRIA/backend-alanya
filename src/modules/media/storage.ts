@@ -3,7 +3,13 @@ import path from "path";
 import crypto from "crypto";
 import { env } from "@/lib/env";
 import { HttpError } from "@/lib/http";
-import { uploadToB2, getB2SignedUrl, readFromB2, deleteFromB2 } from "./b2";
+import {
+  uploadToB2,
+  getB2SignedUrl,
+  readFromB2,
+  deleteFromB2,
+  effacerToutesLesVersionsB2,
+} from "./b2";
 import {
   deleteFromB2Public,
   publicConfigure,
@@ -306,5 +312,38 @@ export async function deleteStored(
     }
   } catch {
     /* best-effort : fichier déjà absent ou inaccessible */
+  }
+}
+
+/**
+ * EFFACE UN BINAIRE POUR DE BON, ET LÈVE SI ÇA ÉCHOUE.
+ *
+ * Le pendant strict de `deleteStored`, pour les médias qu'on a PROMIS
+ * d'effacer (vue unique). Deux différences, et elles sont tout l'objet :
+ *
+ *   - sur B2, toutes les versions partent, pas seulement la version visible
+ *     (voir `effacerToutesLesVersionsB2`) ;
+ *   - une panne remonte : l'appelant garde alors la ligne en base, et la
+ *     purge suivante retente. `deleteStored` avalerait l'erreur, et la ligne
+ *     effacée ferait croire à une suppression qui n'a jamais eu lieu.
+ *
+ * Un fichier DÉJÀ absent n'est pas une panne : le but est atteint.
+ */
+export async function effacerDefinitivement(
+  relativeUrl: string,
+  espace: string | null = null,
+): Promise<void> {
+  if (espace === "public" && publicConfigure()) {
+    await deleteFromB2Public(relativeUrl);
+    return;
+  }
+  if (useCloudStorage()) {
+    await effacerToutesLesVersionsB2(relativeUrl);
+    return;
+  }
+  try {
+    await fs.unlink(path.join(storageRoot(), relativeUrl));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }

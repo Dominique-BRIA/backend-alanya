@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
+import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
 
 /**
  * LE CŒUR D'ENVOI D'UN MESSAGE — partagé par la route de conversation et par
@@ -49,7 +50,8 @@ export type ResultatEnvoi =
         // Le chemin chiffre a presente du texte, ce qu il ne doit jamais faire.
         | "CONTENU_EN_CLAIR"
         // Le message cité n'est pas dans cette conversation.
-        | "CITATION_ETRANGERE";
+        | "CITATION_ETRANGERE"
+        | "VUE_UNIQUE_INVALIDE";
     };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
@@ -156,6 +158,7 @@ export async function creerMessage(params: {
   /// n'apporte pas de texte ». La garde ci-dessous refuse quand même si un
   /// contenu l'accompagne.
   chiffre?: boolean;
+  vueUnique?: boolean;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
 
@@ -218,7 +221,7 @@ export async function creerMessage(params: {
    */
   const longueur = tronqueContenu(type, params.content ?? null);
   if (longueur.refuse) return { ok: false, motif: "CONTENU_TROP_LONG" };
-  const content = longueur.contenu;
+  const content = params.vueUnique === true ? null : longueur.contenu;
 
   /*
    * Blocage. On répond par un refus, jamais par un faux succès : mentir à
@@ -281,6 +284,28 @@ export async function creerMessage(params: {
       where: { id: { in: idsMedias }, ownerId: expediteurId },
     });
     if (possedes !== idsMedias.length) return { ok: false, motif: "MEDIA_ETRANGER" };
+
+    /*
+     * 🔴 UN MÉDIA À VUE UNIQUE NE REPART PAS. Le rattacher à un nouveau
+     * message (transfert, renvoi) le DÉPLACERAIT — `connect` change sa ligne
+     * de message — et le rendrait lisible sans limite à de nouveaux
+     * destinataires, alors qu'il devait disparaître après une vue.
+     */
+    const deVueUnique = await prisma.mediaFile.count({
+      where: { id: { in: idsMedias }, message: { is: { vueUnique: true } } },
+    });
+    if (deVueUnique > 0) return { ok: false, motif: "MEDIA_ETRANGER" };
+  }
+
+  /*
+   * LA VUE UNIQUE : une photo, une vidéo ou un vocal, UN seul fichier, SANS
+   * légende — comme WhatsApp. Une légende resterait lisible dans la bulle, la
+   * liste des discussions et la notification bien après l'effacement du
+   * média ; un lot de photos n'aurait pas une seule « vue ».
+   */
+  const vueUnique = params.vueUnique === true;
+  if (vueUnique && (!TYPES_VUE_UNIQUE.has(type) || idsMedias.length !== 1)) {
+    return { ok: false, motif: "VUE_UNIQUE_INVALIDE" };
   }
 
   // Messages éphémères : l'expiration suit le réglage de la conversation.
@@ -328,6 +353,7 @@ export async function creerMessage(params: {
      */
     mentionneTous,
     mentionTousLibelle: mentionneTous ? (params.mentionTousLibelle ?? "").trim().slice(0, 80) : null,
+    vueUnique,
   });
 
   /*
@@ -431,5 +457,9 @@ export function serialiserMessage(message: Awaited<ReturnType<typeof creerLigneM
       libelle: m.libelle,
     })),
     createdAt: message.createdAt,
+    // Juste créé : personne n'a encore ouvert, le fichier est là.
+    ...(message.vueUnique
+      ? { vueUnique: true, vueUniqueOuverte: false, vueUniqueEffacee: false }
+      : {}),
   };
 }

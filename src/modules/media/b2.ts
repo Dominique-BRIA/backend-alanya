@@ -13,6 +13,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectVersionsCommand,
   HeadBucketCommand,
   type PutObjectCommandInput,
 } from "@aws-sdk/client-s3";
@@ -133,6 +134,38 @@ export async function deleteFromB2(relativeUrl: string): Promise<void> {
   await getB2().send(
     new DeleteObjectCommand({ Bucket: env.media.b2.bucket, Key: fullKey(relativeUrl) }),
   );
+}
+
+/**
+ * EFFACE UN OBJET POUR DE BON : toutes ses versions, et ses marqueurs de
+ * suppression. Rend le nombre de versions effacées.
+ *
+ * 🔴 `deleteFromB2` NE SUFFIT PAS QUAND IL FAUT QUE LE FICHIER DISPARAISSE.
+ * Un bucket B2 garde par défaut TOUTES les versions d'un fichier : un
+ * `DeleteObject` sans version n'efface rien, il pose un marqueur qui CACHE
+ * l'objet. Les octets restent dans le bucket, récupérables par quiconque
+ * détient la clé. Pour une photo à vue unique, c'est exactement ce qu'on a
+ * promis de ne pas faire.
+ *
+ * ⚠️ ELLE LÈVE, contrairement à `deleteFromB2` : un échec doit se voir et
+ * laisser la ligne en base, pour que la purge suivante réessaie.
+ *
+ * ⚠️ On ne retient que la clé EXACTE : `Prefix` ramène aussi `a.jpg.bak`.
+ */
+export async function effacerToutesLesVersionsB2(relativeUrl: string): Promise<number> {
+  const cle = fullKey(relativeUrl);
+  const liste = await getB2().send(
+    new ListObjectVersionsCommand({ Bucket: env.media.b2.bucket, Prefix: cle }),
+  );
+  const versions = [...(liste.Versions ?? []), ...(liste.DeleteMarkers ?? [])].filter(
+    (v) => v.Key === cle && v.VersionId,
+  );
+  for (const v of versions) {
+    await getB2().send(
+      new DeleteObjectCommand({ Bucket: env.media.b2.bucket, Key: cle, VersionId: v.VersionId }),
+    );
+  }
+  return versions.length;
 }
 
 // Vérifie que le bucket existe et que les identifiants sont valides.

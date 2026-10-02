@@ -1116,6 +1116,16 @@ model Message {
   /// liste, comme toute relation inverse.
   epingles           MessagePinned[]
 
+  /// Photo, vidéo ou vocal À VUE UNIQUE : chaque destinataire l'ouvre une
+  /// fois, puis le fichier est EFFACÉ du stockage (02/10/2026).
+  ///
+  /// 🔴 L'EXPÉDITEUR NE PEUT PAS LE ROUVRIR, comme sur WhatsApp. La route des
+  /// médias le refuse à tous, sauf au destinataire qui vient de l'ouvrir.
+  /// Voir `src/modules/messaging/vue-unique.ts` et
+  /// `prisma/manual/2026-10_vue_unique.sql`.
+  vueUnique          Boolean            @default(false) @map("vue_unique")
+  ouvertures         MessageOuverture[]
+
   @@index([convId, createdAt])
   @@index([senderId])
   @@index([appareilId])
@@ -1123,6 +1133,29 @@ model Message {
   /// etre declare ici : supprime par un `db push` le 06/08/2026.
   @@index([expiresAt])
   @@map("message")
+}
+
+/// QUI A OUVERT UN MESSAGE À VUE UNIQUE, et quand.
+///
+/// Une ligne par (message, destinataire). Sa présence FERME l'accès : passé
+/// la fenêtre d'ouverture, ou dès la fermeture du visionneur, le média n'est
+/// plus servi à cette personne. Quand tous les destinataires ont la leur, le
+/// fichier est effacé du stockage.
+///
+/// ⚠️ PAS DE RELATION VERS `User`, à dessein, comme `MessageMention` : la base
+/// est partagée, un compte peut y disparaître par un chemin que nous ne
+/// contrôlons pas.
+model MessageOuverture {
+  messageId String    @map("idMessage") @db.Uuid
+  userId    String    @db.Uuid
+  ouvertA   DateTime  @default(now()) @db.Timestamptz
+  /// Le visionneur a été refermé. `null` tant qu'il est ouvert — ou que
+  /// l'application s'est arrêtée avant de le dire (la fenêtre fait foi).
+  fermeA    DateTime? @db.Timestamptz
+  message   Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
+  @@map("message_ouverture")
 }
 
 /// UNE MENTION `@` DANS UN MESSAGE DE GROUPE.

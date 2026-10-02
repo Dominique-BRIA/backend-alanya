@@ -6,6 +6,7 @@ import { sendMessageSchema } from "@/lib/validation";
 import { MEDIA_ORDONNE } from "@/lib/media-ordre";
 import { assertParticipant } from "@/modules/messaging/access";
 import { creerMessage, serialiserMessage } from "@/modules/messaging/envoi";
+import { etatVueUnique } from "@/modules/messaging/vue-unique";
 import {
   reserverEnvoi,
   confirmerEnvoi,
@@ -81,6 +82,8 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
        * alourdirait chaque page d historique.
        */
       _count: { select: { e2eeEnveloppes: true } },
+      // Qui a ouvert les messages à vue unique : « Ouverte » chez l'expéditeur.
+      ouvertures: { select: { userId: true } },
     },
   });
 
@@ -214,6 +217,7 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
           durationMs: f.durationMs,
         })),
         createdAt: m.createdAt,
+        ...etatVueUnique(m, userId),
         // Absent — et non pas vide — quand le lecteur n'a pas à le voir.
         // Le pseudo ET l'appareil qui a envoyé, dans la même charge restreinte
         // au compte. L'appareil sert au client à se reconnaître : un poste
@@ -342,6 +346,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     mentionneTous: body.mentionneTous,
     mentionTousLibelle: body.mentionTousLibelle,
     chiffre: body.chiffre,
+    vueUnique: body.vueUnique,
   });
 
   if (!envoi.ok) {
@@ -374,6 +379,13 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
           "pas encore y écrire.",
         409,
         "CONVERSATION_CHIFFREE",
+      );
+    }
+    if (envoi.motif === "VUE_UNIQUE_INVALIDE") {
+      return fail(
+        "Vue unique : une seule photo, vidéo ou vocal, sans légende.",
+        422,
+        "VUE_UNIQUE_INVALIDE",
       );
     }
     if (envoi.motif === "CITATION_ETRANGERE") {

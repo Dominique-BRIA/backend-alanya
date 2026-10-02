@@ -14,6 +14,7 @@ import {
   useCloudStorage as stockageNuage,
 } from "@/modules/media/storage";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
+import { vueUniqueServie } from "@/modules/messaging/vue-unique";
 
 
 // Récupère l'userId via le Bearer OU via ?token= (utile pour le côté web,
@@ -74,6 +75,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       include: { message: { include: { conv: { include: { participants: true } } } } },
     });
     if (!media) return fail("Média introuvable", 404, "NOT_FOUND");
+
+    /*
+     * 🔴 VUE UNIQUE : AVANT TOUTE AUTRE RÈGLE. Être propriétaire du fichier ou
+     * membre de la conversation ne suffit plus — l'expéditeur ne rouvre pas
+     * son envoi, et un destinataire ne le voit que pendant son ouverture
+     * (`POST /api/messages/:id/vue-unique`). Une vignette préchargée serait
+     * déjà une vue volée.
+     */
+    if (media.message?.vueUnique) {
+      if (!(await vueUniqueServie(media.message.id, media.message.senderId, userId))) {
+        return fail("Message à vue unique : accès fermé", 403, "VUE_UNIQUE");
+      }
+    }
 
     const isOwner = media.ownerId === userId;
     const isParticipant =

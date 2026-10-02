@@ -919,6 +919,9 @@ async function serializeMessage(m, media) {
     createdAt: m.createdAt,
     editedAt: m.editedAt ?? null,
     expiresAt: m.expiresAt ?? null,
+    // Vue unique : diffusée à l'envoi, donc encore ni ouverte ni effacée.
+    // Jumeau de `etatVueUnique` côté API.
+    ...(m.vueUnique ? { vueUnique: true, vueUniqueOuverte: false, vueUniqueEffacee: false } : {}),
   };
 
   // MODIFICATION : inclut les médias du message cité pour le preview reply
@@ -926,7 +929,14 @@ async function serializeMessage(m, media) {
     // ⚠️ `convId` AUSSI : une citation d'un autre fil ne rend pas son texte.
     const target = await prisma.message.findFirst({
       where: { id: m.replyToId, convId: m.convId },
-      select: { senderId: true, content: true, type: true, deletedAt: true, media: true },
+      select: {
+        senderId: true,
+        content: true,
+        type: true,
+        deletedAt: true,
+        media: true,
+        vueUnique: true,
+      },
     });
     if (target) {
       base.replyTo = {
@@ -935,7 +945,9 @@ async function serializeMessage(m, media) {
         type: target.type,
         content: target.deletedAt ? null : target.content,
         isDeleted: target.deletedAt !== null,
-        media: (target.media ?? []).slice(0, 1).map((f) => ({
+        // Citer une vue unique ne montre pas sa vignette : « Photo » suffit.
+        ...(target.vueUnique ? { vueUnique: true } : {}),
+        media: (target.vueUnique ? [] : target.media ?? []).slice(0, 1).map((f) => ({
           id: f.id,
           url: `/api/media/${f.id}`,
           filename: f.filename,
@@ -1239,6 +1251,36 @@ async function handleSend(ws, msg) {
   }
 
   /*
+   * LA VUE UNIQUE — mêmes règles que `creerMessage` côté API : une photo, une
+   * vidéo ou un vocal, UN seul fichier, SANS légende. Et un média déjà porté
+   * par une vue unique ne repart pas (`connect` le déplacerait).
+   */
+  const vueUnique = msg.vueUnique === true;
+  if (uniqueMediaIds.length > 0) {
+    const deVueUnique = await prisma.mediaFile.count({
+      where: { id: { in: uniqueMediaIds }, message: { is: { vueUnique: true } } },
+    });
+    if (deVueUnique > 0) {
+      ws.send(JSON.stringify({ type: "error", message: "Media invalide", tempId }));
+      return;
+    }
+  }
+  if (vueUnique) {
+    if (!["IMAGE", "VIDEO", "AUDIO"].includes(type) || uniqueMediaIds.length !== 1) {
+      ws.send(
+        JSON.stringify({
+          type: "error",
+          code: "VUE_UNIQUE_INVALIDE",
+          message: "Vue unique : une seule photo, video ou vocal, sans legende.",
+          tempId,
+        }),
+      );
+      return;
+    }
+    content = null;
+  }
+
+  /*
    * LA CONVERSATION, LUE UNE FOIS POUR TOUT L'ENVOI.
    *
    * ⚠️ Cette lecture servait à la seule expiration des messages éphémères, et la
@@ -1464,6 +1506,7 @@ async function handleSend(ws, msg) {
       ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
       mentionneTous,
       mentionTousLibelle,
+      vueUnique,
       // En UNE ecriture, comme les mentions : un message cree puis une
       // insertion ratee laisserait une reponse qui ne cite plus rien.
       ...(citationStatut ? { statusQuote: { create: citationStatut } } : {}),
@@ -3935,6 +3978,9 @@ async function handleForwardMessage(ws, msg) {
     include: { media: MEDIA_ORDONNE },
   });
   if (!original || original.deletedAt) return;
+  // 🔴 UNE VUE UNIQUE NE SE TRANSFÈRE PAS : la copie pointerait vers le même
+  // fichier, lisible sans limite par de nouveaux destinataires.
+  if (original.vueUnique) return;
 
   if (!(await isParticipant(original.convId, ws.userId))) return;
 
@@ -5028,7 +5074,10 @@ const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
 /// vocabulaire doit l'etre moins. Rien ici ne doit pouvoir fabriquer un
 /// `message`, un `ready` ou un `error` — des trames que les clients traitent
 /// a part et qui changeraient leur etat.
-const PONT_VERBE_PERSONNES = /^e2ee_[a-z0-9_]+$/;
+///
+/// `vue_unique_*` (02/10/2026) : « ouverte » et « effacee », deux sonnettes
+/// d'identifiants pour les messages à vue unique — aucune ne change un message.
+const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique)_[a-z0-9_]+$/;
 
 /// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
 /// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines
