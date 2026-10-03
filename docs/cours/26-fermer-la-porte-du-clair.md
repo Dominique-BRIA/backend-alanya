@@ -174,7 +174,55 @@ La leçon : un banc qu'on ne relance pas finit par mentir.
   fichier, le chiffrer, l'envoyer. C'est un chantier à part.
 - La vérification sur un vrai téléphone.
 
-## 7. À retenir
+## 7. Le vrai coupable du chargement sans fin
+
+Après le déploiement, le téléphone affichait toujours ses photos chiffrées
+floues, avec un chargement qui ne finissait pas. La grille avait pourtant été
+corrigée (chapitre 25).
+
+**Une piste séduisante, et fausse.** Le téléchargement du mobile n'avait ni
+délai, ni en-tête `Authorization`, et mettait le jeton dans l'adresse. Le
+soupçon : un jeton mal encodé, refusé, et un serveur qui ne répond plus.
+Vérifié avant de corriger :
+
+- un JWT est en base64url : il ne contient ni `+` ni `/`, rien à encoder ;
+- le serveur répond en moins d'une seconde, en JSON (401 sans jeton, 400 avec
+  un faux). Rien ne reste ouvert.
+
+**Le test qui a parlé.** Un test contre un vrai petit serveur local, qui
+répondait 401 tout de suite. La fonction d'ouverture levait bien son erreur,
+passait bien par `finally`… et l'appelant n'était jamais prévenu.
+
+**La cause, en une ligne :**
+
+```dart
+_ouvrir(d, baseUrl, token).whenComplete(() => _enCours.remove(d.id));
+```
+
+- la flèche `=>` RENVOIE ce que `remove` rend : la valeur retirée de la
+  table, c'est-à-dire **ce Future-là** ;
+- `whenComplete` **attend** tout Future que son rappel renvoie ;
+- le Future s'attendait donc lui-même. Il ne finissait jamais, ni en succès ni
+  en erreur — même quand le fichier était déjà dans le cache.
+
+La correction tient en deux accolades : un corps qui ne renvoie rien.
+
+```dart
+_ouvrir(d, baseUrl, token).whenComplete(() {
+  _enCours.remove(d.id);
+});
+```
+
+**Pourquoi aucun banc ne l'a vu.** Le banc d'interopérabilité (web → mobile)
+appelait directement la fonction de déchiffrement, sans passer par
+`ouvrir`. Il prouvait que le mobile savait déchiffrer, pas que l'écran
+recevait le résultat.
+
+**Gardé quand même :** un délai d'inactivité de 30 s, deux nouvelles
+tentatives et le jeton en en-tête, comme pour les autres médias. Ce n'était
+pas la cause, mais une connexion muette aurait produit le même symptôme.
+
+## 8. À retenir
 
 - Une règle, un fichier, **tous** les chemins qui écrivent.
 - Ce que le serveur vérifie se lit **en base**, jamais dans la parole du
@@ -183,3 +231,8 @@ La leçon : un banc qu'on ne relance pas finit par mentir.
   **avant**.
 - Ce qui doit rester attaché au contenu voyage **dans** le chiffré.
 - Chaque refus a son témoin, et un banc se relance.
+- Une hypothèse se vérifie avant de se corriger, même quand elle est
+  plausible.
+- Un banc doit passer par le chemin de l'écran, pas à côté.
+- `=>` renvoie toujours quelque chose : dans un rappel, ce « quelque chose »
+  peut être attendu.

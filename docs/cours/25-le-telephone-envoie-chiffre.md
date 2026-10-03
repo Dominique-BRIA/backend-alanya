@@ -108,6 +108,10 @@ que la grille ordinaire.
   plutôt que d'en perdre une ;
 - **quatre tuiles au plus**, « +N » sur la quatrième, qui ouvre le lot entier.
 
+> ⚠️ **Ce n'était que la moitié de l'histoire.** Même corrigée, la grille
+> continuait de tourner : la vraie cause était un Future qui s'attendait
+> lui-même. Voir le chapitre 26, section 7.
+
 **La leçon.** Le chiffrement avait été branché là où un média s'affiche… seul.
 Chaque endroit qui affiche un média — bulle, grille, réponse citée, galerie —
 doit être passé en revue : un seul oubli, et c'est le fichier chiffré qu'on
