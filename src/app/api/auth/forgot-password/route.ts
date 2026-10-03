@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { emailSchema } from "@/lib/validation";
 import { generateOtpCode, hashOtp } from "@/lib/otp";
-import { sendOtpEmail } from "@/lib/mailer";
+import { MOTIF, sendOtpEmail } from "@/lib/mailer";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 // POST /api/auth/forgot-password
@@ -22,14 +22,23 @@ export async function POST(req: NextRequest) {
     if (user) {
       const code = generateOtpCode();
       const codeHash = await hashOtp(code);
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const dureeMinutes = 10;
+      const expiresAt = new Date(Date.now() + dureeMinutes * 60 * 1000);
 
       await prisma.emailVerification.create({
         data: { email, codeHash, expiresAt },
       });
 
       // ATTEND que l'email soit parti (sinon Vercel tue la fonction serverless trop tôt)
-      const envoi = await sendOtpEmail(email, code);
+      /*
+       * ⚠️ LA DURÉE ANNONCÉE EST CELLE DU CODE. Le courriel affichait la durée
+       * générale (`OTP_TTL_MINUTES`) alors que ce code-ci expire en 10 minutes :
+       * dès que les deux différaient, le message promettait un délai faux.
+       */
+      const envoi = await sendOtpEmail(email, code, dureeMinutes, {
+        motif: MOTIF.MOT_DE_PASSE,
+        langue: req.headers.get("accept-language"),
+      });
       /*
        * 🔴 ICI, ON NE REMONTE PAS L'ÉCHEC — à la différence de l'inscription.
        *

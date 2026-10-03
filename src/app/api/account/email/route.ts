@@ -5,7 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { emailSchema } from "@/lib/validation";
 import { generateOtpCode, hashOtp } from "@/lib/otp";
-import { sendOtpEmail } from "@/lib/mailer";
+import { MOTIF, sendOtpEmail } from "@/lib/mailer";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { verifyPassword } from "@/lib/password";
 import { z } from "zod";
@@ -103,7 +103,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   // n'a pas lieu d'être — c'est l'utilisateur lui-même qui donne son adresse,
   // il n'y a rien à lui cacher, et le taire le laisserait attendre un courriel
   // qui n'arrivera jamais.
-  const envoi = await sendOtpEmail(email, code);
+  // Par Bird, comme tout ce qui n'ouvre pas ou ne rend pas un compte.
+  const envoi = await sendOtpEmail(email, code, env.otp.ttlMinutes, {
+    motif: MOTIF.CHANGEMENT_ADRESSE,
+    langue: req.headers.get("accept-language"),
+  });
   if (!envoi.remis) {
     return fail(
       "Impossible d'envoyer le code de confirmation. Réessayez dans un instant.",

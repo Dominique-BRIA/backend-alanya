@@ -238,13 +238,14 @@ contrôle d'accès. Ne construisez pas d'URL de stockage vous-même.
 
 ### Émettre
 
-`POST /api/v1/verifications` — `{ finalite, destination, canal? }`
+`POST /api/v1/verifications` — `{ finalite, destination, canal?, langue? }`
 
 | Champ | Valeurs |
 |---|---|
 | `finalite` | `AUTH_2FA` · `CREATION_AGENT` · `VALIDATION_CONTACT` |
 | `destination` | adresse courriel, ou numéro selon le canal |
 | `canal` | `EMAIL` · `ALANYA` — par défaut `EMAIL` pour `AUTH_2FA` |
+| `langue` | `fr` · `en` · `es` · `de` · `pt` · `ru` · `zh` · `sv` · `no` — langue du courriel. Absente : en-tête `Accept-Language`, sinon français |
 
 ```json
 { "id": "…", "finalite": "AUTH_2FA", "canal": "EMAIL",

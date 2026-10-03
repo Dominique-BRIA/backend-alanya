@@ -9,10 +9,12 @@ const CHEMIN = "/api/v1/verifications";
 /**
  * POST /api/v1/verifications — émet un code de vérification et le livre.
  *
- * Corps : `{ finalite, destination, canal? }`
+ * Corps : `{ finalite, destination, canal?, langue? }`
  *   `finalite`    AUTH_2FA | CREATION_AGENT | VALIDATION_CONTACT
  *   `destination` adresse courriel ou numéro, selon le canal
  *   `canal`       EMAIL | ALANYA — par défaut EMAIL pour AUTH_2FA
+ *   `langue`      fr | en | es | de | pt | ru | zh | sv | no — langue du
+ *                 courriel. Absente : `Accept-Language`, sinon le français.
  *
  * 🔴 LA RÉPONSE NE CONTIENT JAMAIS LE CODE. C'est nous qui livrons ; un canal
  * « délégué » rendant le code à l'appelant a été envisagé puis écarté, parce
@@ -35,6 +37,12 @@ async function emettre(req: NextRequest, cle: CleAuthentifiee): Promise<Response
   const finalite = body.finalite?.toString().trim();
   const destination = body.destination?.toString().trim();
   const canal = body.canal?.toString().trim() || null;
+  /*
+   * La langue du courriel : le champ `langue` quand la plateforme le donne —
+   * elle connaît la langue de SON utilisateur —, sinon l'en-tête
+   * `Accept-Language` de la requête, sinon le français.
+   */
+  const langue = body.langue?.toString().trim() || req.headers.get("accept-language");
 
   if (!finalite || !destination) {
     return fail(
@@ -61,6 +69,7 @@ async function emettre(req: NextRequest, cle: CleAuthentifiee): Promise<Response
     destination,
     canal,
     ip,
+    langue,
   });
 
   if (!r.ok) {

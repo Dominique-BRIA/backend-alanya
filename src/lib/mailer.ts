@@ -1,6 +1,11 @@
 import nodemailer from "nodemailer";
 import { env } from "./env";
-import { choisirFournisseur, envoyerParPostmark } from "./courriel.mjs";
+import { choisirFournisseur, envoyerParBird, envoyerParPostmark } from "./courriel.mjs";
+import { contenuCode, etiquetteDuMotif, MOTIF } from "./courriel-contenu.mjs";
+
+/** Pourquoi un code part : décide du texte ET du fournisseur. */
+export type MotifCourriel = (typeof MOTIF)[keyof typeof MOTIF];
+export { MOTIF };
 
 let transporter: nodemailer.Transporter | null = null;
 
@@ -25,10 +30,12 @@ function getTransporter(): nodemailer.Transporter | null {
 // la répéter à chaque code noierait les journaux sans rien apprendre de plus.
 let valeurInconnueSignalee = false;
 
-function fournisseur() {
+function fournisseur(motif: MotifCourriel) {
   const choix = choisirFournisseur({
     provider: env.mail.provider(),
+    motif,
     jetonPostmark: env.mail.postmark.serverToken(),
+    cleBird: env.mail.bird.apiKey(),
     smtpConfigure: smtpConfigure(),
   });
   if (choix.inconnu && !valeurInconnueSignalee) {
@@ -38,28 +45,18 @@ function fournisseur() {
   return choix;
 }
 
-function otpContent(code: string, dureeMinutes: number) {
-  const subject = "Votre code de confirmation Alanya";
-  const text = `Bienvenue sur Alanya !\n\nVotre code de confirmation est : ${code}\n\nIl expire dans ${dureeMinutes} minutes.\n\nSi vous n'avez pas demandé ce code, ignorez cet email.`;
-  const html = `
-    <div style="font-family:sans-serif;max-width:420px;margin:auto;padding:24px">
-      <h2 style="color:#8a4b2b;margin-bottom:4px">Alanya</h2>
-      <p style="color:#444">Votre code de confirmation :</p>
-      <p style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#8a4b2b;
-                background:#fff8f4;border-radius:12px;padding:16px;text-align:center;
-                border:2px solid #e0b59a">${code}</p>
-      <p style="color:#888;font-size:13px">Ce code expire dans ${dureeMinutes} minutes.</p>
-      <p style="color:#aaa;font-size:12px">Si vous n'avez pas demandé ce code, ignorez cet email.</p>
-    </div>`;
-  return { subject, text, html };
-}
-
 /** Résultat d'un envoi. `false` veut dire « rien n'est parti ». */
 export type ResultatEnvoi = { remis: boolean; detail?: string };
 
 /**
- * Envoie un code par courriel, par Postmark ou par le relais SMTP selon
- * `MAIL_PROVIDER` (voir `choisirFournisseur`, src/lib/courriel.mjs).
+ * Envoie un code par courriel, par Postmark, par Bird ou par le relais SMTP
+ * selon le MOTIF et `MAIL_PROVIDER` (voir `choisirFournisseur`,
+ * src/lib/courriel.mjs).
+ *
+ * 🔴 LE MOTIF DÉCIDE DU TEXTE ET DU FOURNISSEUR (03/10/2026). Un seul texte
+ * français partait pour tout — « Bienvenue sur Alanya ! » y compris pour un mot
+ * de passe oublié. Chaque motif a désormais le sien, dans la langue que le
+ * client déclare (`Accept-Language`) : voir `courriel-contenu.mjs`.
  *
  * 🔴 DEUX DÉFAUTS CORRIGÉS ICI LE 18/08/2026, tous deux devenus critiques du
  * jour où ce code garde une DOUBLE AUTHENTIFICATION.
@@ -88,22 +85,43 @@ export async function sendOtpEmail(
   to: string,
   code: string,
   dureeMinutes: number = env.otp.ttlMinutes,
+  options: {
+    motif?: MotifCourriel;
+    /** Code de langue ou en-tête `Accept-Language` complet. Absent = français. */
+    langue?: string | null;
+  } = {},
 ): Promise<ResultatEnvoi> {
-  const { subject, text, html } = otpContent(code, dureeMinutes);
-  const choix = fournisseur();
+  const motif = options.motif ?? MOTIF.INSCRIPTION;
+  const { subject, text, html } = contenuCode({ motif, code, dureeMinutes, langue: options.langue });
+  const tag = etiquetteDuMotif(motif);
+  const choix = fournisseur(motif);
 
   if (choix.fournisseur === "postmark") {
     const resultat = await envoyerParPostmark(
-      { to, subject, text, html, tag: "code-verification" },
+      { to, subject, text, html, tag },
       {
         jeton: env.mail.postmark.serverToken(),
         expediteur: env.mail.postmark.from(),
         flux: env.mail.postmark.messageStream(),
       },
     );
-    // Le destinataire, jamais le code.
-    if (resultat.remis) console.log(`[mailer] code envoyé par Postmark à ${to}`);
-    else console.error("[mailer] échec Postmark :", resultat.detail);
+    // Le destinataire et le motif, jamais le code.
+    if (resultat.remis) console.log(`[mailer] ${tag} envoyé par Postmark à ${to}`);
+    else console.error(`[mailer] échec Postmark (${tag}) :`, resultat.detail);
+    return resultat;
+  }
+
+  if (choix.fournisseur === "bird") {
+    const resultat = await envoyerParBird(
+      { to, subject, text, html, tag },
+      {
+        cle: env.mail.bird.apiKey(),
+        hote: env.mail.bird.apiUrl(),
+        expediteur: env.mail.bird.from(),
+      },
+    );
+    if (resultat.remis) console.log(`[mailer] ${tag} envoyé par Bird à ${to}`);
+    else console.error(`[mailer] échec Bird (${tag}) :`, resultat.detail);
     return resultat;
   }
 

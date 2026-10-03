@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 import { ok, fail, handleError } from "@/lib/http";
 import { registerSchema } from "@/lib/validation";
 import { generateOtpCode, hashOtp } from "@/lib/otp";
-import { sendOtpEmail } from "@/lib/mailer";
+import { MOTIF, sendOtpEmail } from "@/lib/mailer";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 import { generateUniquePublicNumber } from "@/lib/publicNumber";
 import { genererIdRecuperationUnique } from "@/lib/id-recuperation";
@@ -82,7 +82,12 @@ export async function POST(req: NextRequest) {
      * « code envoyé » à quelqu'un qui attendra un courriel qui n'arrivera
      * jamais, et qui n'aura aucune raison de réessayer.
      */
-    const envoi = await sendOtpEmail(email, code);
+    // Par Postmark (création de compte), dans la langue que l'application
+    // déclare — `Accept-Language`, posé par le web et le mobile.
+    const envoi = await sendOtpEmail(email, code, env.otp.ttlMinutes, {
+      motif: MOTIF.INSCRIPTION,
+      langue: req.headers.get("accept-language"),
+    });
     if (!envoi.remis) {
       return fail(
         "Impossible d'envoyer le code de confirmation. Réessayez dans un instant.",

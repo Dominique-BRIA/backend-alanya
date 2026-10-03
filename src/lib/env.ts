@@ -39,8 +39,10 @@ export const env = {
 
   /// Courrier sortant. Qui envoie : `choisirFournisseur` (src/lib/courriel.mjs).
   mail: {
-    // postmark | smtp | auto. Absent = auto : Postmark dès que son jeton est
-    // posé, sinon SMTP. `smtp` force l'ancien relais — c'est le retour arrière.
+    // auto | postmark | bird | smtp. Absent = auto : chaque courriel part par
+    // SON fournisseur (`VOIE_DU_MOTIF`, src/lib/courriel.mjs) dès que la clé de
+    // celui-ci est posée, sinon par SMTP. `postmark` ou `bird` forcent tout vers
+    // l'un d'eux (secours) ; `smtp` force l'ancien relais — le retour arrière.
     provider: () => optional("MAIL_PROVIDER", "auto"),
     host: optional("SMTP_HOST"),
     port: Number(optional("SMTP_PORT", "587")),
@@ -56,10 +58,22 @@ export const env = {
       // compte. Il ne sait qu'envoyer — contrairement au mot de passe Gmail.
       serverToken: () => optional("POSTMARK_SERVER_TOKEN"),
       // Doit appartenir à un domaine VÉRIFIÉ dans Postmark (DKIM posé), sinon
-      // chaque envoi est refusé (ErrorCode 400).
-      from: () => optional("POSTMARK_FROM", "Alanya <no-reply@alanyavox.com>"),
+      // chaque envoi est refusé (ErrorCode 400). `alanya.cloud` l'est ; choisi
+      // par le user le 03/10/2026, comme l'expéditeur de Bird.
+      from: () => optional("POSTMARK_FROM", "Alanya Work <info@alanya.cloud>"),
       // Flux transactionnel créé d'office avec chaque serveur Postmark.
       messageStream: () => optional("POSTMARK_MESSAGE_STREAM", "outbound"),
+    },
+
+    bird: {
+      // Clé d'API de l'espace Bird (`bk_<région>_…`). Elle porte sa région :
+      // l'hôte de l'API en est déduit (`hoteBird`, src/lib/courriel.mjs).
+      apiKey: () => optional("BIRD_API_KEY"),
+      // Facultatif : force l'hôte de l'API si Bird en change un jour.
+      apiUrl: () => optional("BIRD_API_URL"),
+      // Doit appartenir à un domaine VÉRIFIÉ chez Bird, sinon 422. Au
+      // 03/10/2026, le seul vérifié est `alanya.cloud`.
+      from: () => optional("BIRD_FROM", "Alanya Work <info@alanya.cloud>"),
     },
   },
 

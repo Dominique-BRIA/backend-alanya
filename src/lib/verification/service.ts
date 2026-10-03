@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
-import { sendOtpEmail } from "@/lib/mailer";
+import { MOTIF, sendOtpEmail, type MotifCourriel } from "@/lib/mailer";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import {
   CANAL,
@@ -87,6 +87,8 @@ export async function emettreCode(params: {
   destination: string;
   canal?: string | null;
   ip?: string | null;
+  /** Langue du courriel : code (`"en"`) ou en-tête `Accept-Language`. */
+  langue?: string | null;
 }): Promise<ResultatEmission> {
   const { developerId, finalite, destination } = params;
 
@@ -169,7 +171,14 @@ export async function emettreCode(params: {
   // La livraison est CONSTATÉE, jamais supposée : c'est ce qui distingue cette
   // implémentation de l'ancienne, qui répondait « envoyé avec succès » alors
   // que rien ne partait pour un destinataire sans compte Alanya.
-  const remise = await livrer(canal, destination, code, politique.dureeSecondes / 60, compte.userId);
+  const remise = await livrer(
+    canal,
+    destination,
+    code,
+    politique.dureeSecondes / 60,
+    compte.userId,
+    { motif: MOTIF_DE_LA_FINALITE[finalite] ?? MOTIF.VALIDATION_CONTACT, langue: params.langue },
+  );
 
   await prisma.verification.update({
     where: { id: ligne.id },
@@ -185,6 +194,19 @@ export async function emettreCode(params: {
   return { ok: true, id: ligne.id, expireA, canal };
 }
 
+/**
+ * Le texte et le fournisseur du courriel, selon la finalité du code.
+ *
+ * La création d'un compte agent part par Postmark, comme une inscription
+ * (décision du user, 03/10/2026) ; la double authentification et la
+ * confirmation d'adresse, par Bird. Voir `VOIE_DU_MOTIF`, src/lib/courriel.mjs.
+ */
+const MOTIF_DE_LA_FINALITE: Record<string, MotifCourriel> = {
+  AUTH_2FA: MOTIF.DOUBLE_AUTH,
+  CREATION_AGENT: MOTIF.CREATION_AGENT,
+  VALIDATION_CONTACT: MOTIF.VALIDATION_CONTACT,
+};
+
 /** Livre le code sur le canal demandé. Le code ne quitte jamais cette fonction. */
 async function livrer(
   canal: string,
@@ -192,9 +214,10 @@ async function livrer(
   code: string,
   dureeMinutes: number,
   expediteurId: string,
+  courriel: { motif: MotifCourriel; langue?: string | null },
 ): Promise<{ remis: boolean; detail?: string }> {
   if (canal === CANAL.EMAIL) {
-    return sendOtpEmail(destination, code, Math.round(dureeMinutes));
+    return sendOtpEmail(destination, code, Math.round(dureeMinutes), courriel);
   }
 
   // Canal Alanya : message dans la conversation directe avec le destinataire.
