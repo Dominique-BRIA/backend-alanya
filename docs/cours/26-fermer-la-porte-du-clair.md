@@ -222,7 +222,36 @@ recevait le résultat.
 tentatives et le jeton en en-tête, comme pour les autres médias. Ce n'était
 pas la cause, mais une connexion muette aurait produit le même symptôme.
 
-## 8. À retenir
+## 8. Le jeton lu trop tôt
+
+Deux symptômes, une seule cause :
+
+- « A envoie un média à B : impossible de télécharger, il faut rouvrir la
+  conversation » ;
+- « Médias partagés » vide, même pour les anciens médias en clair.
+
+**La cause.** Les deux écrans lisaient le jeton d'accès **une fois**, au
+début, puis chargeaient les messages. Un jeton d'accès vit 15 minutes. S'il
+avait expiré, le chargement des messages le **rafraîchissait** dans le
+stockage — mais l'écran gardait l'ancien, et chaque média partait avec un
+jeton mort : 401. Rouvrir la conversation relisait le bon.
+
+**La correction.**
+
+- Un média chiffré demande son jeton **au moment** de le télécharger
+  (`AuthedApi.jeton`) ; sur un 401, il le fait rafraîchir une fois, sous le
+  même verrou que le reste de l'application, et réessaie.
+- « Médias partagés » lit le jeton **après** les messages.
+
+**Et deux défauts de plus dans « Médias partagés ».**
+
+- **Une seule page lue** : les 50 derniers messages. Un média plus ancien
+  n'apparaissait jamais. L'écran parcourt maintenant toutes les pages.
+- **Les médias chiffrés étaient ignorés.** Leur clé n'est que sur le
+  téléphone, dans le cache local : l'écran l'y lit et les affiche avec la
+  même tuile que la grille, qui déchiffre la sienne.
+
+## 9. À retenir
 
 - Une règle, un fichier, **tous** les chemins qui écrivent.
 - Ce que le serveur vérifie se lit **en base**, jamais dans la parole du
@@ -234,5 +263,6 @@ pas la cause, mais une connexion muette aurait produit le même symptôme.
 - Une hypothèse se vérifie avant de se corriger, même quand elle est
   plausible.
 - Un banc doit passer par le chemin de l'écran, pas à côté.
+- Un jeton se lit au moment de s'en servir, jamais une fois pour toutes.
 - `=>` renvoie toujours quelque chose : dans un rappel, ce « quelque chose »
   peut être attendu.
