@@ -85,10 +85,39 @@ devenues des « Photo ». Le vrai type vient désormais du descripteur.
 qui ne tournent que sur un appareil) et le geste complet depuis l'écran. Ils
 restent à vérifier sur un vrai téléphone.
 
-## 6. À retenir
+## 6. Le défaut trouvé sur le téléphone : la grille qui tournait sans fin
+
+**Le symptôme.** Sur le téléphone, des photos chiffrées envoyées ensemble
+montraient leur aperçu flou et un chargement qui ne finissait jamais — alors
+que le web les affichait.
+
+**La cause.** Des photos envoyées à la suite se regroupent en GRILLE. La bulle
+d'un message seul savait déchiffrer ; la grille, elle, était l'ancienne grille
+des médias en clair : elle téléchargeait le fichier du serveur et tentait d'en
+faire une image. Ce fichier est chiffré : le décodeur échouait (« Failed to
+decode image ») et la case restait en attente.
+
+**La correction.** Une grille chiffrée se dessine avec des tuiles qui
+déchiffrent chacune la leur (`TuileMediaChiffre`), dans la même disposition
+que la grille ordinaire.
+
+**Et la grille du web, reprise au passage :**
+
+- **la légende sous la grille.** Un lot accepte désormais UN message légendé
+  (comme `groupMediaRuns` du web) ; deux légendes, et le lot ne se forme pas,
+  plutôt que d'en perdre une ;
+- **quatre tuiles au plus**, « +N » sur la quatrième, qui ouvre le lot entier.
+
+**La leçon.** Le chiffrement avait été branché là où un média s'affiche… seul.
+Chaque endroit qui affiche un média — bulle, grille, réponse citée, galerie —
+doit être passé en revue : un seul oubli, et c'est le fichier chiffré qu'on
+montre.
+
+## 7. À retenir
 
 - Deux clients, **un seul ordre** d'envoi.
 - Le calcul lourd hors du fil de l'écran.
 - Une boucle partagée plutôt que deux copies — et le banc de l'ancien usage
   relancé après l'avoir partagée.
 - Un média éphémère se déchiffre **là où il ne laisse pas de trace**.
+- Chiffrer un média, c'est revoir **tous** les endroits qui l'affichent.
