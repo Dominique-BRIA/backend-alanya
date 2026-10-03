@@ -215,6 +215,8 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
           mimeType: f.mimeType,
           sizeBytes: f.sizeBytes,
           durationMs: f.durationMs,
+          // Chiffré de bout en bout : à déchiffrer, jamais à afficher tel quel.
+          ...(f.chiffre ? { chiffre: true } : {}),
         })),
         createdAt: m.createdAt,
         ...etatVueUnique(m, userId),

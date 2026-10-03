@@ -892,6 +892,8 @@ async function serializeMessage(m, media) {
       mimeType: f.mimeType,
       sizeBytes: f.sizeBytes,
       durationMs: f.durationMs,
+      // Chiffré de bout en bout : jumeau de `serialiserMessage` côté API.
+      ...(f.chiffre ? { chiffre: true } : {}),
     })),
     // Réactions brutes { userId, emoji } ; le client agrège et repère les siennes.
     reactions: (m.reactions ?? []).map((r) => ({ userId: r.userId, emoji: r.emoji })),
@@ -954,6 +956,8 @@ async function serializeMessage(m, media) {
           mimeType: f.mimeType,
           sizeBytes: f.sizeBytes,
           durationMs: f.durationMs,
+          // Une vignette de citation ne se tire pas d'un fichier chiffré.
+          ...(f.chiffre ? { chiffre: true } : {}),
         })),
       };
     }
@@ -3981,6 +3985,10 @@ async function handleForwardMessage(ws, msg) {
   // 🔴 UNE VUE UNIQUE NE SE TRANSFÈRE PAS : la copie pointerait vers le même
   // fichier, lisible sans limite par de nouveaux destinataires.
   if (original.vueUnique) return;
+  // 🔴 UN MÉDIA CHIFFRÉ NE SE TRANSFÈRE PAS ICI : sa clé est dans l'enveloppe,
+  // que le serveur ne lit pas — la copie serait illisible pour ses nouveaux
+  // destinataires. C'est l'APPAREIL qui retransmet, clé comprise.
+  if (original.media.some((f) => f.chiffre)) return;
 
   if (!(await isParticipant(original.convId, ws.userId))) return;
 

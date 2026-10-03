@@ -1297,6 +1297,11 @@ model MediaFile {
   /// ⚠️ UNE MARQUE, PAS UN NOM DE BUCKET : renommer le bucket ne doit toucher
   /// qu'une variable d'environnement, pas des centaines de lignes en base.
   espace       String? @db.VarChar(16)
+
+  /// Chiffré de bout en bout par l'appareil : le serveur ne peut pas le lire.
+  /// La clé voyage dans l'enveloppe Signal du message. Voir
+  /// `prisma/manual/2026-10_media_chiffre.sql`.
+  chiffre      Boolean  @default(false)
   createdAt    DateTime @default(now()) @db.Timestamptz
 
   /// Une plainte vocale s'appuie sur ce média. `Cascade` : supprimer le fichier

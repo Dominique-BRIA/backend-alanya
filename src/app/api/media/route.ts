@@ -45,11 +45,26 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const usage = String(form.get("usage") ?? "").toLowerCase();
   const espace = usage === "accueil" || usage === "sonnerie" ? "public" : "prive";
 
+  /*
+   * 🔴 UN MÉDIA CHIFFRÉ DE BOUT EN BOUT (cours, chapitre 23).
+   *
+   * L'appareil a chiffré le fichier ; ce que nous recevons est illisible, et
+   * doit le RESTER dans ce que nous en disons. On n'enregistre donc ni son nom
+   * ni son type réels — ils vivent dans l'enveloppe Signal — mais un nom et un
+   * type neutres. Le type du MESSAGE (photo, vidéo…) reste annoncé par le
+   * client : décision du user du 03/10/2026, pour que la liste et les
+   * notifications affichent encore « 📷 Photo ».
+   *
+   * ⚠️ JAMAIS DANS LE BUCKET PUBLIC : son adresse fixe le rendrait
+   * téléchargeable par n'importe qui, sans même passer par nous.
+   */
+  const chiffre = form.get("chiffre") === "1";
+
   const { relativeUrl, espace: espaceRetenu } = await saveBuffer(
     buffer,
-    file.name,
-    file.type,
-    espace,
+    chiffre ? "chiffre.bin" : file.name,
+    chiffre ? "application/octet-stream" : file.type,
+    chiffre ? "prive" : espace,
   ).catch((err) => {
     console.error("[media] Échec d'upload du stockage :", err);
     throw new HttpError(502, "Échec du téléversement du fichier", "STORAGE_ERROR");
@@ -62,9 +77,10 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const media = await prisma.mediaFile.create({
     data: {
       ownerId: userId,
-      filename: file.name,
-      mimeType: file.type,
+      filename: chiffre ? "chiffre.bin" : file.name,
+      mimeType: chiffre ? "application/octet-stream" : file.type,
       sizeBytes: file.size,
+      chiffre,
       url: relativeUrl,
       durationMs: Number.isFinite(durationMs) ? durationMs : null,
       // ⚠️ CE QUE `saveBuffer` A RÉELLEMENT FAIT, pas ce qu'on a demandé : le

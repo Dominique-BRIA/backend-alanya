@@ -54,6 +54,9 @@ export function conditionMedias(userId: string, criteres: Criteres) {
   if (criteres.au) quand.lte = criteres.au;
 
   return {
+    // Un média chiffré de bout en bout n'a rien à faire dans un export : le
+    // serveur ne livrerait qu'un fichier illisible.
+    chiffre: false,
     // Un média orphelin — message supprimé, avatar, accueil de répondeur — n'a
     // rien à faire dans un export de discussions.
     message: {

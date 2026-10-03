@@ -443,6 +443,8 @@ export function serialiserMessage(message: Awaited<ReturnType<typeof creerLigneM
       mimeType: f.mimeType,
       sizeBytes: f.sizeBytes,
       durationMs: f.durationMs,
+      // Chiffré de bout en bout : à déchiffrer, jamais à afficher tel quel.
+      ...(f.chiffre ? { chiffre: true } : {}),
     })),
     /*
      * LES MENTIONS ACCOMPAGNENT LE MESSAGE, jamais son texte.
