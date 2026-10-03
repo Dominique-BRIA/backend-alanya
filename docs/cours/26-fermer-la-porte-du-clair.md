@@ -251,7 +251,30 @@ jeton mort : 401. Rouvrir la conversation relisait le bon.
   téléphone, dans le cache local : l'écran l'y lit et les affiche avec la
   même tuile que la grille, qui déchiffre la sienne.
 
-## 9. À retenir
+## 9. La copie qu'on avait oubliée, et la galerie
+
+**La fiche contact.** Sa bande d'aperçus restait vide, alors que « Médias
+partagés » s'affichait. L'écran avait **sa propre copie** du chargement, avec
+les trois défauts que l'autre venait de perdre (jeton lu trop tôt, une seule
+page, médias chiffrés passés tels quels). On avait corrigé une copie, pas
+l'autre.
+
+La correction n'est pas une deuxième correction, c'est **un seul
+chargement** (`medias_partages.dart`), utilisé par la fiche contact, par
+« Médias partagés » et par la galerie.
+
+**La galerie.** Elle écartait les médias chiffrés, et toucher l'un d'eux
+ouvrait une page qui ne montrait que lui : on ne glissait plus d'un média à
+l'autre. Un élément de galerie peut maintenant porter le **descripteur** d'un
+média chiffré ; sa page le déchiffre (photo zoomable, vidéo lisible). Le
+bouton « enregistrer » est masqué pour lui : le fichier du serveur serait
+illisible.
+
+**L'envoi.** La bulle d'un média chiffré en cours d'envoi n'était qu'un trait
+qui défilait. Elle montre la vignette locale et le pourcentage du
+téléversement, comme l'envoi ordinaire.
+
+## 10. À retenir
 
 - Une règle, un fichier, **tous** les chemins qui écrivent.
 - Ce que le serveur vérifie se lit **en base**, jamais dans la parole du
@@ -264,5 +287,6 @@ jeton mort : 401. Rouvrir la conversation relisait le bon.
   plausible.
 - Un banc doit passer par le chemin de l'écran, pas à côté.
 - Un jeton se lit au moment de s'en servir, jamais une fois pour toutes.
+- Corriger une copie laisse l'autre fautive : on supprime la copie.
 - `=>` renvoie toujours quelque chose : dans un rappel, ce « quelque chose »
   peut être attendu.
