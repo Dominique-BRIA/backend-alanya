@@ -67,7 +67,7 @@ import {
   LONGUEUR_MAX_CONTENU,
 } from "./src/lib/message-payload.mjs";
 import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
-import { refusModification, refusTransfert } from "./src/lib/e2ee-clair.mjs";
+import { refusMediaEnClair, refusModification, refusTransfert } from "./src/lib/e2ee-clair.mjs";
 import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
@@ -1187,9 +1187,8 @@ async function handleSend(ws, msg) {
    * chemin chiffre quand il recoit `CONVERSATION_CHIFFREE`. Se taire laisserait
    * sa bulle tourner pour toujours.
    *
-   * ⚠️ LES MEDIAS PASSENT ENCORE — ils ne sont pas chiffres (chantier remis). Ne
-   * bloquer que le TEXTE evite de rendre un fil chiffre muet en pieces jointes,
-   * mais l'ecran doit finir par dire qu'elles ne sont pas protegees.
+   * ⚠️ LES MEDIAS SONT GARDES PLUS BAS, une fois leurs lignes lues : un fichier
+   * en clair est refuse dans un fil chiffre depuis le lot D (chapitre 26).
    */
   const filChiffre = await prisma.conversation.findUnique({
     where: { id: convId },
@@ -1238,13 +1237,37 @@ async function handleSend(ws, msg) {
 
   // MODIFICATION : vérifie tous les médias
   let premierMime = null;
+  const fichiersJoints = [];
   for (const mid of uniqueMediaIds) {
-    const m = await prisma.mediaFile.findUnique({ where: { id: mid }, select: { ownerId: true, mimeType: true } });
+    const m = await prisma.mediaFile.findUnique({ where: { id: mid }, select: { ownerId: true, mimeType: true, chiffre: true } });
     if (!m || m.ownerId !== ws.userId) {
       ws.send(JSON.stringify({ type: "error", message: "Media invalide", tempId }));
       return;
     }
+    fichiersJoints.push(m);
     if (premierMime === null) premierMime = m.mimeType;
+  }
+
+  /*
+   * 🔴 FIL CHIFFRE : UN MEDIA EST CHIFFRE OU IL N'ENTRE PAS (lot D, chapitre 26).
+   *
+   * 🐛 C'ETAIT LA DERNIERE PORTE OUVERTE : une photo sans legende entrait EN
+   * CLAIR dans un fil affiche « chiffre de bout en bout ». Le drapeau `chiffre`
+   * vient de la BASE, pose au televersement — pas du client.
+   *
+   * ⚠️ MEME CODE QUE POUR LE TEXTE, et toujours avec le `tempId` : sans
+   * reponse, la bulle de l'expediteur tournerait pour toujours.
+   */
+  if (refusMediaEnClair({ filChiffre: filChiffre?.e2eeActif === true, medias: fichiersJoints })) {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        code: "CONVERSATION_CHIFFREE",
+        message: "Cette conversation est chiffree : un fichier en clair est refuse.",
+        tempId,
+      }),
+    );
+    return;
   }
 
   // Filet de sécurité : un message porteur de médias ne peut pas être un TEXT.
@@ -4016,6 +4039,7 @@ async function handleForwardMessage(ws, msg) {
       cibleChiffree: chiffree.get(targetConvId) === true,
       type: original.type,
       contenu: original.content,
+      medias: original.media,
     });
     if (motif) {
       refuses.push({ convId: targetConvId, motif });

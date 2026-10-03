@@ -42,18 +42,43 @@ export function refusModification({ filChiffre }) {
 }
 
 /**
+ * Ces médias peuvent-ils entrer dans ce fil ? — cours, chapitre 26 (lot D).
+ *
+ * 🔴 DANS UN FIL CHIFFRÉ, UN MÉDIA EST CHIFFRÉ OU IL N'ENTRE PAS.
+ *
+ * 🐛 JUSQU'AU LOT D, LES PIÈCES JOINTES PASSAIENT EN CLAIR. La garde de
+ * l'envoi ne regardait que le TEXTE : une photo sans légende entrait dans un
+ * fil marqué « chiffré de bout en bout », lisible par le serveur et par
+ * quiconque lit le stockage. C'était voulu tant que les clients ne savaient
+ * pas chiffrer un fichier (lots A à C) ; ils le savent, la porte se ferme.
+ *
+ * ⚠️ LE MÊME CODE QUE POUR LE TEXTE, `CONVERSATION_CHIFFREE` : il dit « ce
+ * chemin ne peut pas écrire dans ce fil », et les clients le reconnaissent
+ * déjà. Un code nouveau, un ancien client ne le comprendrait pas.
+ *
+ * @param medias les fichiers que le message apporterait, avec leur drapeau
+ *   `chiffre` tel que la BASE le porte — jamais tel que le client le dit.
+ */
+export function refusMediaEnClair({ filChiffre, medias }) {
+  if (!filChiffre) return null;
+  return (medias ?? []).some((m) => m?.chiffre !== true) ? CONVERSATION_CHIFFREE : null;
+}
+
+/**
  * Peut-on transférer ce message vers ce fil ?
  *
- * ⚠️ DEUX REFUS DISTINCTS, et l'ordre compte :
+ * ⚠️ TROIS REFUS DISTINCTS, et l'ordre compte :
  *   1. le serveur n'a pas le texte (message chiffré) → rien à recopier ;
- *   2. la cible est chiffrée et il y a du texte → il y entrerait en clair.
+ *   2. la cible est chiffrée et il y a du texte → il y entrerait en clair ;
+ *   3. la cible est chiffrée et le message porte un média EN CLAIR → même
+ *      fuite, par la pièce jointe (lot D, voir `refusMediaEnClair`).
  *
- * ⚠️ UN MÉDIA SANS LÉGENDE PASSE, dans les deux sens : les pièces jointes ne
- * sont pas chiffrées (chantier remis), et l'envoi les laisse déjà passer.
- * Refuser ici ce que l'envoi accepte serait incohérent.
+ * ⚠️ UN MÉDIA CHIFFRÉ N'ARRIVE JAMAIS ICI : le serveur n'a pas sa clé, il ne
+ * peut pas le transférer — c'est l'appareil qui le fait. Les appelants
+ * l'écartent avant.
  */
-export function refusTransfert({ sourceChiffree, cibleChiffree, type, contenu }) {
+export function refusTransfert({ sourceChiffree, cibleChiffree, type, contenu, medias }) {
   if (sourceChiffree && type === "TEXT" && !aDuTexte(contenu)) return SOURCE_CHIFFREE;
   if (cibleChiffree && aDuTexte(contenu)) return CONVERSATION_CHIFFREE;
-  return null;
+  return refusMediaEnClair({ filChiffre: cibleChiffree, medias });
 }

@@ -52,6 +52,18 @@ export const POST = withAuth(
       // On ne transfère pas un message déjà supprimé.
       if (original.deletedAt) return fail("Ce message a été supprimé", 410, "GONE");
 
+      /*
+       * 🔴 UN MÉDIA CHIFFRÉ NE SE TRANSFÈRE PAS PAR LE SERVEUR : il n'a pas sa
+       * clé. La copie serait un fichier illisible chez le destinataire. C'est
+       * l'APPAREIL qui retransmet, clé comprise — même règle que le WebSocket.
+       *
+       * 🐛 LE WEBSOCKET L'ÉCARTAIT DEPUIS LE LOT A, CETTE ROUTE NON : trouvé en
+       * relisant les deux transferts côte à côte (lot D, chapitre 26).
+       */
+      if (original.media.some((f) => f.chiffre)) {
+        return fail("Un média chiffré se transfère depuis l'appareil.", 409, "SOURCE_CHIFFREE");
+      }
+
       // Même règle que le WebSocket, écrite une seule fois : `e2ee-clair.mjs`.
       const etats = await prisma.conversation.findMany({
         where: { id: { in: [convId, ...targetConvIds] } },
@@ -75,6 +87,7 @@ export const POST = withAuth(
           cibleChiffree: chiffree.get(targetConvId) === true,
           type: original.type,
           contenu: original.content,
+          medias: original.media,
         });
         if (motif) {
           refuses.push({ convId: targetConvId, motif });
@@ -104,7 +117,11 @@ export const POST = withAuth(
             content: original.content,
             type: original.type,
             status: "SENT",
-            ...(mediaConnect.connect.length > 0 ? mediaConnect : {}),
+            // 🐛 `...mediaConnect` posait `connect` À PLAT dans le message, et
+            // Prisma refusait : tout transfert REST d'un média échouait. Les
+            // clients passent par le WebSocket, d'où le silence. Trouvé par le
+            // témoin ⑤ de `e2ee-clair-banc.mjs` (lot D).
+            ...(mediaConnect.connect.length > 0 ? { media: mediaConnect } : {}),
           },
         });
 

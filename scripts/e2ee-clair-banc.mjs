@@ -11,7 +11,9 @@
  *        · VERS un fil chiffré (du clair y entrerait sans chiffrement) ;
  *   ③ transférer un message d'une conversation dont on n'est PAS membre ;
  *   ④ RÉPONDRE en citant un message d'une conversation dont on n'est pas
- *     membre — REST, WebSocket, et la lecture d'une citation déjà en base.
+ *     membre — REST, WebSocket, et la lecture d'une citation déjà en base ;
+ *   ⑤ un MÉDIA EN CLAIR dans un fil chiffré — envoi REST et WebSocket,
+ *     transfert REST et WebSocket (lot D, chapitre 26).
  *
  * ⚠️ CHAQUE REFUS A SON TÉMOIN : le même geste sur un fil ORDINAIRE doit
  * passer. Une garde qui refuse tout passerait les refus sans rien protéger.
@@ -311,6 +313,123 @@ async function main() {
     "témoin : citer un message du même fil passe, et la citation se lit",
     r9.statut === 201 && r10.texte.includes("TEXTE-DU-FIL") && r10.texte.includes(`"replyTo":{"id":"${local.id}"`),
     `HTTP ${r9.statut}`,
+  );
+
+  /* ── ⑤ LES MÉDIAS EN CLAIR (lot D) ─────────────────────────────────── */
+  titre("⑤ Un média en clair dans un fil chiffré");
+
+  /** Un fichier téléversé par `qui` : en clair, ou marqué chiffré. */
+  const fichier = (qui, chiffreFichier) =>
+    prisma.mediaFile.create({
+      data: {
+        ownerId: qui.user.id,
+        filename: chiffreFichier ? "chiffre.bin" : "photo.jpg",
+        mimeType: chiffreFichier ? "application/octet-stream" : "image/jpeg",
+        sizeBytes: 1234,
+        url: `/banc/${Date.now()}-${Math.random()}`,
+        chiffre: chiffreFichier,
+      },
+      select: { id: true },
+    });
+  const rattache = async (id) =>
+    (await prisma.mediaFile.findUnique({ where: { id }, select: { messageId: true } }))?.messageId ?? null;
+
+  // Envoi WebSocket.
+  const clairWs = await fichier(alice, false);
+  A.recus.length = 0;
+  A.ws.send(JSON.stringify({ type: "send", convId: filChiffre, msgType: "IMAGE", mediaIds: [clairWs.id], tempId: "t-media-clair" }));
+  await pause(1000);
+  verifie("WebSocket, fil chiffré : le fichier en clair n'est rattaché à rien", (await rattache(clairWs.id)) === null);
+  verifie(
+    "WebSocket, fil chiffré : l'auteur est prévenu, avec son tempId",
+    A.recus.some((m) => m.type === "error" && m.code === "CONVERSATION_CHIFFREE" && m.tempId === "t-media-clair"),
+    JSON.stringify(A.recus.filter((m) => m.type === "error")).slice(0, 200),
+  );
+
+  const chiffreWs = await fichier(alice, true);
+  A.ws.send(JSON.stringify({ type: "send", convId: filChiffre, msgType: "IMAGE", mediaIds: [chiffreWs.id], tempId: "t-media-chiffre" }));
+  await pause(1000);
+  verifie("WebSocket, fil chiffré : un fichier CHIFFRÉ passe (témoin)", (await rattache(chiffreWs.id)) !== null);
+
+  const clairWsTemoin = await fichier(alice, false);
+  A.ws.send(JSON.stringify({ type: "send", convId: filClair, msgType: "IMAGE", mediaIds: [clairWsTemoin.id], tempId: "t-media-ordinaire" }));
+  await pause(1000);
+  verifie("WebSocket, fil ordinaire : un fichier en clair passe (témoin)", (await rattache(clairWsTemoin.id)) !== null);
+
+  // Envoi REST, par le chemin chiffré lui-même.
+  const clairRest = await fichier(alice, false);
+  const r11 = await rest(alice, "POST", `/api/conversations/${filChiffre}/messages`, {
+    type: "IMAGE",
+    chiffre: true,
+    mediaIds: [clairRest.id],
+  });
+  verifie(
+    "REST chiffré, fil chiffré : un fichier en clair est refusé",
+    r11.statut === 409 && r11.texte.includes("CONVERSATION_CHIFFREE") && (await rattache(clairRest.id)) === null,
+    `HTTP ${r11.statut} ${r11.texte.slice(0, 120)}`,
+  );
+  const chiffreRest = await fichier(alice, true);
+  const r12 = await rest(alice, "POST", `/api/conversations/${filChiffre}/messages`, {
+    type: "IMAGE",
+    chiffre: true,
+    mediaIds: [chiffreRest.id],
+  });
+  verifie("REST chiffré, fil chiffré : un fichier chiffré passe (témoin)", r12.statut === 201, `HTTP ${r12.statut} ${r12.texte.slice(0, 120)}`);
+
+  // Transfert d'une photo en clair VERS le fil chiffré.
+  const photo = await prisma.message.create({
+    data: {
+      convId: filClair,
+      senderId: alice.user.id,
+      content: null,
+      type: "IMAGE",
+      status: "SENT",
+      media: { connect: [{ id: (await fichier(alice, false)).id }] },
+    },
+    select: { id: true },
+  });
+  avant = await compter(filChiffre);
+  const r13 = await rest(alice, "POST", `/api/conversations/${filClair}/messages/forward`, {
+    messageId: photo.id,
+    targetConvIds: [filChiffre],
+  });
+  verifie(
+    "REST : une photo en clair ne se transfère pas vers un fil chiffré",
+    r13.statut === 409 && (await compter(filChiffre)) === avant,
+    `HTTP ${r13.statut} — ${(await compter(filChiffre)) - avant} message(s) créé(s)`,
+  );
+  A.ws.send(JSON.stringify({ type: "forward_message", messageId: photo.id, targetConvIds: [filChiffre] }));
+  await pause(1000);
+  verifie("WebSocket : idem", (await compter(filChiffre)) === avant, `${(await compter(filChiffre)) - avant} message(s) créé(s)`);
+
+  avant = await compter(filClair);
+  const r14 = await rest(alice, "POST", `/api/conversations/${filClair}/messages/forward`, {
+    messageId: photo.id,
+    targetConvIds: [filClair],
+  });
+  verifie("témoin : la même photo se transfère vers un fil ordinaire", r14.statut === 201 && (await compter(filClair)) === avant + 1, `HTTP ${r14.statut} ${r14.texte.slice(0, 160)}`);
+
+  // Un média CHIFFRÉ ne se transfère pas par le serveur, qui n'a pas sa clé.
+  const photoChiffree = await prisma.message.create({
+    data: {
+      convId: filChiffre,
+      senderId: alice.user.id,
+      content: null,
+      type: "IMAGE",
+      status: "SENT",
+      media: { connect: [{ id: (await fichier(alice, true)).id }] },
+    },
+    select: { id: true },
+  });
+  avant = await compter(filClair);
+  const r15 = await rest(alice, "POST", `/api/conversations/${filChiffre}/messages/forward`, {
+    messageId: photoChiffree.id,
+    targetConvIds: [filClair],
+  });
+  verifie(
+    "REST : un média chiffré ne se transfère pas par le serveur",
+    r15.statut === 409 && r15.texte.includes("SOURCE_CHIFFREE") && (await compter(filClair)) === avant,
+    `HTTP ${r15.statut} ${r15.texte.slice(0, 120)}`,
   );
 
   A.ws.close();

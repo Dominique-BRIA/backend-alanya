@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
+import { refusMediaEnClair } from "@/lib/e2ee-clair.mjs";
 
 /**
  * LE CŒUR D'ENVOI D'UN MESSAGE — partagé par la route de conversation et par
@@ -295,6 +296,25 @@ export async function creerMessage(params: {
       where: { id: { in: idsMedias }, message: { is: { vueUnique: true } } },
     });
     if (deVueUnique > 0) return { ok: false, motif: "MEDIA_ETRANGER" };
+
+    /*
+     * 🔴 FIL CHIFFRÉ : CHAQUE FICHIER DOIT ÊTRE CHIFFRÉ (lot D, chapitre 26).
+     *
+     * Le drapeau `chiffre: true` de l'appel dit « pas de texte en clair » ;
+     * il ne dit rien des fichiers. Sans ce contrôle, le chemin chiffré
+     * lui-même pouvait rattacher une photo EN CLAIR à un fil chiffré. On lit
+     * le drapeau des fichiers en BASE, posé au téléversement — jamais la
+     * parole du client.
+     */
+    if (conversation?.e2eeActif === true) {
+      const fichiers = await prisma.mediaFile.findMany({
+        where: { id: { in: idsMedias } },
+        select: { chiffre: true },
+      });
+      if (refusMediaEnClair({ filChiffre: true, medias: fichiers })) {
+        return { ok: false, motif: "CONVERSATION_CHIFFREE" };
+      }
+    }
   }
 
   /*
