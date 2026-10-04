@@ -156,3 +156,81 @@ par la CI.
   (octets, chaînes, nombres).
 - L'erreur affiche **le chemin** de l'objet refusé. Il se lit de bas en haut,
   et désigne directement le coupable.
+
+---
+
+## 8. Deuxième défaut : le PDF qui n'apparaissait qu'en rouvrant le fil
+
+> Mobile, commit `a40e330`. Ce défaut ne touche pas le chiffrement lui-même,
+> mais l'affichage d'un envoi chiffré : il a sa place ici.
+
+### Le symptôme
+
+Une fois l'isolat réparé, la photo chiffrée s'affiche tout de suite chez
+l'expéditeur. Le PDF, lui, n'apparaît pas du tout : ni bulle d'attente, ni
+message. Il faut sortir de la conversation et y revenir pour le voir.
+
+### Ce qui distingue le PDF de la photo
+
+| | Photo | PDF |
+|---|---|---|
+| Choisie dans | la galerie **d'Alanya** | le sélecteur de fichiers **d'Android** |
+| Alanya passe en arrière-plan | non | **oui** |
+
+Au retour d'arrière-plan, la connexion temps réel (WebSocket) peut être
+coupée. Tant qu'elle l'est, l'écran se rabat sur un relais, `_poll`, qui
+toutes les 3 secondes **remplace toute la liste affichée** par la page que
+rend le serveur.
+
+### La chaîne du défaut
+
+1. L'envoi chiffré pose une **bulle d'attente**, identifiée `tmp-…`. Elle
+   n'existe que sur le téléphone.
+2. `_poll` remplace la liste par celle du serveur, qui ne connaît pas
+   `tmp-…` : **la bulle disparaît**.
+3. L'envoi se termine et cherche `tmp-…` pour la remplacer par le vrai
+   message. Il ne la trouve pas : **le message n'est ajouté nulle part**.
+4. En rouvrant le fil, le message est relu depuis le cache local, où l'envoi
+   l'avait bien rangé : il apparaît.
+
+### Pourquoi les envois ordinaires n'ont pas ce défaut
+
+Un envoi non chiffré passe par `EnvoiMediaStore`, un magasin global. À chaque
+reconstruction, l'écran **rebâtit** les bulles d'attente depuis ce magasin :
+même effacées par `_poll`, elles reviennent.
+
+Un envoi chiffré n'y passe **volontairement pas** : la file hors ligne du
+magasin renverrait le fichier **en clair** au retour du réseau (chapitre 25).
+Il lui manquait donc cette protection.
+
+### Le correctif
+
+Deux fonctions pures, dans `lib/features/chat/envois_chiffres_fil.dart` :
+
+| Fonction | Rôle |
+|---|---|
+| `garderEnvoisEnCours` | `_poll` garde les bulles des envois chiffrés encore en cours |
+| `remplacerEnvoiChiffre` | le message est **ajouté** même si sa bulle d'attente a disparu |
+
+`remplacerEnvoiChiffre` retire aussi la version du serveur si elle est arrivée
+d'abord. Cette version n'a pas le **descripteur** (clé, nom, aperçu) : gardée,
+elle afficherait « indisponible sur cet appareil ».
+
+### Ce qui a été prouvé, et ce qui ne l'a pas été
+
+- Prouvé par `test/envois_chiffres_fil_test.dart` : la bulle survit au
+  relais, et le message est ajouté même quand la bulle a disparu.
+- La bulle d'un PDF chiffré a été rendue en test : elle s'affiche. Le défaut
+  n'était donc pas dans le dessin.
+- **Non prouvé sur appareil** : sans journal du téléphone, la coupure du
+  WebSocket au retour du sélecteur est une **déduction**, cohérente avec tous
+  les indices (la photo marche, le PDF non, le fil rouvert montre tout).
+
+### À retenir
+
+- Une donnée qui n'existe **que sur l'appareil** (bulle d'attente, brouillon)
+  doit survivre à tout remplacement par la version du serveur.
+- « Remplacer X par Y » doit dire ce qui se passe **quand X n'est plus là**.
+  Ici, la réponse implicite était « rien », et c'était le défaut.
+- Une prédiction à vérifier : une photo prise avec **l'appareil photo**, qui
+  est aussi une autre application, devait avoir le même défaut.
