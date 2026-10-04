@@ -5,7 +5,7 @@
 > aussi une vignette et un pourcentage pendant l'envoi. Ce chapitre explique
 > pourquoi cette petite amélioration a cassé l'envoi, et comment on l'a réparé.
 >
-> Mobile seul : commit `7675c92`, branche `feat/chip-appel-callstyle`.
+> Mobile seul : commit `b5f5b5e`, branche `feat/chip-appel-callstyle`.
 
 ---
 
