@@ -296,7 +296,15 @@ export const sendMessageSchema = z.object({
    * Même longueur que `libelle` d'une mention nominative.
    */
   mentionTousLibelle: z.string().trim().min(1).max(80).optional(),
-}).refine((d) => chargeValide(d.type, d.content ?? null), {
+}).refine(
+  /*
+   * 🔴 SAUF UN MESSAGE CHIFFRÉ (06/10/2026) : sa fiche voyage DANS l'enveloppe,
+   * la ligne du fil n'a pas de contenu — `creerMessage` refuse d'ailleurs tout
+   * contenu à côté du drapeau. Sans cette exception, un contact ou une
+   * position ne pouvait tout simplement pas partir dans un fil chiffré.
+   */
+  (d) => (d.chiffre === true && (d.content ?? "") === "") || chargeValide(d.type, d.content ?? null),
+  {
   // CONTACT et LOCATION portent leur charge en JSON dans `content` : sans ce
   // contrôle, un client mal réglé écrirait une ligne que plus rien ne peut
   // rendre — et l'erreur n'apparaîtrait que chez le destinataire, longtemps
