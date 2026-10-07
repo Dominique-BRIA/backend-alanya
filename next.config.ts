@@ -23,6 +23,21 @@ const nextConfig: NextConfig = {
    */
   turbopack: { root: process.cwd() },
 
+  /*
+   * 🔴 LA TAILLE D'UN TÉLÉVERSEMENT, AU-DELÀ DE 10 Mo (07/10/2026).
+   *
+   * Depuis Next 15.5, toute requête qui traverse `src/middleware.ts` — c'est
+   * le cas de TOUT `/api/`, téléversement compris — voit son corps copié
+   * pour le middleware, et cette copie s'arrête à `proxyClientMaxBodySize`,
+   * 10 Mo par défaut. Au-delà, Next prévient dans le journal et ne transmet
+   * que les 10 premiers Mo : le fichier arrive tronqué. La limite métier est
+   * `MEDIA_MAX_SIZE_MB` (250, demande du user) ; celle-ci doit la couvrir,
+   * enveloppe multipart comprise.
+   */
+  experimental: {
+    proxyClientMaxBodySize: "260mb",
+  },
+
   compress: false,
   async headers() {
     return [

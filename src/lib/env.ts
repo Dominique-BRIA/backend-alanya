@@ -114,7 +114,7 @@ export const env = {
 
   media: {
     storageDir: optional("MEDIA_STORAGE_DIR", "./storage/media"),
-    maxSizeMb: Number(optional("MEDIA_MAX_SIZE_MB", "50")),
+    maxSizeMb: Number(optional("MEDIA_MAX_SIZE_MB", "250")),
     // Backend de stockage : "local" (défaut) ou "b2" (Backblaze B2 cloud).
     provider: optional("MEDIA_STORAGE_PROVIDER", "local").toLowerCase() as "local" | "b2",
 
