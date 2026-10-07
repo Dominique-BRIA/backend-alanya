@@ -15,7 +15,54 @@ export const PATCH = withAuth(
     const { id: convId, messageId } = await ctx.params;
     await assertParticipant(convId, userId);
 
-    const { content: contenuBrut } = await req.json();
+    const corps = await req.json();
+    const { content: contenuBrut } = corps;
+
+    /*
+     * 🔴 MODIFIER UN MESSAGE CHIFFRÉ (07/10/2026, « modifier le message ne
+     * donne plus »).
+     *
+     * Le serveur n'a pas le texte, il ne peut donc pas le remplacer : le
+     * nouveau texte part dans des ENVELOPPES, rattachées à ce message, avec
+     * `modifie: true` dans la charge (cours, chapitre 29). Ici, on ne fait que
+     * DATER la modification, pour que « modifié » s'affiche partout.
+     *
+     * ⚠️ AUCUN CONTENU N'EST ACCEPTÉ avec le drapeau, et seulement un message
+     * qui n'a PAS de contenu en base : un ancien message écrit en clair avant
+     * l'activation reste non modifiable — le modifier exigerait d'effacer son
+     * clair, que d'autres ont déjà reçu.
+     */
+    if (corps?.chiffre === true) {
+      if (typeof contenuBrut === "string" && contenuBrut.trim() !== "") {
+        return fail("Un message chiffré se modifie sans contenu", 400, "CONTENU_EN_CLAIR");
+      }
+      const ligne = await prisma.message.findUnique({ where: { id: messageId } });
+      if (!ligne || ligne.convId !== convId) return fail("Message introuvable", 404, "NOT_FOUND");
+      if (ligne.senderId !== userId) {
+        return fail("Seul l'expéditeur peut modifier ce message", 403, "FORBIDDEN");
+      }
+      if (ligne.deletedAt) return fail("Message supprimé", 400, "DELETED");
+      if (ligne.type !== "TEXT") {
+        return fail("Seuls les messages texte sont modifiables", 400, "NOT_TEXT");
+      }
+      if ((ligne.content ?? "") !== "") {
+        return fail("Ce message n'est pas chiffré", 409, "PAS_CHIFFRE");
+      }
+      const fil = await prisma.conversation.findUnique({
+        where: { id: convId },
+        select: { e2eeActif: true },
+      });
+      if (fil?.e2eeActif !== true) {
+        return fail("Cette conversation n'est pas chiffrée", 409, "PAS_CHIFFRE");
+      }
+      const date = await prisma.message.update({
+        where: { id: messageId },
+        data: { editedAt: new Date() },
+        select: { id: true, editedAt: true },
+      });
+      return ok({ id: date.id, editedAt: date.editedAt });
+    }
+
     if (typeof contenuBrut !== "string" || !contenuBrut.trim()) {
       return fail("Contenu vide", 400, "EMPTY");
     }
