@@ -13,8 +13,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const file = form.get("file");
   if (!(file instanceof File)) return fail("Champ 'file' manquant", 400, "NO_FILE");
 
-  if (!isAllowedMime(file.type)) {
-    return fail(`Type de fichier non autorisé : ${file.type}`, 415, "BAD_MIME");
+  // Un type vide — le navigateur ne connaît pas l'extension — est un fichier
+  // ordinaire : on le range sous le type générique.
+  const typeFichier = file.type || "application/octet-stream";
+  if (!isAllowedMime(typeFichier)) {
+    return fail(`Type de fichier non autorisé : ${typeFichier}`, 415, "BAD_MIME");
   }
   const maxBytes = env.media.maxSizeMb * 1024 * 1024;
   if (file.size > maxBytes) {
@@ -63,7 +66,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const { relativeUrl, espace: espaceRetenu } = await saveBuffer(
     buffer,
     chiffre ? "chiffre.bin" : file.name,
-    chiffre ? "application/octet-stream" : file.type,
+    chiffre ? "application/octet-stream" : typeFichier,
     chiffre ? "prive" : espace,
   ).catch((err) => {
     console.error("[media] Échec d'upload du stockage :", err);
@@ -78,7 +81,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     data: {
       ownerId: userId,
       filename: chiffre ? "chiffre.bin" : file.name,
-      mimeType: chiffre ? "application/octet-stream" : file.type,
+      mimeType: chiffre ? "application/octet-stream" : typeFichier,
       sizeBytes: file.size,
       chiffre,
       url: relativeUrl,

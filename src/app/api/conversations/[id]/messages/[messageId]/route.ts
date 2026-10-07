@@ -6,6 +6,7 @@ import { assertParticipant } from "@/modules/messaging/access";
 import { rafraichirApercuApresEdition } from "@/lib/apercu-conversation.mjs";
 import { LONGUEUR_MAX_CONTENU } from "@/lib/message-payload.mjs";
 import { refusModification } from "@/lib/e2ee-clair.mjs";
+import { refusDelaiModification, refusDelaiSuppression } from "@/lib/delais-message.mjs";
 
 // PATCH /api/conversations/:convId/messages/:messageId — modifier un message.
 // Repli REST (la diffusion temps réel est gérée par le serveur WS). Seul
@@ -42,6 +43,11 @@ export const PATCH = withAuth(
         return fail("Seul l'expéditeur peut modifier ce message", 403, "FORBIDDEN");
       }
       if (ligne.deletedAt) return fail("Message supprimé", 400, "DELETED");
+      // Deux heures pour modifier — voir `delais-message.mjs`.
+      const tropTardChiffre = refusDelaiModification(ligne.createdAt);
+      if (tropTardChiffre) {
+        return fail("Ce message ne peut plus être modifié (2 heures après l'envoi).", 403, tropTardChiffre);
+      }
       if (ligne.type !== "TEXT") {
         return fail("Seuls les messages texte sont modifiables", 400, "NOT_TEXT");
       }
@@ -78,6 +84,11 @@ export const PATCH = withAuth(
       return fail("Seul l'expéditeur peut modifier ce message", 403, "FORBIDDEN");
     }
     if (message.deletedAt) return fail("Message supprimé", 400, "DELETED");
+    // Deux heures pour modifier — voir `delais-message.mjs`.
+    const tropTard = refusDelaiModification(message.createdAt);
+    if (tropTard) {
+      return fail("Ce message ne peut plus être modifié (2 heures après l'envoi).", 403, tropTard);
+    }
     if (message.type !== "TEXT") {
       return fail("Seuls les messages texte sont modifiables", 400, "NOT_TEXT");
     }
@@ -145,6 +156,16 @@ export const DELETE = withAuth(
       // Seul l'expéditeur peut supprimer pour tout le monde.
       if (message.senderId !== userId) {
         return fail("Seul l'expéditeur peut supprimer ce message pour tous", 403, "FORBIDDEN");
+      }
+      // Vingt-quatre heures pour supprimer pour tous — voir `delais-message.mjs`.
+      // « Pour moi » reste possible sans délai.
+      const tropTard = refusDelaiSuppression(message.createdAt);
+      if (tropTard) {
+        return fail(
+          "Ce message ne peut plus être supprimé pour tout le monde (24 heures après l'envoi).",
+          403,
+          tropTard,
+        );
       }
       // Marque le message comme supprimé : efface le contenu, détache les médias.
       await prisma.message.update({

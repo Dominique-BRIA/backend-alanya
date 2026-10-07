@@ -64,7 +64,18 @@ export function storageRoot(): string {
     : path.join(process.cwd(), env.media.storageDir);
 }
 
-// Extensions/MIME autorisés (images, audio des messages vocaux, vidéos, documents).
+/*
+ * LES TYPES QUE L'ON SAIT AFFICHER EN LIGNE sans risque : images, audio,
+ * vidéos, documents de bureau, archives.
+ *
+ * 🔴 CE N'EST PLUS UNE LISTE D'ADMISSION (décision du user, 07/10/2026 : « tous
+ * les types de fichiers qu'on peut envoyer — les APK, les .zip, la musique, les
+ * vidéos, tout »). Une APK partait en 415 : son type
+ * `application/vnd.android.package-archive` n'y figurait pas, comme le MKV, le
+ * FLAC, l'AMR ou le 3GP. Tout type bien formé est désormais ACCEPTÉ ; cette
+ * liste ne sert plus qu'à décider de la façon de le SERVIR — voir
+ * `servableEnLigne`.
+ */
 const ALLOWED_MIME = new Set([
   "image/jpeg",
   "image/png",
@@ -128,9 +139,28 @@ function typeSansParametre(mime: string): string {
 }
 
 export function isAllowedMime(mime: string): boolean {
-  // Accepte aussi tout texte (text/*) et le générique ci-dessus.
+  // Tout type BIEN FORMÉ — « famille/sous-type ». Un type vide (fichier dont
+  // le navigateur ignore la nature) est accepté par l'appelant comme
+  // `application/octet-stream`.
+  return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(typeSansParametre(mime));
+}
+
+/**
+ * Ce type peut-il être servi EN LIGNE, depuis notre propre domaine ?
+ *
+ * 🔴 UN FICHIER SERVI PAR ALANYAVOX.COM S'EXÉCUTE CHEZ NOUS. Une page HTML ou
+ * un SVG envoyé en pièce jointe, ouvert dans le navigateur, y lancerait ses
+ * scripts avec la session de celui qui l'ouvre. Seuls les types connus et
+ * inertes — ceux de la liste ci-dessus, et le texte brut — sont servis tels
+ * quels ; tous les autres partent en téléchargement, sous un type neutre.
+ *
+ * ⚠️ Les fichiers de Backblaze ne sont pas concernés : servis depuis LEUR
+ * domaine, ils n'ont aucun accès au nôtre.
+ */
+export function servableEnLigne(mime: string): boolean {
   const type = typeSansParametre(mime);
-  return ALLOWED_MIME.has(type) || type.startsWith("text/");
+  if (type === "application/octet-stream") return false;
+  return ALLOWED_MIME.has(type) || type === "text/plain" || type === "text/csv";
 }
 
 function extensionFor(filename: string, mime: string): string {

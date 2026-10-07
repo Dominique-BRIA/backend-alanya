@@ -9,6 +9,7 @@ import {
   adressePublique,
   dureeCacheRedirectionSignee,
   readStored,
+  servableEnLigne,
   getSignedDownloadUrl,
   deleteStored,
   useCloudStorage as stockageNuage,
@@ -224,11 +225,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       // privé, et le chercher là rendrait « fichier manquant » pour un fichier
       // parfaitement en place.
       const buffer = await readStored(media.url, media.espace);
+      // Un type qui pourrait s'exécuter chez nous (HTML, SVG…) part en
+      // téléchargement, sous un type neutre — voir `servableEnLigne`.
+      const enLigne = servableEnLigne(media.mimeType);
       const headers: Record<string, string> = {
-        "Content-Type": media.mimeType,
+        "Content-Type": enLigne ? media.mimeType : "application/octet-stream",
         "Content-Length": String(media.sizeBytes),
         "Cache-Control": "private, max-age=86400",
-        "Content-Disposition": `${forceDownload ? "attachment" : "inline"}; filename*=UTF-8''${safeName}`,
+        "Content-Disposition": `${forceDownload || !enLigne ? "attachment" : "inline"}; filename*=UTF-8''${safeName}`,
+        // Le navigateur ne devine pas un autre type que celui annoncé.
+        "X-Content-Type-Options": "nosniff",
       };
       return new Response(new Uint8Array(buffer), { status: 200, headers });
     } catch {

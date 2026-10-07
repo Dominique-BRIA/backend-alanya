@@ -68,6 +68,7 @@ import {
 } from "./src/lib/message-payload.mjs";
 import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
 import { refusMediaEnClair, refusModification, refusTransfert } from "./src/lib/e2ee-clair.mjs";
+import { refusDelaiModification, refusDelaiSuppression } from "./src/lib/delais-message.mjs";
 import {
   DELAI_MENU_MS,
   DELAI_SONNERIE_AGENT_MS,
@@ -1904,6 +1905,22 @@ async function handleEditMessage(ws, msg) {
     return;
   }
   if (message.deletedAt || message.type !== "TEXT") return;
+
+  /*
+   * DEUX HEURES POUR MODIFIER (décision du user, 07/10/2026) — même règle que
+   * le PATCH REST, dans `delais-message.mjs`. On le DIT à l'auteur : son écran
+   * a peut-être déjà affiché la modification.
+   */
+  const tropTard = refusDelaiModification(message.createdAt);
+  if (tropTard) {
+    ws.send(JSON.stringify({
+      type: "error",
+      code: tropTard,
+      messageId,
+      message: "Ce message ne peut plus être modifié (2 heures après l'envoi).",
+    }));
+    return;
+  }
 
   /*
    * 🔴 UN FIL CHIFFRÉ NE SE MODIFIE PAS EN CLAIR.
@@ -3956,6 +3973,17 @@ async function handleDeleteMessage(ws, msg) {
   if (scope === "everyone") {
     if (message.senderId !== ws.userId) {
       ws.send(JSON.stringify({ type: "error", message: "Seul l'expéditeur peut supprimer pour tous" }));
+      return;
+    }
+    // Vingt-quatre heures pour supprimer pour tous — voir `delais-message.mjs`.
+    const tropTard = refusDelaiSuppression(message.createdAt);
+    if (tropTard) {
+      ws.send(JSON.stringify({
+        type: "error",
+        code: tropTard,
+        messageId,
+        message: "Ce message ne peut plus être supprimé pour tout le monde (24 heures après l'envoi).",
+      }));
       return;
     }
     await prisma.message.update({
