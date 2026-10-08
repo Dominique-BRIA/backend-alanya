@@ -7,7 +7,8 @@
 > faire.
 >
 > Serveur `7d9a8be`, mobile `47a03ed` (modifier) et `ea7cc35` (transférer),
-> web `647126a` (transférer).
+> web `647126a` (transférer), puis `98db89c` (modifier, le 07/10 au soir —
+> voir le chapitre 30).
 
 ---
 
@@ -141,8 +142,9 @@ est lu une fois, puis rechiffré pour chaque cible.
 - Web : contrôle des types, construction.
 - Serveur : `tsc`.
 - **Pas encore fait** : un échange réel entre deux appareils.
-- Le **web** n'a pas d'interface pour modifier un message : il sait seulement
-  afficher une modification reçue.
+- ~~Le **web** n'a pas d'interface pour modifier un message.~~ **Corrigé le
+  07/10 au soir** (`98db89c`) : le web modifie avec le même protocole. Voir
+  le chapitre 30.
 
 ## 6. À retenir
 
