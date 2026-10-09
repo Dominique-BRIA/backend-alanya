@@ -6,7 +6,11 @@ export async function assertParticipant(convId: string, userId: string) {
   const participant = await prisma.participant.findUnique({
     where: { convId_userId: { convId, userId } },
   });
-  if (!participant) throw new HttpError(403, "Vous ne participez pas à cette conversation", "FORBIDDEN");
+  // Un ANCIEN membre garde sa ligne (09/10/2026, `appartenance.mjs`) : il
+  // n'a plus accès pour autant.
+  if (!participant || !participant.estMembre) {
+    throw new HttpError(403, "Vous ne participez pas à cette conversation", "FORBIDDEN");
+  }
   return participant;
 }
 

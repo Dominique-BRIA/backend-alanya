@@ -11,7 +11,10 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const participant = await prisma.participant.findUnique({
     where: { convId_userId: { convId, userId } },
   });
-  if (!participant) return fail("Conversation introuvable", 404, "NOT_FOUND");
+  // Un ANCIEN membre garde sa ligne : il n'a plus de droits pour autant.
+  if (!participant || !participant.estMembre) {
+    return fail("Conversation introuvable", 404, "NOT_FOUND");
+  }
 
   await prisma.participant.update({
     where: { convId_userId: { convId, userId } },

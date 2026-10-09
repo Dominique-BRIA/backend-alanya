@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
@@ -23,7 +24,7 @@ export const GET = withAuth(
     }
 
     const participants = await prisma.participant.findMany({
-      where: { convId, userId: { not: userId } },
+      where: { convId, userId: { not: userId }, ...MEMBRE_ACTIF },
       select: {
         userId: true,
         lastReadAt: true,

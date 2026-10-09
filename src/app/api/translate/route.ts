@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -253,7 +254,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   const convId = typeof corps?.convId === "string" ? corps.convId : "";
   if (convId !== "") {
     const fil = await prisma.conversation.findFirst({
-      where: { id: convId, participants: { some: { userId } } },
+      where: { id: convId, participants: { some: { userId, ...MEMBRE_ACTIF } } },
       select: { e2eeActif: true },
     });
     if (fil?.e2eeActif === true) {

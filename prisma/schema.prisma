@@ -910,7 +910,14 @@ model Conversation {
   /// rouvrir.
   e2eeActif Boolean @default(false) @map("e2ee_actif")
 
+  /// Version de clé COURANTE d'un groupe chiffré (0 = jamais chiffré en
+  /// groupe). Le serveur ne connaît pas les clés, seulement leur numéro.
+  cleVersion Int @default(0) @map("cle_version")
+
   participants   Participant[]
+  cleVersions    E2eeCleVersion[]
+  messagesGroupe E2eeMessageGroupe[]
+  trousseaux     E2eeTrousseau[]
   e2eeEnveloppes E2eeEnveloppe[]
   messages       Message[]
   locks          ConversationLock[]
@@ -997,6 +1004,17 @@ model Participant {
   /// change, le second doit lui resister. Avec un booleen, activer le global
   /// aurait rallume des conversations qu'on avait expressement eteintes.
   traductionAuto Int? @map("traduction_auto") @db.SmallInt
+
+  /// `isMembre` (09/10/2026, chiffrement des groupes) : un participant qui
+  /// part n'est plus supprimé, il est marqué. Faux = ancien membre, à qui le
+  /// serveur ne sert plus rien. TOUJOURS lire l'appartenance par
+  /// `estMembreActif` (src/lib/appartenance.ts), jamais cette colonne à la main.
+  /// Voir `prisma/manual/2026-10_e2ee_groupes.sql`.
+  estMembre Boolean   @default(true) @map("est_membre")
+  /// Date du départ ; nulle tant qu'il est membre (contrainte en base).
+  quitteLe  DateTime? @map("quitte_le") @db.Timestamptz
+  /// L'administrateur qui l'a exclu ; nul pour un départ volontaire.
+  excluPar  String?   @map("exclu_par") @db.Uuid
 
   @@unique([convId, userId])
   @@index([userId])
@@ -1125,6 +1143,10 @@ model Message {
   /// `prisma/manual/2026-10_vue_unique.sql`.
   vueUnique          Boolean            @default(false) @map("vue_unique")
   ouvertures         MessageOuverture[]
+
+  /// Le chiffré d'un message de GROUPE chiffré (une ligne, quel que soit le
+  /// nombre de membres). Absent pour tout autre message.
+  groupe E2eeMessageGroupe?
 
   @@index([convId, createdAt])
   @@index([senderId])
@@ -3324,4 +3346,55 @@ model InvitationQr {
 
   @@index([expireLe])
   @@map("invitation_qr")
+}
+
+/// Une version de la clé d'un groupe chiffré — son NUMÉRO seulement : la clé
+/// elle-même ne quitte jamais les appareils des membres. La clé primaire
+/// (conversation, version) interdit deux versions au même numéro.
+/// Voir `prisma/manual/2026-10_e2ee_groupes.sql`, cours chapitres 31 à 33.
+model E2eeCleVersion {
+  convId          String       @map("conv_id") @db.Uuid
+  version         Int
+  creePar         String       @map("cree_par") @db.Uuid
+  creeParAppareil Int          @map("cree_par_appareil")
+  /// ACTIVATION, EXCLUSION ou MANUEL (contrainte en base).
+  motif           String       @db.VarChar(12)
+  creeLe          DateTime     @default(now()) @map("cree_le") @db.Timestamptz
+  conv            Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+
+  messages E2eeMessageGroupe[]
+
+  @@id([convId, version], map: "e2ee_cle_versions_pkey")
+  @@map("e2ee_cle_versions")
+}
+
+/// Le chiffré signé d'un message de groupe : base64(0x01 | nonce | GCM | signature).
+/// Voir `src/services/e2ee-groupe.ts` (web) et `e2ee_groupe.dart` (mobile).
+model E2eeMessageGroupe {
+  messageId          String         @id(map: "e2ee_messages_groupe_pkey") @map("message_id") @db.Uuid
+  convId             String         @map("conv_id") @db.Uuid
+  version            Int
+  expediteurAppareil Int            @map("expediteur_appareil")
+  corps              String
+  majLe              DateTime       @default(now()) @map("maj_le") @db.Timestamptz
+  message            Message        @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  cleVersion         E2eeCleVersion @relation(fields: [convId, version], references: [convId, version], onDelete: Cascade, map: "e2ee_messages_groupe_version_fkey")
+  conv               Conversation   @relation(fields: [convId], references: [id], onDelete: Cascade)
+
+  @@index([convId], map: "idx_e2ee_messages_groupe_conv")
+  @@map("e2ee_messages_groupe")
+}
+
+/// La copie PERSONNELLE du trousseau d'un groupe, chiffrée par la clé maîtresse
+/// de l'archive de son propriétaire (illisible ici). Supprimée à son départ.
+model E2eeTrousseau {
+  userId String       @map("alanyaID") @db.Uuid
+  convId String       @map("conv_id") @db.Uuid
+  corps  String
+  majLe  DateTime     @default(now()) @map("maj_le") @db.Timestamptz
+  conv   Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+
+  @@id([userId, convId], map: "e2ee_trousseaux_pkey")
+  @@index([convId], map: "idx_e2ee_trousseaux_conv")
+  @@map("e2ee_trousseaux")
 }

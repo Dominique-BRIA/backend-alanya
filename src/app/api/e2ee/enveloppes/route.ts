@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 
@@ -60,7 +61,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * doit pas disparaître avec le chiffrement.
    */
   const moi = await prisma.participant.findFirst({
-    where: { convId: r.convId, userId },
+    where: { convId: r.convId, userId, ...MEMBRE_ACTIF },
     select: { id: true },
   });
   if (!moi) return fail("Conversation inconnue", 404, "NOT_FOUND");
@@ -136,7 +137,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   // Les destinataires doivent être de la conversation : sans ce contrôle, on
   // s'en servirait pour déposer chez n'importe qui.
   const membres = await prisma.participant.findMany({
-    where: { convId: r.convId },
+    where: { convId: r.convId, ...MEMBRE_ACTIF },
     select: { userId: true, sourdine: true },
   });
   const autorises = new Set(membres.map((m) => m.userId));

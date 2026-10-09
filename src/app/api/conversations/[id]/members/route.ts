@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF, donneesDepart, donneesRetour } from "@/lib/appartenance.mjs";
 import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -16,6 +17,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     where: { id: convId },
     include: {
       participants: {
+        where: MEMBRE_ACTIF,
         include: { user: true },
       },
     },
@@ -69,7 +71,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   const conv = await prisma.conversation.findUnique({
     where: { id: convId },
-    include: { participants: true },
+    include: { participants: { where: MEMBRE_ACTIF } },
   });
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
   if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
@@ -94,13 +96,34 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     return fail("Tous les utilisateurs sont déjà membres", 400, "ALREADY_MEMBERS");
   }
 
-  await prisma.participant.createMany({
-    data: toAdd.map((u) => ({
-      convId,
-      userId: u.id,
-      role: "MEMBER" as const,
-    })),
-  });
+  /*
+   * 🔴 UN ANCIEN MEMBRE QUI REVIENT EST RÉACTIVÉ, PAS RECRÉÉ (09/10/2026). Sa
+   * ligne existe encore (`est_membre = false`) : la recréer violerait
+   * l'unicité (conversation, compte). Les deux écritures vont ensemble.
+   */
+  const anciens = new Set(
+    (
+      await prisma.participant.findMany({
+        where: { convId, userId: { in: toAdd.map((u) => u.id) }, estMembre: false },
+        select: { userId: true },
+      })
+    ).map((p) => p.userId),
+  );
+  await prisma.$transaction([
+    prisma.participant.updateMany({
+      where: { convId, userId: { in: [...anciens] }, estMembre: false },
+      data: { ...donneesRetour(), role: "MEMBER" },
+    }),
+    prisma.participant.createMany({
+      data: toAdd
+        .filter((u) => !anciens.has(u.id))
+        .map((u) => ({
+          convId,
+          userId: u.id,
+          role: "MEMBER" as const,
+        })),
+    }),
+  ]);
   /*
    * ⚠️ AVANT L'AVIS SYSTÈME QUI SUIT, PAS APRÈS. Cet avis est diffusé en temps
    * réel par le serveur WebSocket, qui demande alors la liste des membres : s'il
@@ -141,7 +164,7 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
 
   const conv = await prisma.conversation.findUnique({
     where: { id: convId },
-    include: { participants: true },
+    include: { participants: { where: MEMBRE_ACTIF } },
   });
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
   if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
@@ -162,9 +185,18 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   const nomCible = await nomPourAvis(targetId);
   const nomAuteur = targetId === userId ? nomCible : await nomPourAvis(userId);
 
-  await prisma.participant.delete({
-    where: { convId_userId: { convId, userId: targetId } },
-  });
+  /*
+   * 🔴 LE DÉPART EST MARQUÉ, PAS EFFACÉ (09/10/2026, `appartenance.mjs`) :
+   * `exclu_par` dit qui a retiré ; nul quand on part de soi-même. Sa copie
+   * personnelle du trousseau d'un groupe chiffré part avec (décision du user).
+   */
+  await prisma.$transaction([
+    prisma.participant.update({
+      where: { convId_userId: { convId, userId: targetId } },
+      data: donneesDepart(targetId === userId ? null : userId),
+    }),
+    prisma.e2eeTrousseau.deleteMany({ where: { convId, userId: targetId } }),
+  ]);
   /*
    * 🔴 IMMÉDIATEMENT APRÈS LE RETRAIT. Cette liste est le contrôle d'accès de la
    * conversation : tant qu'une copie périmée circule, la personne retirée
@@ -175,7 +207,7 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   // Si c'est soi-même qui quitte, on peut aussi supprimer la conv si vide
   let convSupprimee = false;
   if (targetId === userId) {
-    const remaining = await prisma.participant.count({ where: { convId } });
+    const remaining = await prisma.participant.count({ where: { convId, ...MEMBRE_ACTIF } });
     if (remaining === 0) {
       await prisma.conversation.delete({ where: { id: convId } });
       convSupprimee = true;

@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail, handleError } from "@/lib/http";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-context";
@@ -149,7 +150,7 @@ export const POST = withAuth(
           },
         });
         await prisma.participant.updateMany({
-          where: { convId: targetConvId, userId: { not: userId } },
+          where: { convId: targetConvId, userId: { not: userId }, ...MEMBRE_ACTIF },
           data: { unreadCount: { increment: 1 } },
         });
 

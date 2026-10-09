@@ -4,6 +4,7 @@ import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
+import { MEMBRE_ACTIF, donneesDepart } from "@/lib/appartenance.mjs";
 
 // POST /api/conversations/:id/leave — quitter un groupe.
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -11,7 +12,7 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
 
   const conv = await prisma.conversation.findUnique({
     where: { id: convId },
-    include: { participants: true },
+    include: { participants: { where: MEMBRE_ACTIF } },
   });
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
   if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
@@ -22,15 +23,20 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   // Nom lu AVANT la suppression : après, le participant n'est plus là.
   const nomPartant = await nomPourAvis(userId);
 
-  // Supprime le participant
-  await prisma.participant.delete({
-    where: { convId_userId: { convId, userId } },
-  });
+  // Départ MARQUÉ, pas effacé (09/10/2026, `appartenance.mjs`) ; la copie
+  // personnelle du trousseau d'un groupe chiffré part avec.
+  await prisma.$transaction([
+    prisma.participant.update({
+      where: { convId_userId: { convId, userId } },
+      data: donneesDepart(null),
+    }),
+    prisma.e2eeTrousseau.deleteMany({ where: { convId, userId } }),
+  ]);
   // Même raison qu'au retrait : la liste des membres décide de qui reçoit quoi.
   await invaliderConversation(convId);
 
   // Si le groupe n'a plus de membres, supprime la conversation
-  const remaining = await prisma.participant.count({ where: { convId } });
+  const remaining = await prisma.participant.count({ where: { convId, ...MEMBRE_ACTIF } });
   if (remaining === 0) {
     await prisma.conversation.delete({ where: { id: convId } });
     return ok({ message: "Groupe supprimé (plus de membres)", deleted: true });

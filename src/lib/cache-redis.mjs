@@ -348,8 +348,10 @@ export async function metaConversation(prisma, convId) {
  */
 export async function membresConversation(prisma, convId) {
   const liste = await lireOuCharger(cles.convMembres(convId), DUREES.membres, async () => {
+    // Membres ACTIFS seulement : un ancien membre garde sa ligne (09/10/2026),
+    // et cette liste est le contrôle d'accès de tout le temps réel.
     const lignes = await prisma.participant.findMany({
-      where: { convId },
+      where: { convId, estMembre: true },
       select: { userId: true },
     });
     return lignes.map((l) => l.userId);

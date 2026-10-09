@@ -22,6 +22,7 @@ import {
   DELAI_SANS_REPONSE_MS,
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
+import { MEMBRE_ACTIF } from "./src/lib/appartenance.mjs";
 // Le cache de lecture. Redis absent ou en panne : ces fonctions interrogent la
 // base exactement comme le faisait le code qu'elles remplacent — voir
 // `src/lib/cache-redis.mjs` pour la raison de chaque choix.
@@ -283,13 +284,13 @@ async function deposerAvisDeBlocage(convId, bloqueurId, bloqueId) {
 // voient sa présence dans l'app). Cible de la diffusion temps réel.
 async function conversationPeers(userId) {
   const myConvs = await prisma.participant.findMany({
-    where: { userId },
+    where: { userId, ...MEMBRE_ACTIF },
     select: { convId: true },
   });
   const convIds = myConvs.map((p) => p.convId);
   if (convIds.length === 0) return [];
   const peers = await prisma.participant.findMany({
-    where: { convId: { in: convIds }, userId: { not: userId } },
+    where: { convId: { in: convIds }, userId: { not: userId }, ...MEMBRE_ACTIF },
     select: { userId: true },
     distinct: ["userId"],
   });
@@ -1573,7 +1574,7 @@ async function handleSend(ws, msg) {
   });
   // Incrémente unreadCount pour tous les autres participants
   await prisma.participant.updateMany({
-    where: { convId, userId: { not: ws.userId } },
+    where: { convId, userId: { not: ws.userId }, ...MEMBRE_ACTIF },
     data: { unreadCount: { increment: 1 } },
   });
 
@@ -4122,7 +4123,7 @@ async function handleForwardMessage(ws, msg) {
       },
     });
     await prisma.participant.updateMany({
-      where: { convId: targetConvId, userId: { not: ws.userId } },
+      where: { convId: targetConvId, userId: { not: ws.userId }, ...MEMBRE_ACTIF },
       data: { unreadCount: { increment: 1 } },
     });
 

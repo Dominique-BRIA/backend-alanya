@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createCallSchema } from "@/lib/validation";
@@ -107,7 +108,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   }
 
   const convParts = await prisma.participant.findMany({
-    where: { convId },
+    where: { convId, ...MEMBRE_ACTIF },
     select: { userId: true },
   });
   const memberIds = convParts.map((p) => p.userId);

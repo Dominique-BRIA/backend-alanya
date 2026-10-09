@@ -13,7 +13,10 @@ export const DELETE = withAuth(async (_req: NextRequest, userId: string, ctx) =>
   const participant = await prisma.participant.findUnique({
     where: { convId_userId: { convId, userId } },
   });
-  if (!participant) return fail("Conversation introuvable", 404, "NOT_FOUND");
+  // Un ANCIEN membre garde sa ligne : il n'a plus de droits pour autant.
+  if (!participant || !participant.estMembre) {
+    return fail("Conversation introuvable", 404, "NOT_FOUND");
+  }
 
   // Supprime les messages et leurs médias
   await prisma.mediaFile.deleteMany({ where: { message: { convId } } });

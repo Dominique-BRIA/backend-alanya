@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { motifRefus } from "@/lib/e2ee-perimetre";
@@ -63,6 +64,7 @@ async function etat(convId: string) {
       e2eeActif: true,
       isGroup: true,
       participants: {
+        where: MEMBRE_ACTIF,
         select: {
           userId: true,
           // Le TYPE de chaque compte : c'est lui qui dit si la conversation

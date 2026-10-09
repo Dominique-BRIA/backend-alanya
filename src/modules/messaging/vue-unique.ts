@@ -23,6 +23,7 @@
  * (FLAG_SECURE) ; le reste relève de la confiance, comme partout.
  */
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { effacerDefinitivement } from "@/modules/media/storage";
 
@@ -88,7 +89,7 @@ export async function ouvrirVueUnique(messageId: string, userId: string): Promis
       id: messageId,
       vueUnique: true,
       deletedAt: null,
-      conv: { participants: { some: { userId } } },
+      conv: { participants: { some: { userId, ...MEMBRE_ACTIF } } },
     },
     select: {
       id: true,
@@ -222,7 +223,7 @@ async function annoncer(
   type: "vue_unique_ouverte" | "vue_unique_effacee",
 ) {
   const participants = await prisma.participant.findMany({
-    where: { convId },
+    where: { convId, ...MEMBRE_ACTIF },
     select: { userId: true },
   });
   await previensDesPersonnes({

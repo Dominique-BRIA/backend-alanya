@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { nomAffichage } from "@/lib/display-name.mjs";
 
 /**
@@ -71,7 +72,7 @@ export function conditionMedias(userId: string, criteres: Criteres) {
           // Le contrôle d'accès tient ICI, et il est indispensable : sans lui,
           // un identifiant de conversation glissé dans l'URL exporterait les
           // médias de gens qu'on ne connaît pas.
-          participants: { some: { userId } },
+          participants: { some: { userId, ...MEMBRE_ACTIF } },
           ...(criteres.conversations.length > 0
             ? { id: { in: criteres.conversations } }
             : {}),

@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { createConversationSchema } from "@/lib/validation";
@@ -30,12 +31,13 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
   const parts = await prisma.participant.findMany({
     where: {
       userId,
+      ...MEMBRE_ACTIF,
       ...(showArchived ? {} : { isArchived: 0 }),
     },
     include: {
       conv: {
         include: {
-          participants: { include: { user: true } },
+          participants: { where: MEMBRE_ACTIF, include: { user: true } },
           // Fallback : charge le dernier message si lastMessage est NULL
           messages: { orderBy: { createdAt: "desc" }, take: 1 },
         },

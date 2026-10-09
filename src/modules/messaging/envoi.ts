@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
@@ -94,7 +95,7 @@ async function mentionsRetenues(params: {
   const membres = new Set(
     (
       await prisma.participant.findMany({
-        where: { convId },
+        where: { convId, ...MEMBRE_ACTIF },
         select: { userId: true },
       })
     ).map((p) => p.userId),
@@ -231,7 +232,7 @@ export async function creerMessage(params: {
    * parole à personne.
    */
   const participants = await prisma.participant.findMany({
-    where: { convId },
+    where: { convId, ...MEMBRE_ACTIF },
     select: { userId: true },
   });
   if (participants.length === 2) {
@@ -434,7 +435,7 @@ export async function creerMessage(params: {
   });
 
   await prisma.participant.updateMany({
-    where: { convId, userId: { not: expediteurId } },
+    where: { convId, userId: { not: expediteurId }, ...MEMBRE_ACTIF },
     data: { unreadCount: { increment: 1 } },
   });
 

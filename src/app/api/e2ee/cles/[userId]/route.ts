@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { rateLimit } from "@/lib/rate-limit";
@@ -85,7 +86,7 @@ export const GET = withAuth(
      */
     if (userId !== moi) {
       const enCommun = await prisma.participant.findFirst({
-        where: { userId: moi, conv: { participants: { some: { userId } } } },
+        where: { userId: moi, ...MEMBRE_ACTIF, conv: { participants: { some: { userId, ...MEMBRE_ACTIF } } } },
         select: { id: true },
       });
       if (!enCommun) return fail("Aucune clé publiée pour ce compte", 404, "PAS_DE_CLES");
@@ -144,7 +145,8 @@ export const GET = withAuth(
         const filChiffre = await prisma.participant.findFirst({
           where: {
             userId: moi,
-            conv: { e2eeActif: true, participants: { some: { userId } } },
+            ...MEMBRE_ACTIF,
+            conv: { e2eeActif: true, participants: { some: { userId, ...MEMBRE_ACTIF } } },
           },
           select: { id: true },
         });
