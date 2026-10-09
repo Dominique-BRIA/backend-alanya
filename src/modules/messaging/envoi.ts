@@ -60,7 +60,9 @@ export type ResultatEnvoi =
         // Groupe chiffré : la clé a changé depuis que le client a chiffré.
         | "VERSION_PERIMEE"
         // Groupe chiffré : l'appareil signataire n'a pas d'identité publiée.
-        | "APPAREIL_INCONNU";
+        | "APPAREIL_INCONNU"
+        // Groupe chiffré : l'identifiant tiré par l'appareil est déjà pris.
+        | "ID_DEJA_PRIS";
     };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
@@ -171,6 +173,9 @@ export async function creerMessage(params: {
   /// Le chiffré d'un message de GROUPE chiffré (cours, chapitre 32), déjà lu
   /// par `lireChargeGroupe`. Un seul corps pour tous les membres.
   groupe?: ChargeGroupe;
+  /// L'identifiant tiré par l'appareil — groupe chiffré seulement, et alors
+  /// obligatoire : il est signé dans le chiffré (`idMessageClient`).
+  id?: string;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
 
@@ -235,8 +240,13 @@ export async function creerMessage(params: {
   if (groupeChiffre !== (groupe !== undefined)) {
     return { ok: false, motif: "CHARGE_GROUPE_INVALIDE" };
   }
+  if ((params.id !== undefined) !== (groupe !== undefined)) {
+    return { ok: false, motif: "CHARGE_GROUPE_INVALIDE" };
+  }
   if (groupe) {
     if (groupe.version !== conversation!.cleVersion) return { ok: false, motif: "VERSION_PERIMEE" };
+    const pris = await prisma.message.findUnique({ where: { id: params.id! }, select: { id: true } });
+    if (pris) return { ok: false, motif: "ID_DEJA_PRIS" };
     const identite = await prisma.e2eeIdentite.findUnique({
       where: { userId_deviceId: { userId: expediteurId, deviceId: groupe.appareil } },
       select: { id: true },
@@ -415,6 +425,7 @@ export async function creerMessage(params: {
     mentionneTous,
     mentionTousLibelle: mentionneTous ? (params.mentionTousLibelle ?? "").trim().slice(0, 80) : null,
     vueUnique,
+    ...(params.id ? { id: params.id } : {}),
     // Le chiffré du groupe, écrit AVEC la ligne : un message sans son corps
     // serait illisible pour toujours.
     ...(groupe

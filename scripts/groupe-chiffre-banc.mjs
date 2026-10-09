@@ -23,7 +23,7 @@
  */
 import { PrismaClient } from "@prisma/client"
 import bcrypt from "bcryptjs"
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import WebSocket from "ws"
 
 const API = process.env.API ?? "http://localhost:3107"
@@ -144,28 +144,33 @@ try {
   let r = await json(A, messages, "POST", { type: "TEXT", chiffre: true })
   verifie("sans charge de groupe : 409 CHARGE_GROUPE_INVALIDE", r.status === 409 && (await code(r)) === "CHARGE_GROUPE_INVALIDE",
     `${r.status} ${await code(r)}`)
-  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: "pas du base64 !" } })
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: "pas du base64 !" } })
   verifie("corps mal formé : 400", r.status === 400 && (await code(r)) === "CHARGE_GROUPE_INVALIDE")
   r = await json(A, messages, "POST", {
     type: "TEXT", chiffre: true,
     groupe: { version: 1, appareil: 1, corps: Buffer.concat([Buffer.from([2]), randomBytes(120)]).toString("base64") },
   })
   verifie("mauvais octet de format : 400", r.status === 400)
-  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, groupe: { version: 2, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 2, appareil: 1, corps: corpsGroupe() } })
   let e = await r.json()
   verifie("version inexistante : 409 VERSION_PERIMEE, avec la courante",
     r.status === 409 && e.error?.code === "VERSION_PERIMEE" && e.error?.cleVersion === 1, JSON.stringify(e))
-  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 9, corps: corpsGroupe() } })
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 9, corps: corpsGroupe() } })
   verifie("appareil sans identité : 409 APPAREIL_INCONNU", r.status === 409 && (await code(r)) === "APPAREIL_INCONNU")
-  r = await json(A, messages, "POST", { type: "TEXT", content: "en clair", chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, messages, "POST", { type: "TEXT", content: "en clair", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
   verifie("avec du texte en clair : 400 CONTENU_EN_CLAIR", r.status === 400 && (await code(r)) === "CONTENU_EN_CLAIR")
   r = await json(A, messages, "POST", { type: "TEXT", content: "bonjour" })
   verifie("un message ordinaire : refusé (409)", r.status === 409)
   const corps1 = corpsGroupe()
-  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: corps1 } })
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corps1 } })
   e = await r.json()
   verifie("message chiffré accepté (201, chiffre: true)", r.status === 201 && e.chiffre === true, `${r.status} ${JSON.stringify(e)}`)
   const M = e.id
+  verifie("l'identifiant tiré par l'appareil est gardé", typeof M === "string" && M.length === 36)
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  verifie("sans identifiant tiré : 400", r.status === 400 && (await code(r)) === "CHARGE_GROUPE_INVALIDE")
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, id: M, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  verifie("identifiant déjà pris : 409 ID_DEJA_PRIS", r.status === 409 && (await code(r)) === "ID_DEJA_PRIS")
   const ligne = await prisma.e2eeMessageGroupe.findUnique({ where: { messageId: M } })
   verifie("UN chiffré rangé, version 1, appareil 1", ligne?.corps === corps1 && ligne.version === 1 && ligne.expediteurAppareil === 1)
   verifie("la ligne du message n'a aucun contenu", (await prisma.message.findUnique({ where: { id: M } }))?.content === null)
@@ -175,10 +180,10 @@ try {
     select: { id: true },
   })
   crees.push(T.id)
-  r = await json(A, `/api/conversations/${T.id}/messages`, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, `/api/conversations/${T.id}/messages`, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
   verifie("charge de groupe dans un tête-à-tête : 409", r.status === 409 && (await code(r)) === "CHARGE_GROUPE_INVALIDE")
   const GC = await groupe([[A, "ADMIN"], [B, "MEMBER"]], { chiffre: false })
-  r = await json(A, `/api/conversations/${GC}/messages`, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, `/api/conversations/${GC}/messages`, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
   verifie("charge de groupe dans un groupe en clair : 409", r.status === 409)
 
   titre("② relire")
@@ -190,13 +195,13 @@ try {
 
   titre("③ modifier")
   const corps2 = corpsGroupe(60)
-  r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true, groupe: { version: 1, appareil: 1, corps: corps2 } })
+  r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corps2 } })
   verifie("modification acceptée", r.ok, `${r.status} ${await r.clone().text()}`)
   verifie("le chiffré est REMPLACÉ", (await prisma.e2eeMessageGroupe.findUnique({ where: { messageId: M } }))?.corps === corps2)
   verifie("le message est daté « modifié »", (await prisma.message.findUnique({ where: { id: M } }))?.editedAt !== null)
   r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true })
   verifie("sans charge de groupe : 409", r.status === 409 && (await code(r)) === "CHARGE_GROUPE_INVALIDE")
-  r = await json(B, `${messages}/${M}`, "PATCH", { chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  r = await json(B, `${messages}/${M}`, "PATCH", { chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
   verifie("B ne modifie pas le message de A (403)", r.status === 403)
 
   titre("④ les versions de clé")
@@ -226,12 +231,12 @@ try {
   verifie("cle_version = 3", (await prisma.conversation.findUnique({ where: { id: G } }))?.cleVersion === 3)
 
   titre("⑤ l'ancienne clé est refusée")
-  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, messages, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
   e = await r.json()
   verifie("écrire en version 1 : 409 VERSION_PERIMEE (courante 3)", r.status === 409 && e.error?.cleVersion === 3, JSON.stringify(e))
-  r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
   verifie("modifier en version 1 : 409 VERSION_PERIMEE", r.status === 409 && (await code(r)) === "VERSION_PERIMEE")
-  r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true, groupe: { version: 3, appareil: 1, corps: corpsGroupe() } })
+  r = await json(A, `${messages}/${M}`, "PATCH", { chiffre: true, id: randomUUID(), groupe: { version: 3, appareil: 1, corps: corpsGroupe() } })
   verifie("modifier en version 3 : accepté, la ligne passe en 3",
     r.ok && (await prisma.e2eeMessageGroupe.findUnique({ where: { messageId: M } }))?.version === 3)
 
@@ -300,7 +305,7 @@ try {
     titre("⑩ les sonnettes")
     const S = await groupe([[A, "ADMIN"], [B, "MEMBER"]])
     const canalB = await connecter(B)
-    r = await json(A, `/api/conversations/${S}/messages`, "POST", { type: "TEXT", chiffre: true, groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
+    r = await json(A, `/api/conversations/${S}/messages`, "POST", { type: "TEXT", chiffre: true, id: randomUUID(), groupe: { version: 1, appareil: 1, corps: corpsGroupe() } })
     const idS = (await r.json()).id
     await pause(800)
     const arrivee = recu(canalB, "e2ee_arrivee", S)

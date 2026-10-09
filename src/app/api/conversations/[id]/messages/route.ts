@@ -13,7 +13,7 @@ import {
   annulerEnvoi,
   tempIdValide,
 } from "@/lib/idempotence.mjs";
-import { lireChargeGroupe } from "@/lib/e2ee-groupe-charge";
+import { idMessageClient, lireChargeGroupe } from "@/lib/e2ee-groupe-charge";
 import { annoncerMessageChiffre } from "@/lib/e2ee-annonce";
 import { membresActifs } from "@/lib/appartenance.mjs";
 
@@ -321,6 +321,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   if (groupe === null) {
     return fail("Charge de groupe chiffrée mal formée", 400, "CHARGE_GROUPE_INVALIDE");
   }
+  // L'identifiant signé dans le chiffré, tiré par l'appareil (UUID v4).
+  const idClient = groupe ? idMessageClient((brut as { id?: unknown } | null)?.id) : undefined;
+  if (idClient === null) {
+    return fail("« id » (UUID v4 tiré par l'appareil) est requis en groupe chiffré", 400, "CHARGE_GROUPE_INVALIDE");
+  }
 
   /*
    * QU'UN REJEU N'ÉCRIVE PAS UN SECOND MESSAGE.
@@ -381,6 +386,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     chiffre: body.chiffre,
     vueUnique: body.vueUnique,
     groupe,
+    id: idClient,
   });
 
   if (!envoi.ok) {
@@ -453,6 +459,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
         },
         { status: 409 },
       );
+    }
+    if (envoi.motif === "ID_DEJA_PRIS") {
+      return fail("Cet identifiant de message est déjà pris : tirez-en un autre.", 409, "ID_DEJA_PRIS");
     }
     if (envoi.motif === "APPAREIL_INCONNU") {
       return fail("Cet appareil n'a pas publié ses clés.", 409, "APPAREIL_INCONNU");

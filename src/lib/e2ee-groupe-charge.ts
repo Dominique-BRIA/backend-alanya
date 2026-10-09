@@ -29,6 +29,22 @@ const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export type ChargeGroupe = { version: number; corps: string; appareil: number };
 
+/**
+ * L'identifiant d'un message de groupe, TIRÉ PAR L'APPAREIL.
+ *
+ * 🔴 POURQUOI LE CLIENT LE CHOISIT (09/10/2026, lot 4). La signature et les
+ * données associées du chiffré contiennent l'identifiant du message (cours,
+ * chapitre 32) : il doit donc exister AVANT le chiffrement. En tête-à-tête, on
+ * créait la ligne puis on déposait les enveloppes ; en groupe, le chiffré
+ * voyage AVEC la ligne, en un seul envoi. L'appareil tire un UUID v4 ; le
+ * serveur vérifie sa forme et qu'il est libre.
+ */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export function idMessageClient(brut: unknown): string | null {
+  return typeof brut === "string" && UUID.test(brut) ? brut : null;
+}
+
 const entierPositif = (v: unknown): v is number =>
   typeof v === "number" && Number.isInteger(v) && v >= 1;
 
