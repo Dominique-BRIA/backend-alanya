@@ -8,73 +8,72 @@
  * ── CE QUE `users.type_compte` VEUT DIRE ────────────────────────────────
  *
  *   0 → compte NORMAL, une personne ordinaire ;
- *   2 → AGENT : une personne, mais rattachée à une entreprise, dont les
- *       échanges avec les clients sont le travail — et que sa hiérarchie relit ;
- *   3 → NUMÉRO DE CENTRE D'APPELS : le standard lui-même, pas quelqu'un ;
+ *   2 → AGENT : une personne rattachée à une entreprise ;
+ *   3 → NUMÉRO DE CENTRE D'APPELS : le standard lui-même ;
  *   4 → CENTRE VOCAL : un standard dont les touches jouent des sons ;
- *   9 → ADMINISTRATEUR (modération de la plateforme).
+ *   9 → ADMINISTRATEUR de la plateforme (modération).
  *
- * ⚠️ ET LE 1 ? IL N EXISTE PAS — ou plus exactement, personne ne sait. Il n est
- * documenté nulle part, lu nulle part dans le code, et absent de la base. C est
- * la meilleure illustration de ce que la liste blanche apporte : ce type est
- * refusé SANS QUE QUICONQUE AIT EU A Y PENSER.
+ * ── LA RÈGLE A CHANGÉ LE 09/10/2026 (décision du user, cours ch. 31 et 33) ──
  *
- * Avec une liste noire, il aurait fallu deviner son existence pour l écarter —
- * et le jour où quelqu un s en servira, il serait chiffrable par défaut. La
- * question « pourquoi n exclut-on pas le 1 ? » n a donc pas de réponse : on
- * n exclut rien, on AUTORISE le seul type dont on sait ce qu il veut dire.
+ * Jusque-là, seul le type 0 chiffrait : on raisonnait qu'un superviseur doit
+ * pouvoir relire les échanges de ses agents. Le user a tranché autrement :
+ * agents, numéros de centre d'appels et centres vocaux chiffrent aussi, à deux
+ * comme en groupe. Conséquence assumée : un superviseur ne relit plus une
+ * conversation chiffrée dont il n'est pas membre.
  *
- * 🐛 PREMIÈRE VERSION DE CETTE RÈGLE : ELLE N'EXCLUAIT QUE 3 ET 4.
+ * ⚠️ TOUJOURS UNE LISTE BLANCHE. Un type nouveau ou inconnu (le 1, qui
+ * n'existe nulle part) est refusé sans que personne ait à y penser. Le 9 reste
+ * dehors, par décision du user.
  *
- * L'erreur venait d'un raisonnement plausible et faux — « un standard n'est pas
- * une personne, donc il faut l'exclure ; un agent EST une personne, donc il peut
- * chiffrer ». Or ce n'est pas la nature du titulaire qui compte, c'est QUI A
- * BESOIN DE LIRE. Les conversations d'un agent avec ses clients sont
- * exactement celles qu'un superviseur relit, qu'un transfert passe à un
- * collègue, et dont on tire des rapports. Les chiffrer casserait le centre
- * d'appels aussi sûrement que de chiffrer le standard lui-même.
+ * ⚠️ UN COMPTE AUTORISÉ NE SUFFIT PAS : il faut encore des clés publiées
+ * (contrôlé par la route d'activation). Un centre vocal sans appareil
+ * connecté n'en a pas — l'activation est alors refusée, rien ne casse.
  *
- * ⚠️ ON N'AUTORISE DONC QUE LE TYPE 0, par liste BLANCHE et non par liste noire.
- * Une liste noire oublie ce qui n'existe pas encore : le jour où un type 5
- * apparaîtra, il sera chiffrable par défaut, sans que personne ne l'ait décidé.
- * Une liste blanche refuse par défaut, et oblige à trancher.
+ * ── LE REFUS PROVISOIRE : LES COMPTES QUI ENVOIENT PAR L'API ─────────────
  *
- * ⚠️ L'ADMINISTRATEUR (9) EST EXCLU LUI AUSSI, et c'est discutable : ses
- * conversations privées sont aussi personnelles que celles de n'importe qui. Il
- * est écarté par prudence — se tromper en refusant coûte un chiffrement qu'on
- * rétablit d'une ligne, se tromper en autorisant coûte une supervision qui ne
- * marche plus. Si le besoin se présente, c'est ici qu'on ajoute `9`, en le
- * sachant.
+ * Les codes OTP, la double authentification et les envois groupés sont écrits
+ * PAR LE SERVEUR, au nom d'un compte qui détient un compte développeur. Le
+ * serveur ne peut pas écrire dans une conversation chiffrée : si l'on
+ * chiffrait un tête-à-tête avec un tel compte, ses codes n'arriveraient plus.
+ * Mesuré le 08/10/2026 : 4 comptes personnels et 1 agent envoient par l'API.
+ *
+ * On refuse donc de chiffrer un TÊTE-À-TÊTE dont un participant a un compte
+ * développeur (`EMETTEUR_API`). À RETIRER quand le compte système « Alanya »
+ * enverra ces messages (décision du 08/10/2026). Les groupes ne sont pas
+ * concernés : l'API n'écrit que dans des conversations à deux.
  */
 
-/** Les seuls types de compte qui ouvrent droit au chiffrement. */
-export const TYPES_PERSONNELS = [0];
+/** Les types de compte qui ouvrent droit au chiffrement (liste blanche). */
+export const TYPES_AUTORISES = [0, 2, 3, 4];
+
+type CompteJuge = { typeCompte?: number | null } | null | undefined;
 
 /** Ce compte peut-il participer à une conversation chiffrée ? */
-export function estComptePersonnel(
-  user: { typeCompte?: number | null } | null | undefined,
-): boolean {
-  return TYPES_PERSONNELS.includes(Number(user?.typeCompte ?? -1));
+export function peutChiffrer(user: CompteJuge): boolean {
+  return TYPES_AUTORISES.includes(Number(user?.typeCompte ?? -1));
 }
+
+export type MotifRefus = "HORS_PERIMETRE" | "EMETTEUR_API";
 
 /**
  * Pourquoi cette conversation ne peut-elle pas être chiffrée ?
  *
  * Rend `null` quand elle le peut. Le motif est fait pour être AFFICHÉ : un
  * bouton grisé sans explication fait ouvrir un ticket, pas comprendre une règle.
+ *
+ * `participants` : les membres ACTIFS seulement (`MEMBRE_ACTIF`).
  */
 export function motifRefus(conv: {
   isGroup: boolean;
-  participants: { user: { typeCompte: number } | null }[];
-}): "HORS_PERIMETRE" | "GROUPE_NON_SUPPORTE" | null {
-  if (conv.participants.some((p) => !estComptePersonnel(p.user))) {
+  participants: {
+    user: { typeCompte: number; developerAccount?: { id: string } | null } | null;
+  }[];
+}): MotifRefus | null {
+  if (conv.participants.some((p) => !peutChiffrer(p.user))) {
     return "HORS_PERIMETRE";
   }
-  /*
-   * ⚠️ LES GROUPES APRÈS LE PÉRIMÈTRE, ET NON AVANT : un groupe d'agents doit
-   * s'entendre dire qu'il est hors périmètre, ce qui est définitif, plutôt que
-   * « pas encore supporté », qui laisse espérer.
-   */
-  if (conv.isGroup) return "GROUPE_NON_SUPPORTE";
+  if (!conv.isGroup && conv.participants.some((p) => p.user?.developerAccount)) {
+    return "EMETTEUR_API";
+  }
   return null;
 }

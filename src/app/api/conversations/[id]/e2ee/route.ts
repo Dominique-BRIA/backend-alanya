@@ -4,12 +4,13 @@ import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { motifRefus } from "@/lib/e2ee-perimetre";
+import { isGroupAdmin } from "@/lib/groups";
 
 /**
  * ACTIVER LE CHIFFREMENT SUR UNE CONVERSATION.
  *
  * `GET  /api/conversations/<id>/e2ee` → est-elle chiffrée ? tout le monde a-t-il
- *                                       des clés ?
+ *                                       des clés ? qui peut l'activer ?
  * `POST /api/conversations/<id>/e2ee` → l'activer
  *
  * 🔴 L'ACTIVATION EST À SENS UNIQUE, ET C'EST VOULU. Une fois chiffrés, les
@@ -18,36 +19,21 @@ import { motifRefus } from "@/lib/e2ee-perimetre";
  * arrière — on ne le peut pas, et un fil à moitié lisible est pire qu'un fil
  * dont on sait qu'il est fermé.
  *
- * 🔴 LE PÉRIMÈTRE EST DÉCIDÉ, ET IL EST ÉTROIT (21/09/2026).
+ * 🔴 LE PÉRIMÈTRE N'EST PAS DÉCIDÉ ICI. Il vit dans `@/lib/e2ee-perimetre`
+ * (types 0, 2, 3 et 4 depuis le 09/10/2026, refus provisoire des comptes qui
+ * envoient par l'API). Cette route se contente de l'appliquer.
  *
- * Le chiffrement de bout en bout ne couvre QUE les conversations entre DEUX
- * COMPTES PERSONNELS. Ce n'est pas une étape vers « tout chiffrer » : c'est la
- * limite définitive, et elle découle de ce qu'Alanya est.
+ * 🔴 LES GROUPES (09/10/2026, `docs/2026-10-08-e2ee-groupes-conception.md`).
  *
- * Sont exclus, et le resteront :
- *
- *   · TOUT LE CENTRE D'APPELS — les standards ET LES AGENTS. Un superviseur
- *     relit les échanges de ses agents ; un transfert passe la conversation à
- *     quelqu'un d'autre. Le bout en bout rend les deux impossibles — pas
- *     difficiles, IMPOSSIBLES.
- *
- *     🐛 LA PREMIÈRE VERSION DE CETTE RÈGLE N'EXCLUAIT QUE LES STANDARDS
- *     (types 3 et 4), en laissant passer les AGENTS (type 2). Le raisonnement
- *     était plausible et faux : « un agent est une personne, donc il peut
- *     chiffrer ». Ce n'est pas la nature du titulaire qui compte, c'est QUI A
- *     BESOIN DE LIRE. Voir `@/lib/e2ee-perimetre`.
- *
- *   · L'API DES ENTREPRISES (`/api/v1/messages`). Une entreprise qui écrit par
- *     clé d'API n'a AUCUNE identité cryptographique : pas de clé, pas de
- *     session, rien à chiffrer avec. Le serveur écrit pour son compte, ce que
- *     le bout en bout exclut par définition.
- *
- *   · LES GROUPES, tant que les « Sender Keys » ne sont pas implémentées.
- *
- * ⚠️ CE N'EST PAS UNE RESTRICTION TECHNIQUE QU'ON LÈVERA. Chiffrer un fil de
- * centre d'appels reviendrait à retirer au produit ce qui le fait vendre. La
- * question n'a jamais été « peut-on ? » mais « sur quoi ? », et la réponse est
- * ici.
+ *   · SEUL UN ADMINISTRATEUR active. Un simple membre ne décide pas, pour
+ *     trois cents personnes, que leurs messages deviennent illisibles sur un
+ *     appareil sans trousseau.
+ *   · L'activation crée la VERSION 1 de la clé du groupe, au nom de l'appareil
+ *     qui va la tirer et la distribuer (`appareil` dans le corps). Le serveur
+ *     ne voit jamais la clé : il note seulement QUI l'a créée, et QUAND.
+ *   · Le drapeau et la version s'écrivent dans la MÊME transaction. Un groupe
+ *     « chiffré » sans version 1 refuserait tous les messages ; une version 1
+ *     sur un groupe resté en clair ne servirait à rien.
  *
  * ⚠️ ON REFUSE D'ACTIVER SI QUELQU'UN N'A PAS PUBLIÉ DE CLÉS. Sans ce contrôle,
  * la conversation basculerait et les messages de cette personne ne
@@ -63,13 +49,18 @@ async function etat(convId: string) {
       id: true,
       e2eeActif: true,
       isGroup: true,
+      cleVersion: true,
       participants: {
         where: MEMBRE_ACTIF,
+        // L'ordre d'arrivée : le repli « premier membre » d'`isGroupAdmin`
+        // en dépend, pour les anciens groupes sans administrateur.
+        orderBy: { joinedAt: "asc" },
         select: {
           userId: true,
-          // Le TYPE de chaque compte : c'est lui qui dit si la conversation
-          // relève du périmètre personnel ou du produit professionnel.
-          user: { select: { typeCompte: true } },
+          role: true,
+          // Le TYPE de chaque compte, et s'il écrit par l'API : c'est ce que
+          // juge `motifRefus`.
+          user: { select: { typeCompte: true, developerAccount: { select: { id: true } } } },
         },
       },
     },
@@ -104,6 +95,8 @@ async function etat(convId: string) {
     ids,
     refus,
     sansCles: ids.filter((id) => !prets.has(id)),
+    // Qui peut activer : tout participant à deux, un administrateur en groupe.
+    peutActiver: (uid: string) => !conv.isGroup || isGroupAdmin(conv.participants, uid),
   };
 }
 
@@ -116,9 +109,14 @@ export const GET = withAuth(
     }
     return ok({
       e2eeActif: e.conv.e2eeActif,
+      groupe: e.conv.isGroup,
+      cleVersion: e.conv.cleVersion,
       participants: e.ids.length,
       sansCles: e.sansCles,
       activable: e.refus === null && e.sansCles.length === 0,
+      // Distinct d'`activable` : le bouton s'affiche pour l'administrateur,
+      // les autres membres lisent « seul un administrateur peut l'activer ».
+      jePeuxActiver: e.peutActiver(userId),
       // Pourquoi ce n'est pas activable, quand ça ne l'est pas : l'écran a
       // besoin de le DIRE, pas seulement de griser un bouton.
       motif: e.refus ?? (e.sansCles.length > 0 ? "CLES_MANQUANTES" : null),
@@ -127,7 +125,7 @@ export const GET = withAuth(
 );
 
 export const POST = withAuth(
-  async (_req: NextRequest, userId: string, ctx: { params: Promise<Record<string, string>> }) => {
+  async (req: NextRequest, userId: string, ctx: { params: Promise<Record<string, string>> }) => {
     const { id } = await ctx.params;
     const e = await etat(id);
     if (!e || !e.ids.includes(userId)) {
@@ -136,7 +134,17 @@ export const POST = withAuth(
 
     // Déjà chiffrée : on ne fait rien, et on ne se plaint pas. Deux appareils
     // du même compte peuvent demander en même temps.
-    if (e.conv.e2eeActif) return ok({ e2eeActif: true, deja: true });
+    if (e.conv.e2eeActif) {
+      return ok({ e2eeActif: true, deja: true, cleVersion: e.conv.cleVersion });
+    }
+
+    if (!e.peutActiver(userId)) {
+      return fail(
+        "Seul un administrateur du groupe peut activer le chiffrement.",
+        403,
+        "ADMIN_REQUIS",
+      );
+    }
 
     /*
      * ⚠️ LE MÊME CALCUL QUE LE `GET`, pris au même endroit. Deux règles
@@ -145,17 +153,17 @@ export const POST = withAuth(
      */
     if (e.refus === "HORS_PERIMETRE") {
       return fail(
-        "Le chiffrement de bout en bout ne couvre que les conversations " +
-          "entre deux comptes personnels.",
+        "Un participant a un type de compte que le chiffrement ne couvre pas.",
         400,
         "HORS_PERIMETRE",
       );
     }
-    if (e.refus === "GROUPE_NON_SUPPORTE") {
+    if (e.refus === "EMETTEUR_API") {
       return fail(
-        "Le chiffrement de bout en bout ne couvre pas encore les groupes.",
+        "Ce correspondant envoie des messages automatiques (codes, alertes) : " +
+          "la conversation ne peut pas être chiffrée pour l'instant.",
         400,
-        "GROUPE_NON_SUPPORTE",
+        "EMETTEUR_API",
       );
     }
     if (e.sansCles.length > 0) {
@@ -167,11 +175,57 @@ export const POST = withAuth(
       );
     }
 
-    await prisma.conversation.update({
-      where: { id },
-      data: { e2eeActif: true },
+    if (!e.conv.isGroup) {
+      await prisma.conversation.update({
+        where: { id },
+        data: { e2eeActif: true },
+      });
+      return ok({ e2eeActif: true, deja: false });
+    }
+
+    /*
+     * ⚠️ L'APPAREIL QUI ACTIVE DOIT AVOIR UNE IDENTITÉ PUBLIÉE. C'est lui qui
+     * tirera la clé et signera ; les autres vérifieront sa signature avec la
+     * clé d'identité qu'ils lui connaissent. Un appareil sans identité ne
+     * pourrait rien distribuer : le groupe resterait muet.
+     */
+    let corps: unknown = null;
+    try {
+      corps = await req.json();
+    } catch {
+      // Corps absent ou illisible : refusé juste en dessous.
+    }
+    const appareil = (corps as { appareil?: unknown } | null)?.appareil;
+    if (typeof appareil !== "number" || !Number.isInteger(appareil) || appareil < 1) {
+      return fail("« appareil » (l'identifiant Signal de cet appareil) est requis", 400, "BAD_BODY");
+    }
+    const identite = await prisma.e2eeIdentite.findUnique({
+      where: { userId_deviceId: { userId, deviceId: appareil } },
+      select: { id: true },
+    });
+    if (!identite) {
+      return fail("Cet appareil n'a pas publié ses clés.", 409, "CLES_MANQUANTES");
+    }
+
+    /*
+     * ⚠️ LA BASCULE EST CONDITIONNELLE (`e2eeActif: false`). Deux
+     * administrateurs qui activent au même instant : un seul crée la
+     * version 1, l'autre reçoit « déjà ». Sans cette condition, le second
+     * buterait sur la clé primaire de `e2ee_cle_versions` — une erreur 500
+     * pour une situation parfaitement normale.
+     */
+    const cree = await prisma.$transaction(async (tx) => {
+      const bascule = await tx.conversation.updateMany({
+        where: { id, e2eeActif: false },
+        data: { e2eeActif: true, cleVersion: 1 },
+      });
+      if (bascule.count === 0) return false;
+      await tx.e2eeCleVersion.create({
+        data: { convId: id, version: 1, creePar: userId, creeParAppareil: appareil, motif: "ACTIVATION" },
+      });
+      return true;
     });
 
-    return ok({ e2eeActif: true, deja: false });
+    return ok({ e2eeActif: true, deja: !cree, cleVersion: 1 });
   },
 );

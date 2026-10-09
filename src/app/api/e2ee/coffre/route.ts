@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
-import { estComptePersonnel } from "@/lib/e2ee-perimetre";
+import { peutChiffrer } from "@/lib/e2ee-perimetre";
 
 /**
  * LES SERRURES DE L'ARCHIVE.
@@ -95,12 +95,12 @@ export const PUT = withAuth(async (req: NextRequest, userId: string) => {
     select: { typeCompte: true },
   });
   /*
-   * ⚠️ `estComptePersonnel` PREND LE COMPTE, PAS SON `typeCompte`. Et on ne
+   * ⚠️ `peutChiffrer` PREND LE COMPTE, PAS SON `typeCompte`. Et on ne
    * se sert PAS de `motifRefus` : celui-ci juge une CONVERSATION — il répond
-   * « groupe » ou « hors périmètre » pour un fil. Ici il n'y a pas de fil, il
+   * « hors périmètre » ou « émetteur API » pour un fil. Ici il n'y a pas de fil, il
    * y a un compte, et le seul motif possible est le périmètre.
    */
-  if (!estComptePersonnel(moi)) {
+  if (!peutChiffrer(moi)) {
     return fail(
       "Ce type de compte n'est pas couvert par le chiffrement.",
       403,
