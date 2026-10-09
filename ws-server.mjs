@@ -1194,9 +1194,16 @@ async function handleSend(ws, msg) {
    */
   const filChiffre = await prisma.conversation.findUnique({
     where: { id: convId },
-    select: { e2eeActif: true },
+    select: { e2eeActif: true, isGroup: true },
   });
-  if (filChiffre?.e2eeActif === true && content && content.trim() !== "") {
+  /*
+   * 🔴 UN GROUPE CHIFFRÉ N'ACCEPTE RIEN PAR ICI, PAS MÊME UN MESSAGE VIDE
+   * (09/10/2026). Son chiffré unique s'écrit avec la ligne du message, par la
+   * route REST (`e2ee_messages_groupe`, cours chapitre 32). Une ligne créée ici
+   * n'aurait jamais de corps : une bulle vide, illisible pour toujours.
+   */
+  const groupeChiffre = filChiffre?.e2eeActif === true && filChiffre.isGroup === true;
+  if (groupeChiffre || (filChiffre?.e2eeActif === true && content && content.trim() !== "")) {
     ws.send(
       JSON.stringify({
         type: "error",
@@ -3992,8 +3999,10 @@ async function handleDeleteMessage(ws, msg) {
       data: { deletedAt: new Date(), content: null },
     });
     // Les enveloppes d'un message chiffré partent aussi : voir la route REST
-    // jumelle (`messages/[messageId]/route.ts`).
+    // jumelle (`messages/[messageId]/route.ts`). Le chiffré d'un message de
+    // groupe aussi.
     await prisma.e2eeEnveloppe.deleteMany({ where: { messageId } });
+    await prisma.e2eeMessageGroupe.deleteMany({ where: { messageId } });
     await prisma.mediaFile.updateMany({
       where: { messageId },
       data: { messageId: null },

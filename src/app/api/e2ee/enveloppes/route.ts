@@ -1,5 +1,6 @@
 import { type NextRequest } from "next/server";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
+import { annoncerMessageChiffre } from "@/lib/e2ee-annonce";
 import { prisma } from "@/lib/prisma";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
@@ -24,8 +25,16 @@ import { withAuth } from "@/lib/auth-context";
  * aurait pas les moyens, chaque chiffré étant lié à une session distincte.
  */
 
-/** Plafond d'un dépôt : quelques appareils, pas une diffusion. */
-const ENVELOPPES_MAX = 40;
+/**
+ * Plafond d'un dépôt.
+ *
+ * ⚠️ PORTÉ DE 40 À 1 000 LE 09/10/2026 pour les GROUPES chiffrés : un
+ * administrateur distribue le trousseau à CHAQUE appareil de CHAQUE membre
+ * (cours, chapitre 31). Un groupe de 300 personnes à deux appareils, c'est
+ * 600 enveloppes d'un coup. Un message de tête-à-tête, lui, en compte toujours
+ * quelques-unes.
+ */
+const ENVELOPPES_MAX = 1000;
 
 /** Plafond d'une relève, pour borner la réponse. */
 const RELEVE_MAX = 200;
@@ -78,11 +87,12 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    */
   const fil = await prisma.conversation.findUnique({
     where: { id: r.convId },
-    select: { e2eeActif: true },
+    select: { e2eeActif: true, isGroup: true },
   });
   if (fil?.e2eeActif !== true) {
     return fail("Cette conversation n'est pas chiffrée", 409, "CONVERSATION_NON_CHIFFREE");
   }
+  const enGroupe = fil.isGroup === true;
 
   /*
    * ⚠️ LE MESSAGE DOIT APPARTENIR À CETTE CONVERSATION, et le vérifier n'est
@@ -93,6 +103,16 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * déchiffrement, chez quelqu'un qui a bien le droit de lire.
    */
   let messageId: string | null = null;
+  /*
+   * 🔴 EN GROUPE, AUCUNE ENVELOPPE NE PORTE UN MESSAGE. Le message de groupe a
+   * son propre chiffré, écrit avec sa ligne (`e2ee_messages_groupe`). Les
+   * enveloppes d'un groupe ne transportent que le TROUSSEAU, hors fil. Une
+   * enveloppe rattachée à un message ferait sonner et notifier trois cents
+   * personnes pour un contenu qui ne leur est pas destiné.
+   */
+  if (enGroupe && typeof r.messageId === "string" && r.messageId !== "") {
+    return fail("En groupe, les enveloppes ne portent que le trousseau", 400, "BAD_BODY");
+  }
   if (typeof r.messageId === "string" && r.messageId !== "") {
     const ligne = await prisma.message.findFirst({
       where: { id: r.messageId, convId: r.convId, senderId: userId },
@@ -154,8 +174,15 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * notifiait : une personne bloquée faisait vibrer, en boucle, le téléphone de
    * celle qui l'avait bloquée. Prouvé par `scripts/e2ee-depot-banc.mjs` ③.
    */
+  /*
+   * ⚠️ SAUF EN GROUPE (09/10/2026). Un blocage entre deux membres ne retire la
+   * parole à personne dans un groupe (`creerMessage`) ; il ne doit pas non
+   * plus priver quelqu'un du TROUSSEAU, sans lequel il ne lirait plus rien du
+   * groupe. Et un dépôt de groupe ne sonne ni ne notifie (hors fil, voir
+   * ci-dessus) : il ne peut pas servir à harceler.
+   */
   const autres = [...new Set(lues.map((e) => e!.destinataireId))].filter((id) => id !== userId);
-  if (autres.length > 0) {
+  if (autres.length > 0 && !enGroupe) {
     const blocage = await prisma.blocked.findFirst({
       where: {
         OR: [
@@ -222,12 +249,6 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    */
   if (messageId === null) return ok({ deposees: lues.length }, 201);
 
-  await previensDesPersonnes({
-    personnes: [...new Set(lues.map((e) => e!.destinataireId))],
-    type: "e2ee_arrivee",
-    donnees: { convId: r.convId as string, messageId },
-  });
-
   /*
    * ══════════════ LA NOTIFICATION POUSSÉE ══════════════
    *
@@ -263,39 +284,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * sonnait quand même. Même règle : elle coupe la notification, jamais la
    * sonnette temps réel (on reste à jour dans un fil qu'on regarde).
    */
-  const enSourdine = new Set(membres.filter((m) => m.sourdine === 1).map((m) => m.userId));
-  const aNotifier = autres.filter((id) => !enSourdine.has(id));
-  if (aNotifier.length > 0) {
-    try {
-      const [{ pushNewMessage }, expediteur] = await Promise.all([
-        import("@/../push.mjs"),
-        prisma.user.findUnique({ where: { id: userId }, select: { nom: true } }),
-      ]);
-      await Promise.all(
-        aNotifier.map((destinataireId) =>
-          pushNewMessage(prisma, {
-            recipientId: destinataireId,
-            senderName: expediteur?.nom ?? "",
-            senderId: userId,
-            convId: r.convId as string,
-            convTitle: null,
-            // ⚠️ NUL, ET C'EST LE POINT. `pushNewMessage` retombe alors sur
-            // « Nouveau message » — le seul texte honnête ici.
-            preview: null,
-            messageType: "TEXT",
-          }),
-        ),
-      );
-    } catch (e) {
-      /*
-       * ⚠️ NE FAIT JAMAIS ÉCHOUER LE DÉPÔT. Le message est écrit et valide ;
-       * au pire il arrivera à la prochaine ouverture. Faire tomber l'envoi
-       * parce que Firebase tousse serait échanger un défaut d'affichage
-       * contre une perte de message.
-       */
-      console.error("[e2ee] notification impossible :", e);
-    }
-  }
+  // Le code vit dans `@/lib/e2ee-annonce` depuis le 09/10/2026 : le message de
+  // GROUPE chiffré en a besoin aussi. Les leçons ci-dessus y restent valables.
+  await annoncerMessageChiffre({
+    convId: r.convId as string,
+    expediteurId: userId,
+    messageId,
+    personnes: lues.map((e) => e!.destinataireId),
+  });
 
   return ok({ deposees: lues.length }, 201);
 });

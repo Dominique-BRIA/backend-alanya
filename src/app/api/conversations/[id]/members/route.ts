@@ -5,6 +5,8 @@ import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
+import { peutChiffrer } from "@/lib/e2ee-perimetre";
+import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 import { avatarPublicUrl } from "@/lib/avatar";
@@ -86,7 +88,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   // Trouve les utilisateurs par numéro public
   const users = await prisma.user.findMany({
     where: { publicNumber: { in: publicNumbers } },
-    select: { id: true, publicNumber: true },
+    select: { id: true, publicNumber: true, typeCompte: true },
   });
 
   const existingMemberIds = new Set(conv.participants.map((p) => p.userId));
@@ -94,6 +96,54 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   if (toAdd.length === 0) {
     return fail("Tous les utilisateurs sont déjà membres", 400, "ALREADY_MEMBERS");
+  }
+
+  /*
+   * 🔴 DANS UN GROUPE CHIFFRÉ, ON N'AJOUTE QUE QUELQU'UN QUI PEUT LIRE
+   * (décision du user, 09/10/2026 : refus). Un type de compte hors périmètre,
+   * ou un compte qui n'a publié de clés sur AUCUN appareil, ne pourrait ni
+   * recevoir le trousseau ni déchiffrer quoi que ce soit : il verrait un
+   * groupe muet. On refuse TOUT l'ajout, en nommant les numéros en cause,
+   * plutôt que d'en ajouter une partie en silence.
+   */
+  if (conv.e2eeActif) {
+    const avecCles = new Set(
+      (
+        await prisma.e2eeIdentite.findMany({
+          where: { userId: { in: toAdd.map((u) => u.id) } },
+          select: { userId: true },
+          distinct: ["userId"],
+        })
+      ).map((i) => i.userId),
+    );
+    const horsPerimetre = toAdd.filter((u) => !peutChiffrer(u));
+    const sansCles = toAdd.filter((u) => peutChiffrer(u) && !avecCles.has(u.id));
+    if (horsPerimetre.length > 0) {
+      return NextResponse.json(
+        {
+          error: {
+            message: "Ce type de compte ne peut pas rejoindre un groupe chiffré.",
+            code: "HORS_PERIMETRE",
+            numeros: horsPerimetre.map((u) => u.publicNumber),
+          },
+        },
+        { status: 409 },
+      );
+    }
+    if (sansCles.length > 0) {
+      return NextResponse.json(
+        {
+          error: {
+            message:
+              "Ce groupe est chiffré : la personne doit d'abord ouvrir Alanya sur " +
+              "un appareil à jour pour publier ses clés.",
+            code: "CLES_MANQUANTES",
+            numeros: sansCles.map((u) => u.publicNumber),
+          },
+        },
+        { status: 409 },
+      );
+    }
   }
 
   /*
@@ -203,6 +253,21 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
    * continue d'y écrire et d'en recevoir les messages.
    */
   await invaliderConversation(convId);
+
+  /*
+   * 🔴 LE PARTANT EFFACE SON TROUSSEAU (groupe chiffré, décision du user). Ses
+   * appareils sont prévenus ici ; les messages DÉJÀ LUS restent chez lui,
+   * comme sur WhatsApp. Pas de nouvelle clé pour un départ volontaire ; pour
+   * une exclusion, c'est l'appareil de l'administrateur qui la crée
+   * (`e2ee/versions`).
+   */
+  if (conv.e2eeActif) {
+    await previensDesPersonnes({
+      personnes: [targetId],
+      type: "e2ee_membre_parti",
+      donnees: { convId, exclu: targetId !== userId },
+    });
+  }
 
   // Si c'est soi-même qui quitte, on peut aussi supprimer la conv si vide
   let convSupprimee = false;

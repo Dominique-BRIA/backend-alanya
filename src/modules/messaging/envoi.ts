@@ -4,6 +4,7 @@ import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
 import { refusMediaEnClair } from "@/lib/e2ee-clair.mjs";
+import type { ChargeGroupe } from "@/lib/e2ee-groupe-charge";
 
 /**
  * LE CŒUR D'ENVOI D'UN MESSAGE — partagé par la route de conversation et par
@@ -53,7 +54,13 @@ export type ResultatEnvoi =
         | "CONTENU_EN_CLAIR"
         // Le message cité n'est pas dans cette conversation.
         | "CITATION_ETRANGERE"
-        | "VUE_UNIQUE_INVALIDE";
+        | "VUE_UNIQUE_INVALIDE"
+        // Groupe chiffré : charge absente, ou présente hors d'un groupe chiffré.
+        | "CHARGE_GROUPE_INVALIDE"
+        // Groupe chiffré : la clé a changé depuis que le client a chiffré.
+        | "VERSION_PERIMEE"
+        // Groupe chiffré : l'appareil signataire n'a pas d'identité publiée.
+        | "APPAREIL_INCONNU";
     };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
@@ -161,6 +168,9 @@ export async function creerMessage(params: {
   /// contenu l'accompagne.
   chiffre?: boolean;
   vueUnique?: boolean;
+  /// Le chiffré d'un message de GROUPE chiffré (cours, chapitre 32), déjà lu
+  /// par `lireChargeGroupe`. Un seul corps pour tous les membres.
+  groupe?: ChargeGroupe;
 }): Promise<ResultatEnvoi> {
   const { convId, expediteurId, type, replyToId } = params;
 
@@ -168,7 +178,7 @@ export async function creerMessage(params: {
   // indispensable au surlignage : sans lui, rien à mettre en évidence.
   const conversation = await prisma.conversation.findUnique({
     where: { id: convId },
-    select: { isGroup: true, e2eeActif: true },
+    select: { isGroup: true, e2eeActif: true, cleVersion: true },
   });
 
   /*
@@ -202,6 +212,36 @@ export async function creerMessage(params: {
       // plutôt que de choisir à la place de l'appelant.
       return { ok: false, motif: "CONTENU_EN_CLAIR" };
     }
+  }
+
+  /*
+   * 🔴 UN GROUPE CHIFFRÉ EXIGE SON CORPS, ET RIEN D'AUTRE NE LE PORTE.
+   *
+   * Dans un groupe, le texte ne voyage pas en enveloppes (une par appareil,
+   * trois cents fois) mais en UN chiffré, écrit ici avec la ligne du message.
+   * Sans corps, la ligne serait un message vide que personne ne pourrait
+   * jamais lire ; un corps hors d'un groupe chiffré n'aurait aucune clé pour
+   * l'ouvrir.
+   *
+   * ⚠️ LA VERSION DOIT ÊTRE LA COURANTE. Après une exclusion, l'ancienne clé
+   * est connue de l'exclu : écrire encore avec elle, c'est lui écrire. Le
+   * client qui reçoit `VERSION_PERIMEE` attend le nouveau trousseau et
+   * rechiffre. (Une exclusion qui tomberait ENTRE ce contrôle et l'écriture
+   * laisse passer un message en version n : l'exclu a la clé mais plus
+   * l'accès au fil — le serveur ne le lui sert plus.)
+   */
+  const groupeChiffre = conversation?.e2eeActif === true && conversation.isGroup === true;
+  const groupe = params.groupe;
+  if (groupeChiffre !== (groupe !== undefined)) {
+    return { ok: false, motif: "CHARGE_GROUPE_INVALIDE" };
+  }
+  if (groupe) {
+    if (groupe.version !== conversation!.cleVersion) return { ok: false, motif: "VERSION_PERIMEE" };
+    const identite = await prisma.e2eeIdentite.findUnique({
+      where: { userId_deviceId: { userId: expediteurId, deviceId: groupe.appareil } },
+      select: { id: true },
+    });
+    if (!identite) return { ok: false, motif: "APPAREIL_INCONNU" };
   }
   const mentionneTous =
     params.mentionneTous === true &&
@@ -375,6 +415,20 @@ export async function creerMessage(params: {
     mentionneTous,
     mentionTousLibelle: mentionneTous ? (params.mentionTousLibelle ?? "").trim().slice(0, 80) : null,
     vueUnique,
+    // Le chiffré du groupe, écrit AVEC la ligne : un message sans son corps
+    // serait illisible pour toujours.
+    ...(groupe
+      ? {
+          groupe: {
+            create: {
+              convId,
+              version: groupe.version,
+              expediteurAppareil: groupe.appareil,
+              corps: groupe.corps,
+            },
+          },
+        }
+      : {}),
   });
 
   /*

@@ -1,4 +1,4 @@
-import { type NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -13,6 +13,9 @@ import {
   annulerEnvoi,
   tempIdValide,
 } from "@/lib/idempotence.mjs";
+import { lireChargeGroupe } from "@/lib/e2ee-groupe-charge";
+import { annoncerMessageChiffre } from "@/lib/e2ee-annonce";
+import { membresActifs } from "@/lib/appartenance.mjs";
 
 const PAGE_SIZE = 50;
 
@@ -82,6 +85,12 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
        * alourdirait chaque page d historique.
        */
       _count: { select: { e2eeEnveloppes: true } },
+      /*
+       * LE CHIFFRÉ D'UN MESSAGE DE GROUPE, LUI, EST CHARGÉ. Il n'y en a qu'un
+       * par message (pas un par appareil), il n'est jamais effacé à la
+       * lecture, et c'est le SEUL endroit où un membre peut le prendre.
+       */
+      groupe: { select: { version: true, expediteurAppareil: true, corps: true } },
       // Qui a ouvert les messages à vue unique : « Ouverte » chez l'expéditeur.
       ouvertures: { select: { userId: true } },
     },
@@ -172,7 +181,19 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
          *
          * ⚠️ CHAMP FACULTATIF : un client qui l ignore se comporte comme avant.
          */
-        chiffre: m._count.e2eeEnveloppes > 0,
+        chiffre: m._count.e2eeEnveloppes > 0 || m.groupe !== null,
+        // Groupe chiffré : à déchiffrer avec la clé de cette version, après
+        // avoir vérifié la signature de cet appareil. Absent d'un message
+        // supprimé — son chiffré l'est aussi.
+        ...(m.groupe && !m.deletedAt
+          ? {
+              groupe: {
+                version: m.groupe.version,
+                expediteurAppareil: m.groupe.expediteurAppareil,
+                corps: m.groupe.corps,
+              },
+            }
+          : {}),
         type: m.type,
         status: m.status,
         // 🐛 LE MESSAGE PORTAIT SON APPEL EN BASE, ET NE LE DISAIT PAS.
@@ -289,7 +310,17 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const { id: convId } = await ctx.params;
   await assertParticipant(convId, userId);
 
-  const body = sendMessageSchema.parse(await req.json());
+  const brut = await req.json();
+  const body = sendMessageSchema.parse(brut);
+
+  /*
+   * Le chiffré d'un message de GROUPE (cours, chapitre 32). Lu à part du
+   * schéma : sa forme se contrôle octet par octet, pas champ par champ.
+   */
+  const groupe = lireChargeGroupe((brut as { groupe?: unknown } | null)?.groupe);
+  if (groupe === null) {
+    return fail("Charge de groupe chiffrée mal formée", 400, "CHARGE_GROUPE_INVALIDE");
+  }
 
   /*
    * QU'UN REJEU N'ÉCRIVE PAS UN SECOND MESSAGE.
@@ -349,6 +380,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     mentionTousLibelle: body.mentionTousLibelle,
     chiffre: body.chiffre,
     vueUnique: body.vueUnique,
+    groupe,
   });
 
   if (!envoi.ok) {
@@ -400,6 +432,38 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
         "CONTENU_EN_CLAIR",
       );
     }
+    /*
+     * Les trois refus du groupe chiffré. `VERSION_PERIMEE` est le seul qu'un
+     * client à jour rencontre normalement : la clé a changé (exclusion,
+     * changement manuel) pendant qu'il chiffrait. Il attend le trousseau et
+     * rechiffre — d'où un 409 distinct, avec la version courante.
+     */
+    if (envoi.motif === "VERSION_PERIMEE") {
+      const conv = await prisma.conversation.findUnique({
+        where: { id: convId },
+        select: { cleVersion: true },
+      });
+      return NextResponse.json(
+        {
+          error: {
+            message: "La clé du groupe a changé : rechiffrez avec la nouvelle version.",
+            code: "VERSION_PERIMEE",
+            cleVersion: conv?.cleVersion ?? 0,
+          },
+        },
+        { status: 409 },
+      );
+    }
+    if (envoi.motif === "APPAREIL_INCONNU") {
+      return fail("Cet appareil n'a pas publié ses clés.", 409, "APPAREIL_INCONNU");
+    }
+    if (envoi.motif === "CHARGE_GROUPE_INVALIDE") {
+      return fail(
+        "Un groupe chiffré exige son chiffré de groupe, et lui seul.",
+        409,
+        "CHARGE_GROUPE_INVALIDE",
+      );
+    }
     return fail("Message non distribuable", 403, "BLOCKED");
   }
 
@@ -420,10 +484,27 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       })
     : null;
 
+  /*
+   * 🔴 LE MESSAGE DE GROUPE S'ANNONCE ICI, ET PAS AU DÉPÔT : il n'y a pas de
+   * dépôt. Son chiffré vient d'être écrit avec sa ligne, il est lisible dès
+   * maintenant — c'est donc maintenant qu'on sonne, chez TOUS les membres
+   * actifs (l'expéditeur compris, pour ses autres appareils).
+   */
+  if (groupe) {
+    await annoncerMessageChiffre({
+      convId,
+      expediteurId: userId,
+      messageId: envoi.message.id,
+      personnes: await membresActifs(prisma, convId),
+      extra: { groupe: true },
+    });
+  }
+
   return ok(
     {
       ...serialiserMessage(envoi.message),
       statutCite: citation ? serialiserCitation(citation) : null,
+      ...(groupe ? { chiffre: true } : {}),
     },
     201,
   );

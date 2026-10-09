@@ -1,4 +1,4 @@
-import { type NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
@@ -7,6 +7,9 @@ import { rafraichirApercuApresEdition } from "@/lib/apercu-conversation.mjs";
 import { LONGUEUR_MAX_CONTENU } from "@/lib/message-payload.mjs";
 import { refusModification } from "@/lib/e2ee-clair.mjs";
 import { refusDelaiModification, refusDelaiSuppression } from "@/lib/delais-message.mjs";
+import { lireChargeGroupe } from "@/lib/e2ee-groupe-charge";
+import { annoncerMessageChiffre } from "@/lib/e2ee-annonce";
+import { membresActifs } from "@/lib/appartenance.mjs";
 
 // PATCH /api/conversations/:convId/messages/:messageId — modifier un message.
 // Repli REST (la diffusion temps réel est gérée par le serveur WS). Seul
@@ -56,11 +59,82 @@ export const PATCH = withAuth(
       }
       const fil = await prisma.conversation.findUnique({
         where: { id: convId },
-        select: { e2eeActif: true },
+        select: { e2eeActif: true, isGroup: true, cleVersion: true },
       });
       if (fil?.e2eeActif !== true) {
         return fail("Cette conversation n'est pas chiffrée", 409, "PAS_CHIFFRE");
       }
+
+      /*
+       * 🔴 EN GROUPE, LE NOUVEAU CHIFFRÉ REMPLACE L'ANCIEN (cours, chapitre 32).
+       *
+       * Pas d'enveloppes en groupe : le texte modifié arrive ICI, dans un
+       * nouveau corps, chiffré avec la version COURANTE — après une
+       * exclusion, réécrire avec l'ancienne clé, ce serait écrire pour
+       * l'exclu. L'ancien corps disparaît : il n'y a pas d'historique des
+       * modifications, comme pour un message en clair.
+       */
+      const groupe = lireChargeGroupe(corps?.groupe);
+      if (groupe === null || (fil.isGroup === true) !== (groupe !== undefined)) {
+        return fail(
+          "Un groupe chiffré exige son chiffré de groupe, et lui seul.",
+          409,
+          "CHARGE_GROUPE_INVALIDE",
+        );
+      }
+      if (groupe) {
+        if (groupe.version !== fil.cleVersion) {
+          return NextResponse.json(
+            {
+              error: {
+                message: "La clé du groupe a changé : rechiffrez avec la nouvelle version.",
+                code: "VERSION_PERIMEE",
+                cleVersion: fil.cleVersion,
+              },
+            },
+            { status: 409 },
+          );
+        }
+        const identite = await prisma.e2eeIdentite.findUnique({
+          where: { userId_deviceId: { userId, deviceId: groupe.appareil } },
+          select: { id: true },
+        });
+        if (!identite) return fail("Cet appareil n'a pas publié ses clés.", 409, "APPAREIL_INCONNU");
+        // Un message de ce groupe écrit AVANT l'activation n'a pas de chiffré
+        // à remplacer — et son clair, d'autres l'ont déjà reçu.
+        const existant = await prisma.e2eeMessageGroupe.findUnique({
+          where: { messageId },
+          select: { messageId: true },
+        });
+        if (!existant) return fail("Ce message n'est pas chiffré", 409, "PAS_CHIFFRE");
+        const [, date] = await prisma.$transaction([
+          prisma.e2eeMessageGroupe.update({
+            where: { messageId },
+            data: {
+              version: groupe.version,
+              expediteurAppareil: groupe.appareil,
+              corps: groupe.corps,
+              majLe: new Date(),
+            },
+          }),
+          prisma.message.update({
+            where: { id: messageId },
+            data: { editedAt: new Date() },
+            select: { id: true, editedAt: true },
+          }),
+        ]);
+        // On prévient, on ne notifie pas : une modification ne fait pas vibrer.
+        await annoncerMessageChiffre({
+          convId,
+          expediteurId: userId,
+          messageId,
+          personnes: await membresActifs(prisma, convId),
+          extra: { groupe: true, modifie: true },
+          notifier: false,
+        });
+        return ok({ id: date.id, editedAt: date.editedAt });
+      }
+
       const date = await prisma.message.update({
         where: { id: messageId },
         data: { editedAt: new Date() },
@@ -179,6 +253,9 @@ export const DELETE = withAuth(
        * supprimé pour tous. Prouvé par `scripts/e2ee-depot-banc.mjs` ⑤.
        */
       await prisma.e2eeEnveloppe.deleteMany({ where: { messageId } });
+      // Et le chiffré d'un message de GROUPE, pour la même raison : un membre
+      // qui relit l'historique le déchiffrerait encore.
+      await prisma.e2eeMessageGroupe.deleteMany({ where: { messageId } });
       await prisma.mediaFile.updateMany({
         where: { messageId },
         data: { messageId: null },

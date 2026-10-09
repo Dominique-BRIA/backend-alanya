@@ -5,6 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 import { MEMBRE_ACTIF, donneesDepart } from "@/lib/appartenance.mjs";
+import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 
 // POST /api/conversations/:id/leave — quitter un groupe.
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -34,6 +35,21 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   ]);
   // Même raison qu'au retrait : la liste des membres décide de qui reçoit quoi.
   await invaliderConversation(convId);
+
+  /*
+   * 🔴 LE PARTANT EFFACE SON TROUSSEAU (groupe chiffré, décision du user). Ses
+   * appareils sont prévenus ici ; les messages DÉJÀ LUS restent chez lui,
+   * comme sur WhatsApp. Pas de nouvelle clé pour un départ volontaire ; pour
+   * une exclusion, c'est l'appareil de l'administrateur qui la crée
+   * (`e2ee/versions`).
+   */
+  if (conv.e2eeActif) {
+    await previensDesPersonnes({
+      personnes: [userId],
+      type: "e2ee_membre_parti",
+      donnees: { convId, exclu: false },
+    });
+  }
 
   // Si le groupe n'a plus de membres, supprime la conversation
   const remaining = await prisma.participant.count({ where: { convId, ...MEMBRE_ACTIF } });
