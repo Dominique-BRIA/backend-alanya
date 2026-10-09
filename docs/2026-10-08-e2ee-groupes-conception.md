@@ -200,7 +200,7 @@ Une **seule** ligne par message, quel que soit le nombre de membres. Il n'y a pa
 
 ### 5.5 Départ volontaire
 - Côté serveur : `est_membre = false`, suppression de sa copie serveur, événement `membre_parti`.
-- Son application efface le trousseau local et le contenu déchiffré du groupe.
+- Son application efface le trousseau local. Les messages **déjà lus** restent sur son appareil, comme sur WhatsApp (décision du 09/10) ; il ne reçoit plus rien de nouveau.
 - Pas de nouvelle version.
 
 ### 5.6 Exclusion (administrateur)
@@ -241,8 +241,8 @@ Comme 5.6, sans exclusion (motif MANUEL).
 
 ## 7. Points à confirmer par le user
 
-1. **Ajouter quelqu'un qui n'a pas de clés** (jamais ouvert une version à jour) : refusé, avec un message clair ? *(proposé : oui)*
-2. **Un membre qui part** : son application efface aussi les messages **déjà déchiffrés** du groupe (« ne pas voir », selon ta demande), ou les garde comme WhatsApp ? *(proposé : effacer, conformément à `isMembre`)*
+1. ✅ **Ajouter quelqu'un qui n'a pas de clés** : **refusé**, avec un message clair (décision du 09/10).
+2. ✅ **Un membre qui part** **garde** les messages déjà lus sur son appareil, comme sur WhatsApp ; `est_membre = false` l'empêche seulement d'en recevoir de nouveaux (décision du 09/10).
 3. **Types autorisés en tête-à-tête** : la même liste que les groupes (0, 2, 3, 4) ? *(proposé : oui)*
 
 ---
