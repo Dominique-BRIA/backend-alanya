@@ -168,9 +168,16 @@ Une **seule** ligne par message, quel que soit le nombre de membres. Il n'y a pa
 
 | Événement | Destinataires | Rôle |
 |---|---|---|
-| `membre_parti` | le partant et les membres | le partant efface son trousseau et le fil |
-| `membre_ajoute` | les membres | message système « X a été ajouté par Y » |
-| `cle_version` | les membres | « une nouvelle version existe » : les appareils attendent le trousseau |
+| `e2ee_membre_parti` `{ convId, exclu }` | le partant | il efface son trousseau (les messages déjà lus restent) |
+| `e2ee_cle_version` `{ convId, version, motif }` | les membres | « une nouvelle version existe » : les appareils attendent le trousseau |
+| `e2ee_arrivee` `{ convId, messageId, groupe: true [, modifie: true] }` | les membres | un message (ou sa modification) est lisible |
+
+> **Écart avec la première version (lot 2c, 09/10).** Les trames portent le
+> préfixe `e2ee_` : le pont interne n'accepte que ce vocabulaire. L'ajout d'un
+> membre n'a pas de trame propre : l'avis système existant (« X a été ajouté
+> par Y ») suffit. La liste de toutes mes copies de trousseau est à
+> `GET /api/e2ee/trousseaux`. Un message de groupe porte
+> `groupe: { version, corps, appareil }` à l'envoi comme à la modification.
 
 ---
 
