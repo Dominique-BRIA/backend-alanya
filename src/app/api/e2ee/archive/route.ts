@@ -222,6 +222,14 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     total: blocs.length,
     ...(totalArchive !== undefined ? { totalArchive } : {}),
     suivant,
+    /*
+     * 🔴 LE DERNIER BLOC RENDU, MÊME SUR LA DERNIÈRE PAGE (10/10/2026) — le
+     * curseur du RATTRAPAGE. `suivant` est nul quand tout est lu ; un
+     * appareil qui veut relire plus tard les seuls blocs déposés depuis par
+     * ses autres appareils doit pourtant savoir où il s'est arrêté. Ajouté à
+     * côté, sans rien changer à `suivant` : les clients actuels l'ignorent.
+     */
+    dernier: retenus.length > 0 ? retenus[retenus.length - 1] : null,
   });
 });
 
