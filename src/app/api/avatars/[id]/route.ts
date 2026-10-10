@@ -3,6 +3,8 @@ import { fail, handleError } from "@/lib/http";
 import { prisma } from "@/lib/prisma";
 import { formesStockeesPour } from "@/lib/avatar";
 import { readStored } from "@/modules/media/storage";
+import { publierAvatar } from "@/lib/avatar-profil";
+import { ESPACE_PROFIL, adresseProfil } from "@/lib/seau-profil.mjs";
 
 /**
  * GET /api/avatars/:id — sert une photo de profil, SANS jeton.
@@ -53,6 +55,28 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const cache = "public, max-age=604800, immutable";
 
     /*
+     * 🔴 LA PHOTO EST DANS LE SEAU DES PHOTOS DE PROFIL (`alanyaprofile`) :
+     * CLOUDFLARE LA SERT, PAS NOUS. Voir `lib/seau-profil.mjs`.
+     *
+     * ⚠️ CETTE REDIRECTION N'EST PAS CELLE DU 27/09 (lire plus bas). L'adresse
+     * cible est FIXE et n'expire jamais : le navigateur peut garder la
+     * redirection, puis l'image elle-même un an. Un jour seulement pour la
+     * redirection, pour qu'un changement de `R2_PROFIL_URL` se propage vite.
+     *
+     * Débranché (`STOCKAGE_PROFIL` retiré), `adresseProfil` rend `null` et l'on
+     * sert l'original du seau privé, toujours là — comme avant.
+     */
+    if (media.espace === ESPACE_PROFIL) {
+      const adresse = adresseProfil(media.url);
+      if (adresse) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: adresse, "Cache-Control": "public, max-age=86400" },
+        });
+      }
+    }
+
+    /*
      * 🔴 ON SERT LES OCTETS, ON NE REDIRIGE PLUS. C'est une correction.
      *
      * 🐛 LES PHOTOS DE PROFIL ONT CESSÉ DE S'AFFICHER (constaté par le user le
@@ -83,6 +107,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
      */
     try {
       const buffer = await readStored(media.url, media.espace);
+      /*
+       * Pas encore dans le seau des photos de profil : on la sert, et on l'y
+       * copie au passage — l'affichage suivant passera par Cloudflare. En
+       * arrière-plan : ce contact n'attend pas la copie.
+       */
+      if (media.espace === null) {
+        void publierAvatar(media, buffer).catch((e) =>
+          console.error("[photos de profil] copie impossible :", e),
+        );
+      }
       return new Response(new Uint8Array(buffer), {
         status: 200,
         headers: {

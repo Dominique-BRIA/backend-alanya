@@ -2,6 +2,9 @@ import { promises as fs } from "fs";
 import { env } from "@/lib/env";
 import { checkB2Connection, ciblePrivee } from "@/modules/media/b2";
 import { checkB2PublicConnection, publicConfigure } from "@/modules/media/b2-public";
+import { cibleOuverte, r2OuvertIncomplet } from "@/lib/adresse-publique.mjs";
+import { checkProfilConnection, profilConfigure } from "@/modules/media/r2-profil";
+import { profilIncomplet } from "@/lib/seau-profil.mjs";
 import { storageRoot, useCloudStorage as stockageNuage } from "@/modules/media/storage";
 
 /**
@@ -34,7 +37,13 @@ export interface EtatStockage {
    * alors dans le bucket privé et le répondeur fonctionne, un peu plus
    * lentement. Le dire évite de chercher une optimisation absente.
    */
-  ouvert: { actif: boolean; raison: string | null } | null;
+  ouvert: { fournisseur: "b2" | "r2"; actif: boolean; raison: string | null } | null;
+  /**
+   * Le seau des photos de profil (`alanyaprofile`, `STOCKAGE_PROFIL=r2`).
+   * `null` quand il n'est pas branché : les photos sont alors servies par le
+   * serveur, comme avant — ce n'est pas une panne.
+   */
+  profil: { actif: boolean; raison: string | null } | null;
   /**
    * Pourquoi il ne répond pas, en une phrase.
    *
@@ -69,7 +78,9 @@ function raisonLisible(erreur: unknown): string {
  */
 /** Le bucket ouvert répond-il ? `null` quand il n'est pas configuré. */
 async function etatOuvert(): Promise<EtatStockage["ouvert"]> {
-  if (!publicConfigure()) return null;
+  const cible = cibleOuverte();
+  if (!publicConfigure() || !cible) return null;
+  const fournisseur = cible.fournisseur;
   try {
     await Promise.race([
       checkB2PublicConnection(),
@@ -78,6 +89,33 @@ async function etatOuvert(): Promise<EtatStockage["ouvert"]> {
           () => rejeter(Object.assign(new Error("timeout"), { name: "TimeoutError" })),
           4000,
         ),
+      ),
+    ]);
+    /*
+     * ⚠️ R2 DEMANDÉ MAIS INCOMPLET : le seau ouvert est resté chez Backblaze. Il
+     * répond — mais la bascule n'a PAS eu lieu, et cela doit se lire ici.
+     */
+    const avis = r2OuvertIncomplet()
+      ? "R2 demandé mais incomplet : le seau ouvert est resté chez Backblaze"
+      : null;
+    return { fournisseur, actif: true, raison: avis };
+  } catch (err) {
+    return { fournisseur, actif: false, raison: raisonLisible(err) };
+  }
+}
+
+/** Le seau des photos de profil répond-il ? `null` quand il n'est pas branché. */
+async function etatProfil(): Promise<EtatStockage["profil"]> {
+  if (!profilConfigure()) {
+    return profilIncomplet()
+      ? { actif: false, raison: "STOCKAGE_PROFIL=r2 demandé mais incomplet : photos servies par le serveur" }
+      : null;
+  }
+  try {
+    await Promise.race([
+      checkProfilConnection(),
+      new Promise((_, rejeter) =>
+        setTimeout(() => rejeter(Object.assign(new Error("timeout"), { name: "TimeoutError" })), 4000),
       ),
     ]);
     return { actif: true, raison: null };
@@ -104,7 +142,7 @@ export async function etatStockage(): Promise<EtatStockage> {
    * comportement voulu du dépôt, et c'est exactement ce qu'il faut savoir :
    * on croit écrire dans le nuage, et tout s'empile sur le VPS.
    */
-  const ouvert = await etatOuvert();
+  const [ouvert, profil] = await Promise.all([etatOuvert(), etatProfil()]);
 
   if (env.media.provider === "b2" && !stockageNuage()) {
     return {
@@ -112,6 +150,7 @@ export async function etatStockage(): Promise<EtatStockage> {
       actif: false,
       raison: "B2 demandé mais mal configuré",
       ouvert,
+      profil,
     };
   }
 
@@ -128,9 +167,9 @@ export async function etatStockage(): Promise<EtatStockage> {
           setTimeout(() => rejeter(Object.assign(new Error("timeout"), { name: "TimeoutError" })), 4000),
         ),
       ]);
-      return { fournisseur: ciblePrivee().fournisseur, actif: true, raison: avisR2(), ouvert };
+      return { fournisseur: ciblePrivee().fournisseur, actif: true, raison: avisR2(), ouvert, profil };
     } catch (err) {
-      return { fournisseur: ciblePrivee().fournisseur, actif: false, raison: raisonLisible(err), ouvert };
+      return { fournisseur: ciblePrivee().fournisseur, actif: false, raison: raisonLisible(err), ouvert, profil };
     }
   }
 
@@ -143,13 +182,14 @@ export async function etatStockage(): Promise<EtatStockage> {
      */
     await fs.mkdir(storageRoot(), { recursive: true });
     await fs.access(storageRoot(), fs.constants.W_OK);
-    return { fournisseur: "local", actif: true, raison: null, ouvert };
+    return { fournisseur: "local", actif: true, raison: null, ouvert, profil };
   } catch {
     return {
       fournisseur: "local",
       actif: false,
       raison: "dossier inaccessible en écriture",
       ouvert,
+      profil,
     };
   }
 }

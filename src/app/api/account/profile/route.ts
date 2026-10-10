@@ -6,6 +6,7 @@ import { withAuth } from "@/lib/auth-context";
 import { updateProfileSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl, avatarStockage } from "@/lib/avatar";
+import { apresChangementDePhoto } from "@/lib/avatar-profil";
 
 // PATCH /api/account/profile — met à jour le profil de l'utilisateur connecté.
 // F4 : écrit directement dans users (plus de table profiles).
@@ -41,6 +42,12 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string) => {
    * remplacer par un `...data` : le jour où le schéma gagnera un champ, il
    * entrerait en base sans que personne ne l'ait décidé.
    */
+  // L'ancienne photo, pour la retirer du seau public si elle change.
+  const avant =
+    data.avatarUrl !== undefined
+      ? await prisma.user.findUnique({ where: { id: userId }, select: { avatarUrl: true } })
+      : null;
+
   const user = await prisma.user.update({
     where: { id: userId },
     data: {
@@ -55,6 +62,8 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string) => {
   // lisent en cache. Sans cet effacement, quelqu'un qui vient de changer de nom
   // continuerait de signer ses notifications de l'ancien pendant dix minutes.
   await invaliderProfil(userId);
+
+  if (data.avatarUrl !== undefined) apresChangementDePhoto(avant?.avatarUrl, user.avatarUrl);
 
   return ok({
     pseudo: nomAffichage(user),

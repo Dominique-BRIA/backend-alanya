@@ -1,5 +1,5 @@
 /**
- * COPIER LE SEAU PRIVÉ DE BACKBLAZE VERS CLOUDFLARE R2 — décision du user, 10/10/2026.
+ * COPIER LES SEAUX DE BACKBLAZE VERS CLOUDFLARE R2 — décision du user, 10/10/2026.
  *
  * Usage, depuis le dossier du backend :
  *   node --env-file=.env scripts/copier-vers-r2.mjs --essai      compte, ne copie rien
@@ -8,8 +8,21 @@
  *   node --env-file=.env scripts/copier-vers-r2.mjs --inverse    R2 → Backblaze (retour arrière)
  *   node scripts/copier-vers-r2.mjs --autocontrole               contrôles hors ligne
  *
- * Source : B2_ENDPOINT, B2_REGION, B2_BUCKET, B2_KEY_ID, B2_APPLICATION_KEY (inchangées).
- * Cible  : R2_ENDPOINT, R2_REGION (« auto »), R2_BUCKET, R2_KEY_ID, R2_SECRET_ACCESS_KEY.
+ * Ajouter `--public` à n'importe laquelle de ces commandes pour traiter le SEAU
+ * OUVERT (accueils de répondeur, sonneries) au lieu du seau privé.
+ *
+ * Seau privé :
+ *   Source : B2_ENDPOINT, B2_REGION, B2_BUCKET, B2_KEY_ID, B2_APPLICATION_KEY (inchangées).
+ *   Cible  : R2_ENDPOINT, R2_REGION (« auto »), R2_BUCKET, R2_KEY_ID, R2_SECRET_ACCESS_KEY.
+ * Seau ouvert (`--public`) :
+ *   Source : B2_ENDPOINT, B2_REGION, B2_PUBLIC_BUCKET, B2_PUBLIC_KEY_ID, B2_PUBLIC_APPLICATION_KEY.
+ *   Cible  : R2_ENDPOINT, R2_REGION, R2_PUBLIC_BUCKET, R2_PUBLIC_KEY_ID, R2_PUBLIC_SECRET_ACCESS_KEY.
+ *   `--verifier` interroge EN PLUS l'adresse publique (R2_PUBLIC_URL), comme le
+ *   ferait un téléphone : répond-elle, avec le bon cache et le bon CORS ?
+ *
+ * ⚠️ LE CONTENT-TYPE ET LE CACHE-CONTROL SONT RECOPIÉS. Pour le seau ouvert,
+ * c'est vital : un accueil sans `audio/…` ne joue pas dans un navigateur, et
+ * sans `max-age` d'un an il serait retéléchargé à chaque appel.
  *
  * 🔴 RELANÇABLE SANS RISQUE. Un fichier déjà présent dans la cible avec la même
  * taille est sauté : on peut l'interrompre, le relancer, et surtout le relancer
@@ -58,31 +71,50 @@ function clientS3({ endpoint, region, keyId, secret, r2 }) {
   });
 }
 
-function seauxDepuisEnv(env) {
+/**
+ * Les noms des variables à lire, selon le seau traité.
+ *
+ * ⚠️ LE SEAU OUVERT A SES PROPRES CLÉS, chez les deux hébergeurs : chaque clé ne
+ * voit qu'un seau. Celle du privé ne peut ni lire ni écrire l'ouvert.
+ */
+function variables(ouvert) {
+  return ouvert
+    ? {
+        b2: { bucket: "B2_PUBLIC_BUCKET", keyId: "B2_PUBLIC_KEY_ID", secret: "B2_PUBLIC_APPLICATION_KEY" },
+        r2: { bucket: "R2_PUBLIC_BUCKET", keyId: "R2_PUBLIC_KEY_ID", secret: "R2_PUBLIC_SECRET_ACCESS_KEY" },
+      }
+    : {
+        b2: { bucket: "B2_BUCKET", keyId: "B2_KEY_ID", secret: "B2_APPLICATION_KEY" },
+        r2: { bucket: "R2_BUCKET", keyId: "R2_KEY_ID", secret: "R2_SECRET_ACCESS_KEY" },
+      };
+}
+
+function seauxDepuisEnv(env, { ouvert = false } = {}) {
+  const v = variables(ouvert);
   const manque = [];
-  for (const v of ["B2_BUCKET", "B2_KEY_ID", "B2_APPLICATION_KEY", "R2_ENDPOINT", "R2_BUCKET", "R2_KEY_ID", "R2_SECRET_ACCESS_KEY"]) {
-    if (!env[v]) manque.push(v);
+  for (const nom of [v.b2.bucket, v.b2.keyId, v.b2.secret, "R2_ENDPOINT", v.r2.bucket, v.r2.keyId, v.r2.secret]) {
+    if (!env[nom]) manque.push(nom);
   }
   if (manque.length) throw new Error(`Variables manquantes dans .env : ${manque.join(", ")}`);
   const b2 = {
     nom: "Backblaze",
-    bucket: env.B2_BUCKET,
+    bucket: env[v.b2.bucket],
     client: clientS3({
       endpoint: env.B2_ENDPOINT || "s3.us-west-004.backblazeb2.com",
       region: env.B2_REGION || "us-west-004",
-      keyId: env.B2_KEY_ID,
-      secret: env.B2_APPLICATION_KEY,
+      keyId: env[v.b2.keyId],
+      secret: env[v.b2.secret],
       r2: false,
     }),
   };
   const r2 = {
     nom: "Cloudflare R2",
-    bucket: env.R2_BUCKET,
+    bucket: env[v.r2.bucket],
     client: clientS3({
       endpoint: env.R2_ENDPOINT,
       region: env.R2_REGION || "auto",
-      keyId: env.R2_KEY_ID,
-      secret: env.R2_SECRET_ACCESS_KEY,
+      keyId: env[v.r2.keyId],
+      secret: env[v.r2.secret],
       r2: true,
     }),
   };
@@ -182,17 +214,61 @@ export async function verifier(source, cible, { avecSauvegardes = false } = {}) 
   return bilan;
 }
 
+/**
+ * L'ADRESSE PUBLIQUE SERT-ELLE LE FICHIER, COMME UN TÉLÉPHONE LE DEMANDERAIT ?
+ *
+ * 🔴 « LES DEUX SEAUX CONCORDENT » NE SUFFIT PAS POUR LE SEAU OUVERT. Les
+ * fichiers peuvent être tous là et l'adresse publique muette : accès public non
+ * activé chez Cloudflare, `R2_PUBLIC_URL` mal recopiée. On demande donc UN
+ * fichier par l'adresse publique, avec l'origine du web, et l'on regarde les
+ * trois choses qui comptent : la réponse, le cache, le CORS.
+ *
+ * Rend une liste de constats ; `ok` est faux si le fichier n'est pas servi.
+ */
+export async function sonderAdressePublique(base, cle, { origine = "https://alanyavox.com", fetchFn = fetch } = {}) {
+  const adresse = `${String(base).replace(/\/+$/, "")}/${cle}`;
+  let r;
+  try {
+    r = await fetchFn(adresse, { method: "HEAD", headers: { Origin: origine } });
+  } catch (e) {
+    return { ok: false, constats: [`✗ ${adresse} injoignable (${e?.cause?.code || e?.message || e})`] };
+  }
+  const constats = [];
+  const ok = r.status === 200;
+  constats.push(
+    ok
+      ? `✓ l'adresse publique sert les fichiers (${r.status})`
+      : `✗ l'adresse publique répond ${r.status} — accès public non activé dans Cloudflare, ou R2_PUBLIC_URL fausse`,
+  );
+  if (ok) {
+    const cache = r.headers.get("cache-control") || "";
+    constats.push(
+      /max-age=\d{6,}/.test(cache)
+        ? `✓ cache long transmis (${cache})`
+        : `✗ pas de cache long (${cache || "aucun"}) — l'accueil serait retéléchargé à chaque appel`,
+    );
+    const cors = r.headers.get("access-control-allow-origin");
+    constats.push(
+      cors === "*" || cors === origine
+        ? `✓ CORS accepte ${origine}`
+        : `✗ pas de CORS pour ${origine} — le web passera par le serveur (plus lent) : ajouter la règle CORS au seau`,
+    );
+  }
+  return { ok, constats };
+}
+
 /* ─────────────────────────────── Programme */
 
 const mo = (n) => `${(n / 1024 / 1024).toFixed(1)} Mo`;
 
 async function principal(args) {
-  const { b2, r2 } = seauxDepuisEnv(process.env);
+  const ouvert = args.includes("--public");
+  const { b2, r2 } = seauxDepuisEnv(process.env, { ouvert });
   const inverse = args.includes("--inverse");
   const [source, cible] = inverse ? [r2, b2] : [b2, r2];
   const avecSauvegardes = args.includes("--avec-sauvegardes");
 
-  console.log(`\nDe ${source.nom} (${source.bucket}) vers ${cible.nom} (${cible.bucket})`);
+  console.log(`\n${ouvert ? "SEAU OUVERT — " : ""}De ${source.nom} (${source.bucket}) vers ${cible.nom} (${cible.bucket})`);
   for (const s of [source, cible]) {
     try {
       await s.client.send(new HeadBucketCommand({ Bucket: s.bucket }));
@@ -209,8 +285,28 @@ async function principal(args) {
     console.log(`Manquants dans ${cible.nom} : ${v.manquants.length}`);
     console.log(`Taille différente : ${v.differents.length}`);
     for (const c of [...v.manquants, ...v.differents].slice(0, 20)) console.log(`  · ${c}`);
-    const ok = v.manquants.length === 0 && v.differents.length === 0;
-    console.log(ok ? "\n✓ Les deux seaux concordent." : "\n✗ Relancer la copie (sans option), puis vérifier de nouveau.");
+    let ok = v.manquants.length === 0 && v.differents.length === 0;
+    console.log(ok ? "\n✓ Les deux seaux concordent." : "\n✗ Relancer la copie (sans --verifier), puis vérifier de nouveau.");
+    if (ouvert && !inverse) {
+      const base = process.env.R2_PUBLIC_URL;
+      let premier = null;
+      for await (const o of lister(cible)) {
+        premier = o.cle;
+        break;
+      }
+      if (!base) {
+        console.log("\n✗ R2_PUBLIC_URL absente du .env : l'adresse publique n'a pas pu être essayée.");
+        ok = false;
+      } else if (!premier) {
+        console.log("\n(Seau vide : l'adresse publique n'a pas pu être essayée.)");
+      } else {
+        const base2 = /^https?:\/\//.test(base) ? base : `https://${base}`;
+        const sonde = await sonderAdressePublique(base2, premier);
+        console.log("\nAdresse publique :");
+        for (const c of sonde.constats) console.log(`  ${c}`);
+        ok = ok && sonde.ok;
+      }
+    }
     return ok ? 0 : 1;
   }
 
@@ -335,6 +431,57 @@ async function autoControle() {
   }
   v(true, message.includes("R2_SECRET_ACCESS_KEY"), "une variable R2 manquante est nommée");
   v("abc.r2.cloudflarestorage.com", sansProtocole("https://abc.r2.cloudflarestorage.com/"), "l'adresse accepte https:// et /");
+
+  // 9. Le seau ouvert lit SES variables, pas celles du privé.
+  let message2 = "";
+  try {
+    seauxDepuisEnv(
+      { B2_BUCKET: "x", B2_KEY_ID: "x", B2_APPLICATION_KEY: "x", R2_ENDPOINT: "x", R2_BUCKET: "x", R2_KEY_ID: "x", R2_SECRET_ACCESS_KEY: "x" },
+      { ouvert: true },
+    );
+  } catch (e) {
+    message2 = e.message;
+  }
+  v(true, message2.includes("B2_PUBLIC_BUCKET") && message2.includes("R2_PUBLIC_SECRET_ACCESS_KEY"), "--public exige les clés du seau ouvert");
+  const pub = seauxDepuisEnv(
+    { B2_PUBLIC_BUCKET: "profilemedia", B2_PUBLIC_KEY_ID: "a", B2_PUBLIC_APPLICATION_KEY: "b", R2_ENDPOINT: "x", R2_PUBLIC_BUCKET: "ouvert", R2_PUBLIC_KEY_ID: "c", R2_PUBLIC_SECRET_ACCESS_KEY: "d" },
+    { ouvert: true },
+  );
+  v(["profilemedia", "ouvert"], [pub.b2.bucket, pub.r2.bucket], "--public vise les deux seaux ouverts");
+
+  // 10. Le Cache-Control et le type suivent le fichier.
+  const srcO = fauxSeau("b2o", { "public/accueil.mp3": "son" });
+  const recus = [];
+  const dstO = fauxSeau("r2o");
+  const envoi = dstO.client.send;
+  dstO.client.send = (cmd) => {
+    if (cmd.constructor.name === "PutObjectCommand") recus.push([cmd.input.ContentType, cmd.input.CacheControl]);
+    return envoi(cmd);
+  };
+  const getOrig = srcO.client.send;
+  srcO.client.send = async (cmd) => {
+    const r = await getOrig(cmd);
+    return cmd.constructor.name === "GetObjectCommand"
+      ? { ...r, ContentType: "audio/mpeg", CacheControl: "public, max-age=31536000, immutable" }
+      : r;
+  };
+  await copierTout(srcO, dstO, { journal: muet });
+  v([["audio/mpeg", "public, max-age=31536000, immutable"]], recus, "type et cache d'un an recopiés");
+
+  // 11. La sonde de l'adresse publique.
+  const reponse = (status, h) => ({ status, headers: { get: (k) => h[k.toLowerCase()] ?? null } });
+  const bonne = await sonderAdressePublique("https://pub-x.r2.dev/", "public/a.mp3", {
+    fetchFn: async (url, init) => {
+      recus.push([url, init.method, init.headers.Origin]);
+      return reponse(200, { "cache-control": "public, max-age=31536000, immutable", "access-control-allow-origin": "https://alanyavox.com" });
+    },
+  });
+  v(true, bonne.ok && bonne.constats.every((c) => c.startsWith("✓")), "adresse publique saine : trois ✓");
+  v(["https://pub-x.r2.dev/public/a.mp3", "HEAD", "https://alanyavox.com"], recus.at(-1), "la sonde demande le bon fichier, avec l'origine du web");
+  const sansCors = await sonderAdressePublique("https://p", "k", { fetchFn: async () => reponse(200, { "cache-control": "max-age=31536000" }) });
+  v([true, true], [sansCors.ok, sansCors.constats[2].startsWith("✗ pas de CORS")], "CORS absent : signalé, sans bloquer");
+  const fermee = await sonderAdressePublique("https://p", "k", { fetchFn: async () => reponse(401, {}) });
+  v([false, 1], [fermee.ok, fermee.constats.length], "accès public fermé : échec net");
 
   console.log(`\n${ok} contrôles OK, ${ko} en échec`);
   return ko === 0 ? 0 : 1;

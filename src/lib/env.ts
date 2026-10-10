@@ -149,10 +149,11 @@ export const env = {
      * une variable R2 manque, tout reste chez Backblaze comme avant. Retirer la
      * ligne suffit à revenir en arrière.
      *
-     * ⚠️ NE CHANGE QUE LE SEAU PRIVÉ. Le seau public (`B2_PUBLIC_*`) et les
-     * sauvegardes de la base (`scripts/sauvegarde-b2.mjs`, `B2_*`) restent chez
-     * Backblaze — garder les sauvegardes chez un autre fournisseur que les
-     * fichiers est d'ailleurs une bonne chose.
+     * ⚠️ NE CHANGE QUE LE SEAU PRIVÉ. Le seau ouvert a son propre interrupteur
+     * (`STOCKAGE_PUBLIC=r2`, voir `lib/adresse-publique.mjs`). Les sauvegardes
+     * de la base (`scripts/sauvegarde-b2.mjs`, `B2_*`) restent chez Backblaze —
+     * garder les sauvegardes chez un autre fournisseur que les fichiers est
+     * voulu : une panne ou un compte bloqué chez l'un n'emporte pas les deux.
      */
     r2: {
       demande: optional("STOCKAGE_PRIVE", "b2").trim().toLowerCase() === "r2",
@@ -187,23 +188,19 @@ export const env = {
      *
      * ⚠️ SA PROPRE CLÉ. Une clé Backblaze vise UN bucket, ou TOUS. Prendre
      * « tous » donnerait accès à des buckets qui ne sont pas les nôtres ; on
-     * crée donc une seconde clé, limitée à celui-ci.
+     * crée donc une seconde clé, limitée à celui-ci. Chez Cloudflare de même.
      *
      * Non configuré = tout retombe dans le bucket privé, et rien ne casse.
+     *
+     * 🔴 SES VARIABLES NE SONT PAS LUES ICI, mais dans `lib/adresse-publique.mjs`
+     * (`cibleOuverte`) : `ws-server.mjs` doit prendre la même décision et ne
+     * peut pas importer de TypeScript. Une seule lecture, pour qu'API et
+     * WebSocket ne divergent jamais.
+     *   Backblaze : B2_PUBLIC_BUCKET, B2_PUBLIC_KEY_ID, B2_PUBLIC_APPLICATION_KEY
+     *   Cloudflare (`STOCKAGE_PUBLIC=r2`) : R2_PUBLIC_BUCKET, R2_PUBLIC_KEY_ID,
+     *     R2_PUBLIC_SECRET_ACCESS_KEY, R2_PUBLIC_URL (+ R2_ENDPOINT du privé)
+     *   Préfixe, commun aux deux : B2_PUBLIC_KEY_PREFIX (« public/ »)
      */
-    b2Public: {
-      bucket: optional("B2_PUBLIC_BUCKET"),
-      keyId: optional("B2_PUBLIC_KEY_ID"),
-      applicationKey: optional("B2_PUBLIC_APPLICATION_KEY"),
-      keyPrefix: optional("B2_PUBLIC_KEY_PREFIX", "public/"),
-      isConfigured(): boolean {
-        return Boolean(
-          optional("B2_PUBLIC_BUCKET") &&
-            optional("B2_PUBLIC_KEY_ID") &&
-            optional("B2_PUBLIC_APPLICATION_KEY"),
-        );
-      },
-    },
   },
 
   // Serveurs ICE : uniquement via Coturn avec identifiants HMAC éphémères

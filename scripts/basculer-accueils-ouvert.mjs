@@ -72,6 +72,19 @@ function echec(message) {
   process.exit(1);
 }
 
+/*
+ * ⚠️ SCRIPT D'AVANT CLOUDFLARE R2. Il ne connaît que Backblaze, pour la source
+ * comme pour la destination. Joué après `STOCKAGE_PRIVE=r2` ou
+ * `STOCKAGE_PUBLIC=r2`, il lirait un seau qui n'est plus tenu à jour, et
+ * écrirait là où plus personne ne lit — puis marquerait ces accueils « publics »
+ * en base. On s'arrête net.
+ */
+for (const v of ["STOCKAGE_PRIVE", "STOCKAGE_PUBLIC"]) {
+  if (String(process.env[v] ?? "").trim().toLowerCase() === "r2") {
+    echec(`${v}=r2 : ce script ne connaît que Backblaze. Les accueils déjà ouverts ont été copiés par scripts/copier-vers-r2.mjs --public.`);
+  }
+}
+
 if (!conf.bucketOuvert || !conf.keyIdOuvert || !conf.cleOuverte) {
   echec("B2_PUBLIC_BUCKET, B2_PUBLIC_KEY_ID et B2_PUBLIC_APPLICATION_KEY sont requis dans .env");
 }

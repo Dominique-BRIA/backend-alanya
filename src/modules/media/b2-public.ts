@@ -5,8 +5,7 @@ import {
   HeadBucketCommand,
   GetObjectCommand,
 } from "@aws-sdk/client-s3";
-import { env } from "@/lib/env";
-import { adresseOuverte, cleOuverte } from "@/lib/adresse-publique.mjs";
+import { adresseOuverte, cibleOuverte, cleOuverte } from "@/lib/adresse-publique.mjs";
 
 /**
  * LE BUCKET PUBLIC — ACCUEILS DE RÉPONDEUR ET SONNERIES.
@@ -30,26 +29,46 @@ import { adresseOuverte, cleOuverte } from "@/lib/adresse-publique.mjs";
  *
  * ⚠️ SA PROPRE CLÉ, ET SON PROPRE CLIENT. Une clé Backblaze vise UN bucket ou
  * TOUS ; prendre « tous » ouvrirait des buckets qui ne nous appartiennent pas.
+ * Même règle chez Cloudflare : un jeton limité à CE seau.
+ *
+ * 🔴 10/10/2026 — BACKBLAZE OU CLOUDFLARE R2 (`STOCKAGE_PUBLIC=r2`). Le choix
+ * est fait dans `lib/adresse-publique.mjs` (`cibleOuverte`), PAS ici : l'adresse
+ * annoncée aux appelants et le seau où l'on écrit doivent venir de la même
+ * décision.
  */
 
 let client: S3Client | null = null;
 
 export function publicConfigure(): boolean {
-  return env.media.b2Public.isConfigured();
+  return cibleOuverte() !== null;
+}
+
+/** Le nom du seau ouvert, chez l'hébergeur retenu. */
+function seau(): string {
+  return cibleOuverte()?.bucket ?? "";
 }
 
 function getB2Public(): S3Client {
   if (!client) {
+    const cible = cibleOuverte();
+    if (!cible) throw new Error("seau ouvert non configuré");
     client = new S3Client({
-      // Même endpoint et même région que le bucket privé : c'est le même
-      // compte Backblaze, seul le bucket et la clé changent.
-      endpoint: `https://${env.media.b2.endpoint}`,
-      region: env.media.b2.region,
-      credentials: {
-        accessKeyId: env.media.b2Public.keyId,
-        secretAccessKey: env.media.b2Public.applicationKey,
-      },
+      // Même compte que le seau privé, chez l'un comme chez l'autre : seuls le
+      // seau et la clé changent.
+      endpoint: `https://${cible.endpoint}`,
+      region: cible.region,
+      credentials: { accessKeyId: cible.keyId, secretAccessKey: cible.secret },
       forcePathStyle: false,
+      /*
+       * ⚠️ R2 REFUSE LES SOMMES DE CONTRÔLE QUE LE SDK AJOUTE D'OFFICE — même
+       * réglage, pour la même raison, que le client du seau privé (`b2.ts`).
+       */
+      ...(cible.fournisseur === "r2"
+        ? {
+            requestChecksumCalculation: "WHEN_REQUIRED" as const,
+            responseChecksumValidation: "WHEN_REQUIRED" as const,
+          }
+        : {}),
     });
   }
   return client;
@@ -91,7 +110,7 @@ export async function uploadToB2Public(
 ): Promise<void> {
   await getB2Public().send(
     new PutObjectCommand({
-      Bucket: env.media.b2Public.bucket,
+      Bucket: seau(),
       Key: publicKey(relativeUrl),
       Body: body,
       ContentType: contentType,
@@ -117,7 +136,7 @@ export async function deleteFromB2Public(relativeUrl: string): Promise<void> {
   try {
     await getB2Public().send(
       new DeleteObjectCommand({
-        Bucket: env.media.b2Public.bucket,
+        Bucket: seau(),
         Key: publicKey(relativeUrl),
       }),
     );
@@ -130,7 +149,7 @@ export async function deleteFromB2Public(relativeUrl: string): Promise<void> {
  * Lit un objet du bucket ouvert.
  *
  * 🔴 SERT LE REPLI, PAS LE CAS NORMAL. Normalement le client va chercher le
- * fichier DIRECTEMENT chez Backblaze, et ce serveur n'en voit pas un octet.
+ * fichier DIRECTEMENT chez l'hébergeur, et ce serveur n'en voit pas un octet.
  * Mais un `fetch()` de navigateur vers un autre domaine exige des en-têtes CORS
  * sur le bucket : sans eux, le téléchargement échoue — et le préchargement de
  * l'accueil, qui est tout l'intérêt du dispositif, tombe silencieusement.
@@ -142,7 +161,7 @@ export async function deleteFromB2Public(relativeUrl: string): Promise<void> {
  */
 export async function readFromB2Public(relativeUrl: string): Promise<Buffer> {
   const objet = await getB2Public().send(
-    new GetObjectCommand({ Bucket: env.media.b2Public.bucket, Key: publicKey(relativeUrl) }),
+    new GetObjectCommand({ Bucket: seau(), Key: publicKey(relativeUrl) }),
   );
   const corps = objet.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
   if (!corps?.transformToByteArray) throw new Error("corps illisible");
@@ -151,5 +170,5 @@ export async function readFromB2Public(relativeUrl: string): Promise<Buffer> {
 
 /** Les identifiants sont-ils acceptés, et le bucket existe-t-il ? */
 export async function checkB2PublicConnection(): Promise<void> {
-  await getB2Public().send(new HeadBucketCommand({ Bucket: env.media.b2Public.bucket }));
+  await getB2Public().send(new HeadBucketCommand({ Bucket: seau() }));
 }
