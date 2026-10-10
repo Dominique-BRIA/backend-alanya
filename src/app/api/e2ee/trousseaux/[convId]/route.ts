@@ -24,8 +24,15 @@ import { withAuth } from "@/lib/auth-context";
  * (routes `leave` et `members`), sans toucher au reste de son archive.
  */
 
-/** Plafond, en caractères — le même que la contrainte SQL. */
-const CORPS_MAX = 1_000_000;
+/**
+ * Plafond, en caractères — le même que la contrainte SQL.
+ *
+ * ⚠️ RELEVÉ DE 1 000 000 À 20 000 000 LE 10/10/2026 (décision du user : pas de
+ * limite de clés). L'ancien plafond arrêtait la copie vers 8 600 versions ; le
+ * nouveau tient environ 170 000 versions. Il ne vise plus que l'abus (un client
+ * qui remplirait le disque), voir `prisma/manual/2026-10_e2ee_trousseaux_taille.sql`.
+ */
+const CORPS_MAX = 20_000_000;
 
 /** Seul un membre ACTIF d'un groupe CHIFFRÉ a une copie à tenir. */
 async function groupeAutorise(convId: string, userId: string) {
