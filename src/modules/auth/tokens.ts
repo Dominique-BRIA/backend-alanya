@@ -34,6 +34,32 @@ export class JetonRejoueError extends Error {
 }
 
 /**
+ * Le jeton présenté a déjà tourné, HORS de la fenêtre de grâce, et son
+ * successeur n'a jamais servi : l'appareil a perdu la réponse de sa rotation
+ * et ne la retrouvera jamais. Terminal, sans être une faute.
+ *
+ * 🐛 POURQUOI ELLE EXISTE (10/10/2026). L'installation d'un APK a tué
+ * l'application à la seconde même où elle tournait son jeton (13:33:33) ; elle
+ * n'a jamais écrit le nouveau. Rouverte 1 h 42 plus tard, elle présentait
+ * l'ancien : refus ANONYME (`BAD_REFRESH`), que le client traite, à raison,
+ * comme un doute — il réessaie. Résultat : ~1 200 requêtes en dix minutes,
+ * toutes en 401, et « Impossible de contacter le serveur » à l'écran, sans
+ * jamais revenir à l'écran de connexion. Le serveur SAIT que ce jeton ne
+ * reviendra pas : il doit le dire.
+ *
+ * ⚠️ ON NE L'ACCEPTE PAS POUR AUTANT. Réémettre un couple sur un jeton tourné
+ * depuis longtemps reviendrait à étendre la fenêtre de grâce indéfiniment :
+ * un jeton volé passerait tant que l'appareil légitime n'a pas encore servi
+ * son successeur. On demande le mot de passe, une fois.
+ */
+export class JetonDejaTourneError extends Error {
+  constructor() {
+    super("Jeton de rafraîchissement déjà tourné");
+    this.name = "JetonDejaTourneError";
+  }
+}
+
+/**
  * Combien de temps un jeton déjà tourné reste rejouable.
  *
  * 🔴 CE DÉLAI EST LA CORRECTION DU DÉFAUT « déconnecté alors que rien n'avait
@@ -189,15 +215,16 @@ export async function rotateRefreshToken(refreshToken: string): Promise<TokenPai
        *
        * ⚠️ ON NE COUPE QUE SI LE SUCCESSEUR A SERVI. Un rejeu tardif dont le
        * successeur n'a jamais été utilisé, c'est un appareil resté longtemps
-       * hors ligne avec un jeton périmé dans les mains — pas une attaque. Le
-       * refuser suffit.
+       * hors ligne avec un jeton périmé dans les mains — pas une attaque. On
+       * le refuse… en le NOMMANT (`JetonDejaTourneError`) : un refus anonyme
+       * fait réessayer le client sans fin.
        */
       if (ageMs > FENETRE_REJEU_MS) {
         if (await successeurDejaServi(stored.remplacePar)) {
           await revoqueLaChaine(payload.sub, stored.deviceId);
           throw new JetonRejoueError();
         }
-        throw new Error("Refresh token révoqué");
+        throw new JetonDejaTourneError();
       }
 
       /*

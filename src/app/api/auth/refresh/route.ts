@@ -2,6 +2,7 @@ import { type NextRequest } from "next/server";
 import { ok, fail, handleError } from "@/lib/http";
 import { refreshSchema } from "@/lib/validation";
 import {
+  JetonDejaTourneError,
   JetonRejoueError,
   SessionEvinceeError,
   SessionExpireeError,
@@ -46,6 +47,19 @@ export async function POST(req: NextRequest) {
       }
 
       // L'utilisateur a fermé cet appareil depuis « Appareils connectés ».
+      /*
+       * La réponse de la dernière rotation s'est perdue pour de bon (appli tuée
+       * pendant l'installation d'une mise à jour, le plus souvent). NOMMÉ pour
+       * que le client revienne à l'écran de connexion au lieu de réessayer
+       * sans fin — voir `JetonDejaTourneError`.
+       */
+      if (e instanceof JetonDejaTourneError) {
+        return fail(
+          "Session à rouvrir : reconnecte-toi",
+          401,
+          "JETON_DEJA_TOURNE",
+        );
+      }
       if (e instanceof SessionRevoqueeError) {
         return fail("Cette session a été fermée", 401, "SESSION_REVOQUEE");
       }
