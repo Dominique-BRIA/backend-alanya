@@ -14,7 +14,14 @@ import { nomAffichage } from "@/lib/display-name.mjs";
  */
 
 /** Codes reconnus par les clients. Ajouter un code demande de les mettre à jour. */
-export type CodeSysteme = "member_added" | "member_removed" | "member_left";
+export type CodeSysteme =
+  | "member_added"
+  | "member_removed"
+  | "member_left"
+  // Groupes chiffrés (lot 7, 10/10/2026). Un client plus ancien ne connaît
+  // pas ces codes : il n'affiche rien (pas de JSON brut).
+  | "e2ee_active"
+  | "e2ee_cle_changee";
 
 /**
  * Dépose un message système dans une conversation.

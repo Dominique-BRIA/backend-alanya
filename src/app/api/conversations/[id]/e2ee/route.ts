@@ -5,6 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { motifRefus } from "@/lib/e2ee-perimetre";
 import { isGroupAdmin } from "@/lib/groups";
+import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 
 /**
  * ACTIVER LE CHIFFREMENT SUR UNE CONVERSATION.
@@ -225,6 +226,14 @@ export const POST = withAuth(
       });
       return true;
     });
+
+    /*
+     * L'AVIS « X A ACTIVÉ LE CHIFFREMENT » (lot 7) : les membres voient qui l'a
+     * fait, et à partir d'où. Une seule fois — celui qui a gagné la course.
+     */
+    if (cree) {
+      await deposerMessageSysteme(id, userId, "e2ee_active", { actor: await nomPourAvis(userId) });
+    }
 
     return ok({ e2eeActif: true, deja: !cree, cleVersion: 1 });
   },

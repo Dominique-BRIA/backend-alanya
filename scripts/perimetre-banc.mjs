@@ -164,6 +164,10 @@ try {
   verifie("les deux répondent 200", r1.ok && r2.ok, `${r1.status} ${r2.status}`)
   verifie("un seul a créé la version", [c1, c2].filter((c) => c.deja === false).length === 1, JSON.stringify([c1, c2]))
   verifie("une seule ligne de version", (await prisma.e2eeCleVersion.count({ where: { convId: g } })) === 1)
+  const avisActivation = await prisma.message.count({
+    where: { convId: g, type: "SYSTEM", content: { contains: '"e2ee_active"' } },
+  })
+  verifie("un seul avis « a activé le chiffrement »", avisActivation === 1, String(avisActivation))
 
   titre("⑤ archive et coffre")
   for (const [type, attendu] of [[2, true], [9, false]]) {

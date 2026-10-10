@@ -214,6 +214,9 @@ try {
   verifie("appareil sans identité : 409", r.status === 409 && (await code(r)) === "APPAREIL_INCONNU")
   r = await json(A, versions, "POST", { attendue: 2, appareil: 1, motif: "MANUEL" })
   verifie("l'administrateur réserve la version 2", r.status === 201 && (await r.json()).cleVersion === 2)
+  const avis = await prisma.message.findMany({ where: { convId: G, type: "SYSTEM" }, select: { content: true } })
+  verifie("changement MANUEL : l'avis « a changé la clé » est déposé",
+    avis.some((a) => (a.content ?? "").includes('"e2ee_cle_changee"')), JSON.stringify(avis))
   r = await json(A, versions, "POST", { attendue: 2, appareil: 1, motif: "MANUEL" })
   e = await r.json()
   verifie("redemander 2 : 409 VERSION_CONFLIT, courante = 2", r.status === 409 && e.error?.code === "VERSION_CONFLIT" && e.error?.cleVersion === 2)
@@ -322,6 +325,19 @@ try {
     const parti = recu(canalB, "e2ee_membre_parti", S)
     verifie("exclusion : B est prévenu (e2ee_membre_parti, exclu)", parti !== undefined && JSON.stringify(parti).includes("true"),
       JSON.stringify(canalB.recus.map((m) => m.type)))
+    // Un trousseau hors fil, en groupe : la sonnette `e2ee_trousseau`.
+    const canalA = await connecter(A)
+    const S2 = await groupe([[B, "ADMIN"], [A, "MEMBER"]])
+    r = await json(B, `/api/e2ee/enveloppes`, "POST", {
+      convId: S2,
+      deviceId: 1,
+      enveloppes: [{ destinataireId: A.user.id, destinataireDevice: 1, type: 1, corps: "AAAA" }],
+    })
+    await pause(800)
+    verifie("trousseau hors fil : A est prévenu (e2ee_trousseau)", r.status === 201 &&
+      recu(canalA, "e2ee_trousseau", S2) !== undefined, JSON.stringify(canalA.recus.map((m) => m.type)))
+    verifie("… sans « e2ee_arrivee » (pas de notification)", recu(canalA, "e2ee_arrivee", S2) === undefined)
+    canalA.ws.close()
     canalB.ws.close()
   } else {
     titre("⑩ sauté : WS non fourni")

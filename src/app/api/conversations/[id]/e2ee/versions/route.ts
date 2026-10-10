@@ -5,6 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
+import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 
 /**
  * UNE NOUVELLE VERSION DE LA CLÉ D'UN GROUPE CHIFFRÉ (lot 2c, cours ch. 31).
@@ -126,6 +127,15 @@ export const POST = withAuth(
       type: "e2ee_cle_version",
       donnees: { convId, version: attendue, motif },
     });
+
+    /*
+     * L'AVIS « X A CHANGÉ LA CLÉ DU GROUPE » (lot 7) — pour un changement
+     * MANUEL seulement : après une exclusion, l'avis « X a été retiré par Y »
+     * dit déjà tout, et un second avis ferait croire à deux événements.
+     */
+    if (motif === "MANUEL") {
+      await deposerMessageSysteme(convId, userId, "e2ee_cle_changee", { actor: await nomPourAvis(userId) });
+    }
 
     return ok({ cleVersion: attendue }, 201);
   },

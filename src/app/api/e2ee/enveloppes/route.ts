@@ -247,6 +247,20 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * n'annonce rien à personne : sonner pour rien, c'était la moitié du
    * harcèlement possible par cette route. Prouvé par `e2ee-depot-banc.mjs` ④.
    */
+  /*
+   * 🔴 SAUF UN TROUSSEAU DE GROUPE (lot 7, 10/10/2026) : sans sonnette, un
+   * membre qui attend sa clé ne voyait rien changer avant de rouvrir le fil.
+   * On prévient donc ses appareils qu'une clé l'attend — `e2ee_trousseau`,
+   * des identifiants seulement, et SANS notification poussée : on ne fait
+   * pas vibrer un téléphone pour une clé.
+   */
+  if (messageId === null && enGroupe) {
+    await previensDesPersonnes({
+      personnes: [...new Set(lues.map((e) => e!.destinataireId))],
+      type: "e2ee_trousseau",
+      donnees: { convId: r.convId as string },
+    });
+  }
   if (messageId === null) return ok({ deposees: lues.length }, 201);
 
   /*
