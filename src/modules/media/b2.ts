@@ -21,14 +21,69 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "@/lib/env";
 
 // -----------------------------------------------------------------------------
-// Client S3 singleton (compatible Backblaze B2).
+// OÙ VIT LE SEAU PRIVÉ : Backblaze B2 (défaut) ou Cloudflare R2.
+// -----------------------------------------------------------------------------
+//
+// 🔴 10/10/2026 : `STOCKAGE_PRIVE=r2` fait passer le seau privé chez Cloudflare
+// R2. Les deux parlent l'API S3 : seuls l'adresse, la région, le nom du seau et
+// la clé changent — et deux différences de comportement, traitées plus bas
+// (sommes de contrôle, versions). Voir `env.media.r2`.
+
+export interface CiblePrivee {
+  fournisseur: "b2" | "r2";
+  endpoint: string;
+  region: string;
+  bucket: string;
+  keyId: string;
+  secret: string;
+}
+
+let avertiR2Incomplet = false;
+
+export function ciblePrivee(): CiblePrivee {
+  const r2 = env.media.r2;
+  if (r2.demande && r2.isConfigured()) {
+    return {
+      fournisseur: "r2",
+      endpoint: r2.endpoint,
+      region: r2.region || "auto",
+      bucket: r2.bucket,
+      keyId: r2.keyId,
+      secret: r2.secretKey,
+    };
+  }
+  /*
+   * ⚠️ R2 DEMANDÉ MAIS INCOMPLET : ON RESTE CHEZ BACKBLAZE, et on le dit une
+   * fois. Basculer vers une configuration à moitié remplie ferait échouer
+   * chaque envoi et chaque lecture de fichier ; rester où l'on était garde le
+   * service debout, et le point de santé le signale.
+   */
+  if (r2.demande && !avertiR2Incomplet) {
+    avertiR2Incomplet = true;
+    console.error(
+      "[stockage] STOCKAGE_PRIVE=r2 mais R2_ENDPOINT, R2_BUCKET, R2_KEY_ID ou " +
+        "R2_SECRET_ACCESS_KEY manque : le seau privé reste chez Backblaze.",
+    );
+  }
+  return {
+    fournisseur: "b2",
+    endpoint: env.media.b2.endpoint,
+    region: env.media.b2.region,
+    bucket: env.media.b2.bucket,
+    keyId: env.media.b2.keyId,
+    secret: env.media.b2.applicationKey,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Client S3 singleton.
 // -----------------------------------------------------------------------------
 
 let client: S3Client | null = null;
 
 // Échoue tôt et clairement si B2 est sélectionné mais mal configuré.
 function requireConfig(): void {
-  if (!env.media.b2.isConfigured()) {
+  if (ciblePrivee().fournisseur === "b2" && !env.media.b2.isConfigured()) {
     throw new Error(
       "Backblaze B2 est activé (MEDIA_STORAGE_PROVIDER=b2) mais mal configuré. " +
         "Renseigne B2_BUCKET, B2_KEY_ID et B2_APPLICATION_KEY dans le .env.",
@@ -39,18 +94,28 @@ function requireConfig(): void {
 export function getB2(): S3Client {
   requireConfig();
   if (!client) {
+    const cible = ciblePrivee();
     client = new S3Client({
-      // Endpoint S3 fourni par Backblaze (ex : s3.us-west-004.backblazeb2.com).
-      endpoint: `https://${env.media.b2.endpoint}`,
-      // La "région" B2 correspond au suffixe du endpoint (ex : us-west-004).
-      region: env.media.b2.region,
-      credentials: {
-        accessKeyId: env.media.b2.keyId,
-        secretAccessKey: env.media.b2.applicationKey,
-      },
-      // Le style virtual-hosté (https://<bucket>.s3.<region>.backblazeb2.com)
-      // est celui recommandé par Backblaze pour de meilleures performances.
+      // Backblaze : s3.<région>.backblazeb2.com ; R2 : <compte>.r2.cloudflarestorage.com.
+      endpoint: `https://${cible.endpoint}`,
+      // Backblaze : le suffixe de l'adresse (us-west-004) ; R2 : « auto ».
+      region: cible.region,
+      credentials: { accessKeyId: cible.keyId, secretAccessKey: cible.secret },
+      // Style virtual-hosté (https://<seau>.<adresse>) : recommandé par
+      // Backblaze, accepté par R2.
       forcePathStyle: false,
+      /*
+       * ⚠️ R2 : LES SOMMES DE CONTRÔLE SEULEMENT QUAND ELLES SONT EXIGÉES.
+       * Les versions récentes du SDK en ajoutent d'office à chaque envoi, sous
+       * une forme que R2 n'accepte pas toujours : les téléversements y
+       * échoueraient. C'est le réglage que recommande Cloudflare.
+       */
+      ...(cible.fournisseur === "r2"
+        ? {
+            requestChecksumCalculation: "WHEN_REQUIRED" as const,
+            responseChecksumValidation: "WHEN_REQUIRED" as const,
+          }
+        : {}),
     });
   }
   return client;
@@ -82,7 +147,7 @@ export async function uploadToB2(
   opts: UploadOptions,
 ): Promise<void> {
   const input: PutObjectCommandInput = {
-    Bucket: env.media.b2.bucket,
+    Bucket: ciblePrivee().bucket,
     Key: fullKey(relativeUrl),
     Body: buffer,
     ContentType: opts.contentType,
@@ -108,7 +173,7 @@ export async function getB2SignedUrl(
 ): Promise<string> {
   const expiresIn = opts.expiresInSec ?? env.media.b2.presignExpiresInSec;
   const command = new GetObjectCommand({
-    Bucket: env.media.b2.bucket,
+    Bucket: ciblePrivee().bucket,
     Key: fullKey(relativeUrl),
     ...(opts.responseContentDisposition
       ? { ResponseContentDisposition: opts.responseContentDisposition }
@@ -122,7 +187,7 @@ export async function getB2SignedUrl(
 // repli, quand on ne peut pas rediriger vers une URL présignée).
 export async function readFromB2(relativeUrl: string): Promise<Buffer> {
   const out = await getB2().send(
-    new GetObjectCommand({ Bucket: env.media.b2.bucket, Key: fullKey(relativeUrl) }),
+    new GetObjectCommand({ Bucket: ciblePrivee().bucket, Key: fullKey(relativeUrl) }),
   );
   const bytes = await out.Body!.transformToByteArray();
   return Buffer.from(bytes);
@@ -132,7 +197,7 @@ export async function readFromB2(relativeUrl: string): Promise<Buffer> {
 // métier si le fichier est déjà absent (idempotence de suppression).
 export async function deleteFromB2(relativeUrl: string): Promise<void> {
   await getB2().send(
-    new DeleteObjectCommand({ Bucket: env.media.b2.bucket, Key: fullKey(relativeUrl) }),
+    new DeleteObjectCommand({ Bucket: ciblePrivee().bucket, Key: fullKey(relativeUrl) }),
   );
 }
 
@@ -154,15 +219,24 @@ export async function deleteFromB2(relativeUrl: string): Promise<void> {
  */
 export async function effacerToutesLesVersionsB2(relativeUrl: string): Promise<number> {
   const cle = fullKey(relativeUrl);
+  /*
+   * 🔴 R2 NE GARDE PAS DE VERSIONS, et ne connaît pas `ListObjectVersions` :
+   * l'appeler y échouerait, et la photo à vue unique ne serait JAMAIS purgée.
+   * Chez R2, une suppression simple est définitive — elle suffit.
+   */
+  if (ciblePrivee().fournisseur === "r2") {
+    await getB2().send(new DeleteObjectCommand({ Bucket: ciblePrivee().bucket, Key: cle }));
+    return 1;
+  }
   const liste = await getB2().send(
-    new ListObjectVersionsCommand({ Bucket: env.media.b2.bucket, Prefix: cle }),
+    new ListObjectVersionsCommand({ Bucket: ciblePrivee().bucket, Prefix: cle }),
   );
   const versions = [...(liste.Versions ?? []), ...(liste.DeleteMarkers ?? [])].filter(
     (v) => v.Key === cle && v.VersionId,
   );
   for (const v of versions) {
     await getB2().send(
-      new DeleteObjectCommand({ Bucket: env.media.b2.bucket, Key: cle, VersionId: v.VersionId }),
+      new DeleteObjectCommand({ Bucket: ciblePrivee().bucket, Key: cle, VersionId: v.VersionId }),
     );
   }
   return versions.length;
@@ -171,5 +245,5 @@ export async function effacerToutesLesVersionsB2(relativeUrl: string): Promise<n
 // Vérifie que le bucket existe et que les identifiants sont valides.
 // Utile au démarrage et dans le script de test.
 export async function checkB2Connection(): Promise<void> {
-  await getB2().send(new HeadBucketCommand({ Bucket: env.media.b2.bucket }));
+  await getB2().send(new HeadBucketCommand({ Bucket: ciblePrivee().bucket }));
 }

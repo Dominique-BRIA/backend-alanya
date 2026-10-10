@@ -137,6 +137,37 @@ export const env = {
     },
 
     /**
+     * CLOUDFLARE R2 POUR LE SEAU PRIVÉ — décision du user, 10/10/2026.
+     *
+     * Un INTERRUPTEUR, pas un remplacement : `STOCKAGE_PRIVE=r2` fait passer le
+     * seau privé (fichiers des discussions) chez Cloudflare R2 ; sans lui, ou si
+     * une variable R2 manque, tout reste chez Backblaze comme avant. Retirer la
+     * ligne suffit à revenir en arrière.
+     *
+     * ⚠️ NE CHANGE QUE LE SEAU PRIVÉ. Le seau public (`B2_PUBLIC_*`) et les
+     * sauvegardes de la base (`scripts/sauvegarde-b2.mjs`, `B2_*`) restent chez
+     * Backblaze — garder les sauvegardes chez un autre fournisseur que les
+     * fichiers est d'ailleurs une bonne chose.
+     */
+    r2: {
+      demande: optional("STOCKAGE_PRIVE", "b2").trim().toLowerCase() === "r2",
+      // `<compte>.r2.cloudflarestorage.com` — avec ou sans `https://`.
+      endpoint: optional("R2_ENDPOINT").trim().replace(/^https?:\/\//, "").replace(/\/+$/, ""),
+      region: optional("R2_REGION", "auto"),
+      bucket: optional("R2_BUCKET"),
+      keyId: optional("R2_KEY_ID"),
+      secretKey: optional("R2_SECRET_ACCESS_KEY"),
+      isConfigured(): boolean {
+        return Boolean(
+          optional("R2_ENDPOINT") &&
+            optional("R2_BUCKET") &&
+            optional("R2_KEY_ID") &&
+            optional("R2_SECRET_ACCESS_KEY"),
+        );
+      },
+    },
+
+    /**
      * LE BUCKET PUBLIC — accueils de répondeur et sonneries.
      *
      * 🔴 CE QUI Y VA EST LU PAR N'IMPORTE QUI, SANS COMPTE. C'est tout

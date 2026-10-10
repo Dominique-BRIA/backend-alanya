@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import { env } from "@/lib/env";
-import { checkB2Connection } from "@/modules/media/b2";
+import { checkB2Connection, ciblePrivee } from "@/modules/media/b2";
 import { checkB2PublicConnection, publicConfigure } from "@/modules/media/b2-public";
 import { storageRoot, useCloudStorage as stockageNuage } from "@/modules/media/storage";
 
@@ -24,7 +24,7 @@ import { storageRoot, useCloudStorage as stockageNuage } from "@/modules/media/s
 /** Ce que le point de santé rend. Volontairement sans aucun secret. */
 export interface EtatStockage {
   /** « local » ou « b2 » — ce qui est RÉELLEMENT actif, pas ce qui est demandé. */
-  fournisseur: "local" | "b2";
+  fournisseur: "local" | "b2" | "r2";
   /** Le stockage répond-il ? */
   actif: boolean;
   /**
@@ -86,6 +86,17 @@ async function etatOuvert(): Promise<EtatStockage["ouvert"]> {
   }
 }
 
+/**
+ * R2 demandé (`STOCKAGE_PRIVE=r2`) mais incomplet : le seau privé est resté
+ * chez Backblaze. Le service marche — mais la bascule n'a PAS eu lieu, et il
+ * faut que cela se lise ici plutôt que dans les journaux.
+ */
+function avisR2(): string | null {
+  return env.media.r2.demande && !env.media.r2.isConfigured()
+    ? "R2 demandé mais incomplet : le seau privé est resté chez Backblaze"
+    : null;
+}
+
 export async function etatStockage(): Promise<EtatStockage> {
   /*
    * ⚠️ « CONFIGURÉ » ET « ACTIF » NE SONT PAS LA MÊME CHOSE. `MEDIA_STORAGE_PROVIDER=b2`
@@ -117,9 +128,9 @@ export async function etatStockage(): Promise<EtatStockage> {
           setTimeout(() => rejeter(Object.assign(new Error("timeout"), { name: "TimeoutError" })), 4000),
         ),
       ]);
-      return { fournisseur: "b2", actif: true, raison: null, ouvert };
+      return { fournisseur: ciblePrivee().fournisseur, actif: true, raison: avisR2(), ouvert };
     } catch (err) {
-      return { fournisseur: "b2", actif: false, raison: raisonLisible(err), ouvert };
+      return { fournisseur: ciblePrivee().fournisseur, actif: false, raison: raisonLisible(err), ouvert };
     }
   }
 

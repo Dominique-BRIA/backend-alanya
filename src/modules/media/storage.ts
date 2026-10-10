@@ -31,7 +31,12 @@ import {
 
 // Sélection du backend actif.
 export function useCloudStorage(): boolean {
-  return env.media.provider === "b2" && env.media.b2.isConfigured();
+  // Le seau privé est dans le nuage — chez Backblaze, ou chez Cloudflare R2
+  // quand `STOCKAGE_PRIVE=r2` (voir `ciblePrivee`).
+  return (
+    env.media.provider === "b2" &&
+    (env.media.b2.isConfigured() || (env.media.r2.demande && env.media.r2.isConfigured()))
+  );
 }
 
 // Détecte les environnements serverless à système de fichiers en lecture seule
