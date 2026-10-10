@@ -17,6 +17,8 @@ import {
   readFromB2Public,
   uploadToB2Public,
 } from "./b2-public";
+import { effacerPhotoProfil, profilConfigure } from "./r2-profil";
+import { ESPACE_PROFIL } from "@/lib/seau-profil.mjs";
 
 // =============================================================================
 // Couche de stockage des médias — abstraction provider.
@@ -341,6 +343,8 @@ export async function deleteStored(
     if (espace === "public" && publicConfigure()) {
       await deleteFromB2Public(relativeUrl);
     } else if (useCloudStorage()) {
+      // Une photo de profil a DEUX exemplaires : la copie publique d'abord.
+      if (espace === ESPACE_PROFIL && profilConfigure()) await effacerPhotoProfil(relativeUrl);
       await deleteFromB2(relativeUrl);
     } else {
       await fs.unlink(path.join(storageRoot(), relativeUrl));
@@ -373,6 +377,7 @@ export async function effacerDefinitivement(
     return;
   }
   if (useCloudStorage()) {
+    if (espace === ESPACE_PROFIL && profilConfigure()) await effacerPhotoProfil(relativeUrl);
     await effacerToutesLesVersionsB2(relativeUrl);
     return;
   }

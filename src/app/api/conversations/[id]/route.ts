@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { avatarStockage } from "@/lib/avatar";
+import { apresChangementDePhoto } from "@/lib/avatar-profil";
 
 // PATCH /api/conversations/:id — modifier le nom/avatar d'un groupe.
 // Seul un admin peut modifier.
@@ -37,6 +38,9 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
     where: { id: convId },
     data,
   });
+
+  // La nouvelle photo du groupe part dans le seau public, l'ancienne en sort.
+  if (data.avatarUrl !== undefined) apresChangementDePhoto(conv.avatarUrl, data.avatarUrl);
 
   return ok({ message: "Groupe mis à jour", id: convId });
 });
