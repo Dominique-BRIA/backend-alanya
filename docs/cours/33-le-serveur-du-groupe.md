@@ -249,7 +249,7 @@ par défaut.
 |---|---|
 | `appartenance-banc.mjs` | 20 ✓ |
 | `perimetre-banc.mjs` | 31 ✓ |
-| `groupe-chiffre-banc.mjs` (sonnettes comprises) | 56 ✓ |
+| `groupe-chiffre-banc.mjs` (sonnettes comprises) | 54 ✓ (57 depuis le lot 4 ; « 56 » écrit d'abord était faux) |
 | `e2ee-depot-banc.mjs`, `e2ee-clair-banc.mjs` (non-régression) | verts |
 | `appartenance-garde.mjs` | 234 fichiers, aucun oubli |
 
