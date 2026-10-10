@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import { env } from "@/lib/env";
 import { checkB2Connection, ciblePrivee } from "@/modules/media/b2";
 import { checkB2PublicConnection, publicConfigure } from "@/modules/media/b2-public";
+import { cibleOuverte, r2OuvertIncomplet } from "@/lib/adresse-publique.mjs";
 import { storageRoot, useCloudStorage as stockageNuage } from "@/modules/media/storage";
 
 /**
@@ -34,7 +35,7 @@ export interface EtatStockage {
    * alors dans le bucket privé et le répondeur fonctionne, un peu plus
    * lentement. Le dire évite de chercher une optimisation absente.
    */
-  ouvert: { actif: boolean; raison: string | null } | null;
+  ouvert: { fournisseur: "b2" | "r2"; actif: boolean; raison: string | null } | null;
   /**
    * Pourquoi il ne répond pas, en une phrase.
    *
@@ -69,7 +70,9 @@ function raisonLisible(erreur: unknown): string {
  */
 /** Le bucket ouvert répond-il ? `null` quand il n'est pas configuré. */
 async function etatOuvert(): Promise<EtatStockage["ouvert"]> {
-  if (!publicConfigure()) return null;
+  const cible = cibleOuverte();
+  if (!publicConfigure() || !cible) return null;
+  const fournisseur = cible.fournisseur;
   try {
     await Promise.race([
       checkB2PublicConnection(),
@@ -80,9 +83,16 @@ async function etatOuvert(): Promise<EtatStockage["ouvert"]> {
         ),
       ),
     ]);
-    return { actif: true, raison: null };
+    /*
+     * ⚠️ R2 DEMANDÉ MAIS INCOMPLET : le seau ouvert est resté chez Backblaze. Il
+     * répond — mais la bascule n'a PAS eu lieu, et cela doit se lire ici.
+     */
+    const avis = r2OuvertIncomplet()
+      ? "R2 demandé mais incomplet : le seau ouvert est resté chez Backblaze"
+      : null;
+    return { fournisseur, actif: true, raison: avis };
   } catch (err) {
-    return { actif: false, raison: raisonLisible(err) };
+    return { fournisseur, actif: false, raison: raisonLisible(err) };
   }
 }
 
