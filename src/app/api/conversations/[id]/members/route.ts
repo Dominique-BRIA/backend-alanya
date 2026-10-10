@@ -246,6 +246,8 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
       data: donneesDepart(targetId === userId ? null : userId),
     }),
     prisma.e2eeTrousseau.deleteMany({ where: { convId, userId: targetId } }),
+    // Ses boîtes permanentes aussi (chapitre 39).
+    prisma.e2eeBoite.deleteMany({ where: { convId, userId: targetId } }),
   ]);
   /*
    * 🔴 IMMÉDIATEMENT APRÈS LE RETRAIT. Cette liste est le contrôle d'accès de la

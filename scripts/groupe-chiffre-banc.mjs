@@ -14,6 +14,8 @@
  *   ⑦ ajouter : refus sans clés ou hors périmètre ;
  *   ⑧ la copie du trousseau : déposer, relire, effacée au départ ;
  *   ⑨ les enveloppes de groupe : 1 000 par dépôt, pas de message, pas de blocage ;
+ *   ⑨bis les boîtes permanentes (ch. 39) : l'administrateur dépose pour tous,
+ *     un membre pour lui seul, chacun relit les siennes, le départ les efface ;
  *   ⑩ les sonnettes (si WS est donné) : message, nouvelle version, départ.
  *
  * Lancer : API=http://localhost:3107 WS=ws://localhost:3108 node scripts/groupe-chiffre-banc.mjs
@@ -303,6 +305,40 @@ try {
   await prisma.blocked.create({ data: { alanyaID: C.user.id, idCallerBlock: A.user.id } })
   r = await enveloppes(1)
   verifie("C a bloqué A : le trousseau passe quand même", r.status === 201, `${r.status} ${await code(r)}`)
+
+  titre("⑨bis les boîtes permanentes")
+  {
+    const GB = await groupe([[A, "ADMIN"], [B, "MEMBER"], [C, "MEMBER"]])
+    const boite = (dest, corps = "boite-scellee") => ({ destinataireId: dest.user.id, destinataireDevice: 1, corps })
+    r = await json(A, "/api/e2ee/boites", "PUT", { convId: GB, deviceId: 1, boites: [boite(B), boite(C)] })
+    verifie("l'administratrice dépose pour B et C", r.ok && (await r.json()).deposees === 2)
+    r = await json(A, "/api/e2ee/boites", "PUT", { convId: GB, deviceId: 1, boites: [boite(B, "boite-remplacee")] })
+    verifie("un nouveau dépôt REMPLACE la boîte", r.ok &&
+      (await prisma.e2eeBoite.count({ where: { convId: GB, userId: B.user.id } })) === 1)
+    r = await appel(B, "/api/e2ee/boites?deviceId=1")
+    let lues = ((await r.json()).boites ?? []).filter((x) => x.convId === GB)
+    verifie("B relit SA boîte (la plus récente), avec l'expéditeur",
+      lues.length === 1 && lues[0].corps === "boite-remplacee" && lues[0].expediteurId === A.user.id && lues[0].expediteurDevice === 1,
+      JSON.stringify(lues))
+    r = await appel(B, "/api/e2ee/boites?deviceId=2")
+    verifie("… pas celle d'un autre appareil", ((await r.json()).boites ?? []).filter((x) => x.convId === GB).length === 0)
+    r = await json(B, "/api/e2ee/boites", "PUT", { convId: GB, deviceId: 1, boites: [boite(C, "faux")] })
+    verifie("un membre ne dépose pas pour un autre (403)", r.status === 403 && (await code(r)) === "ADMIN_REQUIS")
+    r = await json(B, "/api/e2ee/boites", "PUT", { convId: GB, deviceId: 1, boites: [{ destinataireId: B.user.id, destinataireDevice: 7, corps: "moi" }] })
+    verifie("… mais pour ses propres appareils, oui", r.ok)
+    r = await json(A, "/api/e2ee/boites", "PUT", { convId: GB, deviceId: 1, boites: [boite(D)] })
+    verifie("pas pour un non-membre (403)", r.status === 403)
+    r = await json(A, "/api/e2ee/boites", "PUT", { convId: GB, deviceId: 9, boites: [boite(B)] })
+    verifie("pas depuis un appareil sans identité (409)", r.status === 409)
+    r = await json(A, "/api/e2ee/boites", "PUT", { convId: GC, deviceId: 1, boites: [boite(B)] })
+    verifie("pas dans un groupe en clair (409)", r.status === 409)
+    r = await json(B, `/api/conversations/${GB}/leave`, "POST")
+    verifie("B part : ses boîtes sont effacées", r.ok &&
+      (await prisma.e2eeBoite.count({ where: { convId: GB, userId: B.user.id } })) === 0)
+    r = await json(A, `/api/conversations/${GB}/members?userId=${C.user.id}`, "DELETE")
+    verifie("C est exclue : ses boîtes aussi", r.ok &&
+      (await prisma.e2eeBoite.count({ where: { convId: GB, userId: C.user.id } })) === 0)
+  }
 
   if (WS) {
     titre("⑩ les sonnettes")

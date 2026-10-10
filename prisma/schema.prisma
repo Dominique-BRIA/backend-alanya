@@ -918,6 +918,7 @@ model Conversation {
   cleVersions    E2eeCleVersion[]
   messagesGroupe E2eeMessageGroupe[]
   trousseaux     E2eeTrousseau[]
+  boites         E2eeBoite[]
   e2eeEnveloppes E2eeEnveloppe[]
   messages       Message[]
   locks          ConversationLock[]
@@ -3397,4 +3398,23 @@ model E2eeTrousseau {
   @@id([userId, convId], map: "e2ee_trousseaux_pkey")
   @@index([convId], map: "idx_e2ee_trousseaux_conv")
   @@map("e2ee_trousseaux")
+}
+
+/// La boîte PERMANENTE d'un appareil pour un groupe chiffré : le trousseau,
+/// scellé avec la clé d'identité de CET appareil et signé par l'administrateur
+/// qui l'a déposé (illisible ici). Relue quand l'appareil veut, sans qu'aucun
+/// administrateur soit en ligne. Supprimée au départ du membre. Cours, ch. 39.
+model E2eeBoite {
+  convId           String       @map("conv_id") @db.Uuid
+  userId           String       @map("alanyaID") @db.Uuid
+  deviceId         Int          @map("device_id")
+  expediteurId     String       @map("expediteur_id") @db.Uuid
+  expediteurDevice Int          @map("expediteur_device")
+  corps            String
+  majLe            DateTime     @default(now()) @map("maj_le") @db.Timestamptz
+  conv             Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+
+  @@id([convId, userId, deviceId], map: "e2ee_boites_pkey")
+  @@index([userId, deviceId], map: "idx_e2ee_boites_destinataire")
+  @@map("e2ee_boites")
 }

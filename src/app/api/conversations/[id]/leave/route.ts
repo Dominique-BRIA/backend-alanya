@@ -32,6 +32,8 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       data: donneesDepart(null),
     }),
     prisma.e2eeTrousseau.deleteMany({ where: { convId, userId } }),
+    // Ses boîtes permanentes aussi (chapitre 39).
+    prisma.e2eeBoite.deleteMany({ where: { convId, userId } }),
   ]);
   // Même raison qu'au retrait : la liste des membres décide de qui reçoit quoi.
   await invaliderConversation(convId);
