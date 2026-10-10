@@ -21,6 +21,12 @@ export interface MediaCree {
 }
 
 export async function enregistrerMedia(args: {
+  /**
+   * Identifiant imposé. L'envoi en morceaux donne au média L'IDENTIFIANT DE
+   * L'ENVOI : l'appareil le connaît dès la réservation, et peut donc le
+   * sceller dans le descripteur chiffré avant que le fichier soit arrivé.
+   */
+  id?: string;
   ownerId: string;
   buffer: Buffer;
   nom: string;
@@ -30,7 +36,7 @@ export async function enregistrerMedia(args: {
   espace: EspaceStockage;
   durationMs: number | null;
 }): Promise<MediaCree> {
-  const { ownerId, buffer, nom, mime, chiffre, espace, durationMs } = args;
+  const { id, ownerId, buffer, nom, mime, chiffre, espace, durationMs } = args;
 
   /*
    * 🔴 UN MÉDIA CHIFFRÉ : ni son nom ni son type réels — ils vivent dans
@@ -54,6 +60,7 @@ export async function enregistrerMedia(args: {
 
   const media = await prisma.mediaFile.create({
     data: {
+      ...(id ? { id } : {}),
       ownerId,
       filename: nomRange,
       mimeType: mimeRange,

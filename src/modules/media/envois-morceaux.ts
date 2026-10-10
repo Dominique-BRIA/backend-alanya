@@ -17,6 +17,7 @@ import {
   tailleMorceauConfiguree,
 } from "@/lib/envoi-morceaux.mjs";
 import { enregistrerMedia, type MediaCree } from "./creation";
+import { publierSiProgramme } from "./publication-differee";
 import type { EnvoiMorceaux } from "@prisma/client";
 
 // =============================================================================
@@ -97,11 +98,15 @@ export async function envoiParJetonOuProprietaire(
   id: string,
 ): Promise<EnvoiMorceaux> {
   if (req.headers.get(ENTETE_JETON)) return envoiParJeton(req, id);
-  const { sub } = requireUser(req);
+  return envoiDuProprietaire(id, requireUser(req).sub);
+}
+
+/** L'envoi, s'il appartient à ce compte ; 404 sinon (même réponse que « inconnu »). */
+export async function envoiDuProprietaire(id: string, userId: string): Promise<EnvoiMorceaux> {
   const envoi = /^[0-9a-f-]{36}$/i.test(id)
     ? await prisma.envoiMorceaux.findUnique({ where: { id } })
     : null;
-  if (!envoi || envoi.ownerId !== sub) throw new HttpError(404, "Envoi inconnu", "ENVOI_INCONNU");
+  if (!envoi || envoi.ownerId !== userId) throw new HttpError(404, "Envoi inconnu", "ENVOI_INCONNU");
   return envoi;
 }
 
@@ -171,6 +176,12 @@ export async function reserverEnvoi(ownerId: string, demande: DemandeEnvoi) {
 
   return {
     id: envoi.id,
+    /*
+     * L'identifiant que portera le média une fois assemblé — celui de l'envoi.
+     * Connu dès maintenant, il peut entrer dans le descripteur chiffré et les
+     * enveloppes que l'appareil prépare pour la publication différée.
+     */
+    mediaId: envoi.id,
     jeton,
     tailleMorceau: envoi.tailleMorceau,
     nbMorceaux: envoi.nbMorceaux,
@@ -193,7 +204,7 @@ export async function recevoirMorceau(
   envoi: EnvoiMorceaux,
   indice: number,
   corps: ReadableStream<Uint8Array> | null,
-): Promise<{ recus: number; total: number; termine: boolean; media?: MediaCree }> {
+) {
   if (envoi.statut === "termine") {
     // Un morceau rejoué après la fin (réponse perdue en route) : on redit le
     // résultat au lieu de refuser — c'est ce que le client attendait.
@@ -239,8 +250,12 @@ export async function recevoirMorceau(
   if (recus < envoi.nbMorceaux) {
     return { recus, total: envoi.nbMorceaux, termine: false };
   }
-  const media = await assembler(envoi.id);
-  return { recus, total: envoi.nbMorceaux, termine: media !== null, ...(media ? { media } : {}) };
+  await assembler(envoi.id);
+  // Relu après l'assemblage : il rend le média et, s'il y en avait une, la
+  // publication du message. Si un autre morceau assemble au même instant,
+  // `termine` reste faux ici et l'appareil relira l'état.
+  const apres = await prisma.envoiMorceaux.findUniqueOrThrow({ where: { id: envoi.id } });
+  return { ...(await etatEnvoi(apres)), termine: apres.statut === "termine" };
 }
 
 // -----------------------------------------------------------------------------
@@ -316,6 +331,7 @@ export async function assembler(id: string): Promise<MediaCree | null> {
     // Toujours le seau PRIVÉ : l'accueil de répondeur et la sonnerie, seuls
     // usages publics, sont de petits fichiers qui passent par `POST /api/media`.
     const media = await enregistrerMedia({
+      id: envoi.id,
       ownerId: envoi.ownerId,
       buffer,
       nom: envoi.nom,
@@ -330,6 +346,9 @@ export async function assembler(id: string): Promise<MediaCree | null> {
       data: { statut: "termine", mediaId: media.id, majLe: new Date() },
     });
     await fs.rm(cheminTampon(id), { force: true });
+
+    // Le message préparé par l'appareil, s'il y en a un. Ne lève jamais.
+    await publierSiProgramme(id);
     return media;
   } catch (err) {
     const statut = await prisma.envoiMorceaux.findUnique({ where: { id }, select: { statut: true } });
@@ -361,6 +380,8 @@ export async function etatEnvoi(envoi: EnvoiMorceaux) {
     recus: recus.length,
     tailleMorceau: envoi.tailleMorceau,
     manquants: morceauxManquants(recus.map((r) => r.indice), envoi.nbMorceaux),
+    // La publication différée : null (aucune), attente, en_cours, publie, refus:<MOTIF>.
+    publication: { etat: envoi.publicationEtat, messageId: envoi.messageId },
     ...(media
       ? {
           media: {

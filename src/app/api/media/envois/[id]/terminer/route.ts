@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
 import { ok, fail, handleError } from "@/lib/http";
 import { UnauthorizedError } from "@/lib/auth-context";
+import { publierSiProgramme } from "@/modules/media/publication-differee";
 import {
   assembler,
   envoiParJetonOuProprietaire,
@@ -15,7 +16,8 @@ type Contexte = { params: Promise<{ id: string }> };
  * ⚠️ PAS UNE ÉTAPE OBLIGATOIRE : le dernier morceau assemble déjà tout seul.
  * C'est un FILET, pour le cas où cet assemblage a échoué (stockage
  * injoignable un instant) alors que tous les morceaux sont là — sans lui, il
- * faudrait renvoyer un morceau pour le redéclencher.
+ * faudrait renvoyer un morceau pour le redéclencher. Il relance aussi une
+ * publication différée restée en attente.
  */
 export async function POST(req: NextRequest, ctx: Contexte) {
   try {
@@ -27,6 +29,10 @@ export async function POST(req: NextRequest, ctx: Contexte) {
         return fail(`${etat.manquants.length} morceau(x) manquant(s)`, 409, "MORCEAUX_MANQUANTS");
       }
       await assembler(envoi.id);
+    } else if (envoi.publicationEtat === "attente") {
+      // Assemblé, mais la publication n'a pas eu lieu (serveur arrêté entre
+      // les deux, ou erreur passagère) : on la relance.
+      await publierSiProgramme(envoi.id);
     }
     const apres = await envoiParJetonOuProprietaire(req, id);
     return ok(await etatEnvoi(apres));

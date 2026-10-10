@@ -64,3 +64,19 @@ CREATE TABLE IF NOT EXISTS "envoi_morceaux_recus" (
   CONSTRAINT "envoi_morceaux_recus_pkey" PRIMARY KEY ("envoi_id", "indice"),
   CONSTRAINT "envoi_morceaux_recus_indice" CHECK ("indice" >= 0)
 );
+
+-- LA PUBLICATION DIFFÉRÉE (10/10/2026, lot 1b).
+--
+-- Application fermée, personne n'est là pour poster le message une fois le
+-- fichier arrivé. L'appareil prépare donc TOUT au premier plan — la ligne du
+-- message, ses enveloppes Signal (ou le chiffré du groupe) — et le confie au
+-- serveur avec l'envoi. Le serveur, qui ne peut rien en lire, le publie à
+-- l'instant où le dernier morceau est assemblé.
+--
+--   publication       : ce que l'appareil a préparé (JSON opaque pour l'essentiel) ;
+--   publication_etat  : attente | en_cours | publie | refus:<MOTIF> ;
+--   message_id        : le message publié (pas de clé étrangère : un message
+--                       supprimé ne doit pas faire disparaître la trace).
+ALTER TABLE "envoi_morceaux" ADD COLUMN IF NOT EXISTS "publication" JSONB;
+ALTER TABLE "envoi_morceaux" ADD COLUMN IF NOT EXISTS "publication_etat" VARCHAR(48);
+ALTER TABLE "envoi_morceaux" ADD COLUMN IF NOT EXISTS "message_id" UUID;

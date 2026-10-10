@@ -3442,6 +3442,12 @@ model EnvoiMorceaux {
   /// en_cours | assemblage | termine
   statut        String              @default("en_cours") @db.VarChar(16)
   mediaId       String?             @map("media_id") @db.Uuid
+  /// Le message préparé par l'appareil, publié par le serveur au dernier
+  /// morceau (`src/modules/media/publication-differee.ts`).
+  publication     Json?
+  /// attente | en_cours | publie | refus:<MOTIF>
+  publicationEtat String?           @map("publication_etat") @db.VarChar(48)
+  messageId       String?           @map("message_id") @db.Uuid
   creeLe        DateTime            @default(now()) @map("cree_le") @db.Timestamptz
   majLe         DateTime            @default(now()) @map("maj_le") @db.Timestamptz
   owner         User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)

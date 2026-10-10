@@ -240,13 +240,29 @@ export async function creerMessage(params: {
   if (groupeChiffre !== (groupe !== undefined)) {
     return { ok: false, motif: "CHARGE_GROUPE_INVALIDE" };
   }
-  if ((params.id !== undefined) !== (groupe !== undefined)) {
+  /*
+   * L'IDENTIFIANT TIRÉ PAR L'APPAREIL : obligatoire en groupe chiffré, et
+   * permis — sans charge de groupe — dans un fil chiffré À DEUX.
+   *
+   * ⚠️ CE SECOND CAS N'EST OUVERT QU'À LA PUBLICATION DIFFÉRÉE d'un envoi en
+   * morceaux (10/10/2026). Ses enveloppes, préparées avant que le fichier ait
+   * fini d'arriver, scellent déjà l'identifiant du message : il faut donc le
+   * connaître d'avance. La route REST, elle, ne transmet un `id` qu'avec une
+   * charge de groupe (`idClient`) : rien ne change pour elle.
+   */
+  const filChiffreADeux = conversation?.e2eeActif === true && conversation.isGroup !== true;
+  if (groupe !== undefined && params.id === undefined) {
     return { ok: false, motif: "CHARGE_GROUPE_INVALIDE" };
+  }
+  if (params.id !== undefined && groupe === undefined && !filChiffreADeux) {
+    return { ok: false, motif: "CHARGE_GROUPE_INVALIDE" };
+  }
+  if (params.id !== undefined) {
+    const pris = await prisma.message.findUnique({ where: { id: params.id }, select: { id: true } });
+    if (pris) return { ok: false, motif: "ID_DEJA_PRIS" };
   }
   if (groupe) {
     if (groupe.version !== conversation!.cleVersion) return { ok: false, motif: "VERSION_PERIMEE" };
-    const pris = await prisma.message.findUnique({ where: { id: params.id! }, select: { id: true } });
-    if (pris) return { ok: false, motif: "ID_DEJA_PRIS" };
     const identite = await prisma.e2eeIdentite.findUnique({
       where: { userId_deviceId: { userId: expediteurId, deviceId: groupe.appareil } },
       select: { id: true },

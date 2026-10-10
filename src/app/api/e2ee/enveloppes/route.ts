@@ -5,6 +5,13 @@ import { prisma } from "@/lib/prisma";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import {
+  ENVELOPPES_MAX,
+  blocageAvec,
+  deposerEnveloppes,
+  destinataireEtranger,
+  lireEnveloppes,
+} from "@/modules/e2ee/enveloppes";
 
 /**
  * LES ENVELOPPES CHIFFRÉES — le transport, et rien d'autre.
@@ -25,22 +32,11 @@ import { withAuth } from "@/lib/auth-context";
  * aurait pas les moyens, chaque chiffré étant lié à une session distincte.
  */
 
-/**
- * Plafond d'un dépôt.
- *
- * ⚠️ PORTÉ DE 40 À 1 000 LE 09/10/2026 pour les GROUPES chiffrés : un
- * administrateur distribue le trousseau à CHAQUE appareil de CHAQUE membre
- * (cours, chapitre 31). Un groupe de 300 personnes à deux appareils, c'est
- * 600 enveloppes d'un coup. Un message de tête-à-tête, lui, en compte toujours
- * quelques-unes.
- */
-const ENVELOPPES_MAX = 1000;
+// Plafonds d'un dépôt (ENVELOPPES_MAX, CORPS_MAX) : `src/modules/e2ee/enveloppes.ts`,
+// partagés avec la publication différée d'un envoi en morceaux.
 
 /** Plafond d'une relève, pour borner la réponse. */
 const RELEVE_MAX = 200;
-
-/** Taille maximale d'un chiffré, en caractères base64 (~48 Ko utiles). */
-const CORPS_MAX = 64 * 1024;
 
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   let corps: unknown;
@@ -122,46 +118,19 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     messageId = ligne.id;
   }
 
-  const brutes = Array.isArray(r.enveloppes) ? r.enveloppes : [];
-  if (brutes.length === 0) return fail("Aucune enveloppe", 400, "BAD_BODY");
-  if (brutes.length > ENVELOPPES_MAX) {
+  // Forme et taille : `lireEnveloppes`, la même règle que la publication différée.
+  const lues = lireEnveloppes(r.enveloppes);
+  if (lues === "AUCUNE") return fail("Aucune enveloppe", 400, "BAD_BODY");
+  if (lues === "TROP") {
     return fail(`Pas plus de ${ENVELOPPES_MAX} enveloppes par envoi`, 400, "TOO_MANY");
   }
-
-  const lues = brutes.map((b) => {
-    const e = (b ?? {}) as Record<string, unknown>;
-    const ok =
-      typeof e.destinataireId === "string" &&
-      e.destinataireId !== "" &&
-      typeof e.destinataireDevice === "number" &&
-      Number.isInteger(e.destinataireDevice) &&
-      // 3 = PreKeyWhisperMessage (ouvre la session), 1 = WhisperMessage. Les deux seules valeurs
-      // que la bibliothèque du client sait produire et relire.
-      (e.type === 1 || e.type === 3) &&
-      typeof e.corps === "string" &&
-      e.corps.length > 0 &&
-      e.corps.length <= CORPS_MAX;
-    return ok
-      ? {
-          destinataireId: e.destinataireId as string,
-          destinataireDevice: e.destinataireDevice as number,
-          type: e.type as number,
-          corps: e.corps as string,
-        }
-      : null;
-  });
-  if (lues.some((e) => e === null)) {
+  if (lues === "MAL_FORMEE") {
     return fail("Une enveloppe est mal formée", 400, "BAD_BODY");
   }
 
   // Les destinataires doivent être de la conversation : sans ce contrôle, on
   // s'en servirait pour déposer chez n'importe qui.
-  const membres = await prisma.participant.findMany({
-    where: { convId: r.convId, ...MEMBRE_ACTIF },
-    select: { userId: true, sourdine: true },
-  });
-  const autorises = new Set(membres.map((m) => m.userId));
-  if (lues.some((e) => !autorises.has(e!.destinataireId))) {
+  if (await destinataireEtranger(r.convId, lues)) {
     return fail("Destinataire hors de la conversation", 403, "FORBIDDEN");
   }
 
@@ -181,31 +150,16 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
    * groupe. Et un dépôt de groupe ne sonne ni ne notifie (hors fil, voir
    * ci-dessus) : il ne peut pas servir à harceler.
    */
-  const autres = [...new Set(lues.map((e) => e!.destinataireId))].filter((id) => id !== userId);
-  if (autres.length > 0 && !enGroupe) {
-    const blocage = await prisma.blocked.findFirst({
-      where: {
-        OR: [
-          { alanyaID: userId, idCallerBlock: { in: autres } },
-          { alanyaID: { in: autres }, idCallerBlock: userId },
-        ],
-      },
-      select: { idBlock: true },
-    });
-    if (blocage) return fail("Message non distribuable", 403, "BLOCKED");
+  if (!enGroupe && (await blocageAvec(userId, lues))) {
+    return fail("Message non distribuable", 403, "BLOCKED");
   }
 
-  await prisma.e2eeEnveloppe.createMany({
-    data: lues.map((e) => ({
-      convId: r.convId as string,
-      expediteurId: userId,
-      expediteurDevice: r.deviceId as number,
-      destinataireId: e!.destinataireId,
-      destinataireDevice: e!.destinataireDevice,
-      type: e!.type,
-      corps: e!.corps,
-      messageId,
-    })),
+  await deposerEnveloppes({
+    convId: r.convId,
+    expediteurId: userId,
+    expediteurDevice: r.deviceId,
+    messageId,
+    lues,
   });
 
   /*
