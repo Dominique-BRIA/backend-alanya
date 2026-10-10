@@ -16,8 +16,11 @@ const CORS_HEADERS = {
    * L'API v1 accepte les deux formes (`X-Api-Key` et `Authorization: Bearer
    * ak_…`) : les deux doivent donc être utilisables depuis un navigateur, sinon
    * la moitié de la documentation décrit quelque chose d'impossible.
+   *
+   * `X-Envoi-Jeton` : le jeton d'un envoi en morceaux (`/api/media/envois`),
+   * que le client web présentera pour chaque morceau.
    */
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Api-Key",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Api-Key, X-Envoi-Jeton",
   "Access-Control-Max-Age": "86400",
 };
 

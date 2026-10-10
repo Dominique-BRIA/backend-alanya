@@ -275,6 +275,8 @@ model User {
   queueCenterHists   QueueFileHistorique[] @relation("QueueHistCenterUser")
   queueAgentHists    QueueFileHistorique[] @relation("QueueHistAgentUser")
   queueCustomerHists QueueFileHistorique[] @relation("QueueHistCustomerUser")
+  /// Envois de fichiers en morceaux réservés par ce compte (`envoi_morceaux`).
+  envoisMorceaux     EnvoiMorceaux[]
 
   @@index([publicNumber])
   @@index([idCompany])
@@ -1336,6 +1338,8 @@ model MediaFile {
   enregistrementMelange     CallRecording[]    @relation("enregistrementMelange")
   /// Accueils de répondeur qui s'appuient sur ce média.
   accueilsRepondeur         RepondeurAccueil[]
+  /// L'envoi en morceaux dont ce média est l'aboutissement.
+  envoisMorceaux            EnvoiMorceaux[]
 
   @@index([ownerId])
   @@index([messageId])
@@ -3417,4 +3421,44 @@ model E2eeBoite {
   @@id([convId, userId, deviceId], map: "e2ee_boites_pkey")
   @@index([userId, deviceId], map: "idx_e2ee_boites_destinataire")
   @@map("e2ee_boites")
+}
+
+/// UN ENVOI DE FICHIER EN MORCEAUX (10/10/2026) — voir
+/// `prisma/manual/2026-10_envoi_morceaux.sql` et `src/lib/envoi-morceaux.mjs`.
+/// Le fichier se reconstitue sur le disque du VPS ; au dernier morceau, il
+/// devient un `MediaFile` ordinaire.
+model EnvoiMorceaux {
+  id            String              @id @default(uuid()) @db.Uuid
+  ownerId       String              @map("alanyaID") @db.Uuid
+  jetonHash     String              @map("jeton_hash") @db.Char(64)
+  taille        Int
+  tailleMorceau Int                 @map("taille_morceau")
+  nbMorceaux    Int                 @map("nb_morceaux")
+  nom           String              @db.VarChar(255)
+  mime          String              @db.VarChar(255)
+  chiffre       Boolean             @default(false)
+  dureeMs       Int?                @map("duree_ms")
+  empreinte     String?             @db.Char(64)
+  /// en_cours | assemblage | termine
+  statut        String              @default("en_cours") @db.VarChar(16)
+  mediaId       String?             @map("media_id") @db.Uuid
+  creeLe        DateTime            @default(now()) @map("cree_le") @db.Timestamptz
+  majLe         DateTime            @default(now()) @map("maj_le") @db.Timestamptz
+  owner         User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  media         MediaFile?          @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+  recus         EnvoiMorceauRecu[]
+
+  @@index([ownerId, statut], map: "idx_envoi_morceaux_proprietaire")
+  @@index([statut, majLe], map: "idx_envoi_morceaux_expiration")
+  @@map("envoi_morceaux")
+}
+
+/// Un morceau arrivé. La clé primaire rend la réception idempotente.
+model EnvoiMorceauRecu {
+  envoiId String        @map("envoi_id") @db.Uuid
+  indice  Int
+  envoi   EnvoiMorceaux @relation(fields: [envoiId], references: [id], onDelete: Cascade)
+
+  @@id([envoiId, indice], map: "envoi_morceaux_recus_pkey")
+  @@map("envoi_morceaux_recus")
 }

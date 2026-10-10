@@ -115,6 +115,11 @@ export const env = {
   media: {
     storageDir: optional("MEDIA_STORAGE_DIR", "./storage/media"),
     maxSizeMb: Number(optional("MEDIA_MAX_SIZE_MB", "250")),
+    // Envois en morceaux (voir `src/lib/envoi-morceaux.mjs`) : où le fichier
+    // se reconstitue avant d'être rangé, et la taille d'un morceau (Ko, 1024
+    // par défaut, bornée entre 256 et 8192).
+    envoisDir: optional("ENVOIS_MORCEAUX_DIR", "./storage/envois"),
+    tailleMorceauKo: optional("ENVOI_TAILLE_MORCEAU_KO"),
     // Backend de stockage : "local" (défaut) ou "b2" (Backblaze B2 cloud).
     provider: optional("MEDIA_STORAGE_PROVIDER", "local").toLowerCase() as "local" | "b2",
 
