@@ -120,7 +120,7 @@ WhatsApp).
 
 | Banc | Où | Contrôles |
 |---|---|---|
-| `e2ee-groupe-web.mjs` | vrai Chrome, 3 comptes, serveur local | 21 ✓ |
+| `e2ee-groupe-web.mjs` | vrai Chrome, 3 comptes, serveur local | 20 ✓ (« 21 » écrit d'abord, et dans le commit `0200232`, était un mauvais compte) |
 | `e2ee_groupe_fil_test.dart` | vraie bibliothèque Signal, faux serveur | 11 ✓ |
 | `groupe-chiffre-banc.mjs` (serveur) | identifiant tiré : absent, réutilisé | 57 ✓ |
 
