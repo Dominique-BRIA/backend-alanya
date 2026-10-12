@@ -108,8 +108,24 @@ export const GET = withAuth(
     if (!e || !e.ids.includes(userId)) {
       return fail("Conversation inconnue", 404, "NOT_FOUND");
     }
+    /*
+     * LE RÉGLAGE DU COMPTE, RENDU AVEC L'ÉTAT — décision du user, 12/10/2026.
+     *
+     * 🔴 LE BOUCLIER DE L'EN-TÊTE A DISPARU : plus personne n'active à la main,
+     * les clients le font tout seuls dès qu'ils le peuvent. Il leur faut donc
+     * savoir, en UN appel, si ce compte veut être chiffré.
+     *
+     * ⚠️ RENDU MÊME QUAND LA CONVERSATION EST DÉJÀ CHIFFRÉE : c'est le réglage
+     * du compte, pas l'état de ce fil, et le couper n'ouvre rien de ce qui est
+     * déjà fermé.
+     */
+    const moi = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { chiffrementActif: true },
+    });
     return ok({
       e2eeActif: e.conv.e2eeActif,
+      chiffrementActif: moi?.chiffrementActif ?? true,
       groupe: e.conv.isGroup,
       cleVersion: e.conv.cleVersion,
       participants: e.ids.length,
@@ -144,6 +160,23 @@ export const POST = withAuth(
         "Seul un administrateur du groupe peut activer le chiffrement.",
         403,
         "ADMIN_REQUIS",
+      );
+    }
+
+    /*
+     * ⚠️ LE COMPTE A COUPÉ LE CHIFFREMENT : on refuse, même si un client le
+     * demande. Le réglage est la volonté de la personne ; un client resté sur
+     * une ancienne version ne doit pas pouvoir la contredire.
+     */
+    const reglage = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { chiffrementActif: true },
+    });
+    if (reglage && !reglage.chiffrementActif) {
+      return fail(
+        "Le chiffrement est désactivé pour ce compte.",
+        409,
+        "CHIFFREMENT_DESACTIVE",
       );
     }
 

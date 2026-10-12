@@ -122,6 +122,24 @@ model User {
   readReceipts       Int @default(1) @map("read_receipts") @db.SmallInt
   lastSeenVisibility Int @default(2) @map("last_seen_visibility") @db.SmallInt
 
+  /// Le chiffrement de bout en bout, POUR TOUT LE COMPTE — décision du user,
+  /// 12/10/2026 : « par défaut, dans l'application, le chiffrement doit être
+  /// activé ; si quelqu'un veut, il peut le désactiver pour toute
+  /// l'application, pas seulement pour une discussion ».
+  ///
+  /// 🔴 CE RÉGLAGE A REMPLACÉ LE BOUCLIER DE CHAQUE CONVERSATION. Avant, il
+  /// fallait l'activer discussion par discussion, et un bouton encombrait
+  /// l'en-tête pour une action qu'on ne fait qu'une fois. Désormais les
+  /// clients chiffrent dès qu'ils le peuvent, sans rien demander.
+  ///
+  /// ⚠️ IL NE DÉCHIFFRE RIEN DE CE QUI EST DÉJÀ CHIFFRÉ. Le couper n'ouvre pas
+  /// les conversations passées — le chiffrement ne se défait pas — il arrête
+  /// seulement d'en chiffrer de nouvelles. Les clients doivent le dire.
+  ///
+  /// ⚠️ PORTÉ PAR LE COMPTE, donc il suit l'utilisateur d'un appareil à
+  /// l'autre : c'est ce que « pour toute l'application » veut dire.
+  chiffrementActif Boolean @default(true) @map("chiffrement_actif")
+
   // --- F6 : Exclusion de compte ---
   exclus        Int       @default(0) @db.SmallInt
   excludeAt     DateTime? @map("exclude_at") @db.Timestamptz
