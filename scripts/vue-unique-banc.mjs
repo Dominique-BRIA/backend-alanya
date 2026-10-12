@@ -202,6 +202,11 @@ verifie("…et reçoit son média", ouvJ.media?.[0]?.id === mediaId);
 const lecture = await appel(bob, `/api/media/${mediaId}`);
 verifie("le média lui est servi pendant l'ouverture (200)", lecture.status === 200, lecture.status);
 verifie("toujours refusé à l'expéditeur (403)", (await appel(alice, `/api/media/${mediaId}`)).status === 403);
+/*
+ * ⚠️ L'APPAREIL ACCOMPAGNE L'OUVERTURE (12/10/2026). Le premier appel plus haut
+ * n'en envoyait pas : l'ouverture est donc sans appareil, et tout le monde peut
+ * la reprendre — c'est le repli voulu pour les clients plus anciens.
+ */
 const reprise = await appel(bob, `/api/messages/${id}/vue-unique`, { method: "POST" });
 verifie("une ouverture EN COURS se reprend (réseau coupé)", reprise.status === 200);
 verifie(
@@ -209,6 +214,65 @@ verifie(
   (await prisma.messageOuverture.count({ where: { messageId: id } })) === 1,
 );
 verifie("l'expéditeur la voit « ouverte »", (await messageVu(alice, convId, id))?.vueUniqueOuverte === true);
+
+// ══════════════ ③bis Une vue, un appareil ══════════════
+//
+// 🔴 DEMANDE DU USER, 12/10/2026 : « si je l'ouvre déjà avec mon compte sur un
+// appareil, en allant sur l'autre appareil, on ne doit pas pouvoir l'ouvrir ».
+//
+// La clé primaire `(message, compte)` garantissait déjà UNE ouverture par
+// compte. La fenêtre de reprise, elle, ne regardait pas QUI reprenait : ouvrir
+// sur le téléphone puis courir sur un autre appareil dans les cinq minutes
+// montrait la même photo deux fois.
+titre("③bis une vue, un appareil");
+const media2 = await televerser(alice);
+const envoi2 = await envoyer(alice, convId, {
+  type: "IMAGE",
+  mediaIds: [media2],
+  vueUnique: true,
+});
+verifie("une seconde photo à vue unique part (201)", envoi2.statut === 201, JSON.stringify(envoi2));
+const id2 = envoi2.corps?.id;
+const sur1 = await appel(bob, `/api/messages/${id2}/vue-unique`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ appareil: "mob-telephone-de-bob" }),
+});
+verifie("le téléphone de Bob l'ouvre (200)", sur1.status === 200, sur1.status);
+
+const memeAppareil = await appel(bob, `/api/messages/${id2}/vue-unique`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ appareil: "mob-telephone-de-bob" }),
+});
+verifie(
+  "LE MÊME appareil reprend son ouverture (réseau coupé)",
+  memeAppareil.status === 200,
+  memeAppareil.status,
+);
+
+const autreAppareil = await appel(bob, `/api/messages/${id2}/vue-unique`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ appareil: "mob-tablette-de-bob" }),
+});
+verifie(
+  "un AUTRE appareil du même compte est refusé (410)",
+  autreAppareil.status === 410,
+  autreAppareil.status,
+);
+/*
+ * ⚠️ CE QUE CE BANC NE PEUT PAS PROUVER, ET IL FAUT LE DIRE. La route des
+ * médias ne connaît que le COMPTE : pendant la fenêtre ouverte par le premier
+ * appareil, elle sert encore le fichier à qui présente le jeton du compte. Ce
+ * qui est fermé, c'est l'OUVERTURE — donc l'adresse du média, que seul
+ * l'appareil qui a ouvert a reçue. Fermer aussi la route demanderait de lui
+ * faire porter l'appareil, ce qui touche toutes les lectures de médias.
+ */
+verifie(
+  "toujours une seule ligne d'ouverture",
+  (await prisma.messageOuverture.count({ where: { messageId: id2 } })) === 1,
+);
 
 // ══════════════ ④ Fermeture ══════════════
 titre("④ fermeture");

@@ -85,7 +85,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
      * déjà une vue volée.
      */
     if (media.message?.vueUnique) {
-      if (!(await vueUniqueServie(media.message.id, media.message.senderId, userId))) {
+      /*
+       * ⚠️ L'APPAREIL VOYAGE EN PARAMÈTRE (`?appareil=`), faute de place
+       * ailleurs : une balise `<img>` ou un lecteur vidéo n'envoient pas
+       * d'en-tête, ce que cette route sait déjà pour le jeton. Absent, on
+       * retombe sur le contrôle par compte seul.
+       */
+      const appareil = req.nextUrl.searchParams.get("appareil") ?? undefined;
+      if (!(await vueUniqueServie(media.message.id, media.message.senderId, userId, appareil))) {
         return fail("Message à vue unique : accès fermé", 403, "VUE_UNIQUE");
       }
     }

@@ -56,12 +56,35 @@ export function ouvertureClose(o: { ouvertA: Date; fermeA: Date | null }, mainte
  * l'expéditeur, ni un destinataire qui n'a pas encore demandé l'accès — une
  * vignette chargée d'avance serait déjà une vue — ni celui qui a refermé.
  */
-export async function vueUniqueServie(messageId: string, senderId: string, userId: string) {
+export async function vueUniqueServie(
+  messageId: string,
+  senderId: string,
+  userId: string,
+  /**
+   * L'appareil qui demande le fichier. `undefined` d'un client plus ancien.
+   *
+   * 🔴 SANS LUI, L'OUVERTURE SE CONTOURNAIT. La route des médias ne connaissait
+   * que le COMPTE : pendant la fenêtre ouverte par le téléphone, elle servait
+   * encore le fichier à tout appareil présentant le jeton du même compte. Or
+   * l'adresse du média et sa clé voyagent dans le message — un second appareil
+   * les avait déjà, et pouvait donc lire sans jamais « ouvrir ».
+   */
+  appareil?: string,
+) {
   if (userId === senderId) return false;
   const o = await prisma.messageOuverture.findUnique({
     where: { messageId_userId: { messageId, userId } },
   });
-  return o !== null && !ouvertureClose(o);
+  if (o === null || ouvertureClose(o)) return false;
+
+  /*
+   * ⚠️ ON NE REFUSE QUE SI L'ON SAIT : deux appareils CONNUS et DIFFÉRENTS. Si
+   * l'un des identifiants manque (client plus ancien, ouverture créée avant
+   * cette colonne), on sert — perdre la photo de quelqu'un sur un détail de
+   * version serait pire que la tolérance que cela laisse.
+   */
+  if (appareil && o.appareil && o.appareil !== appareil) return false;
+  return true;
 }
 
 export type ResultatOuverture =
@@ -83,7 +106,17 @@ export type ResultatOuverture =
  * même milliseconde n'écrivent qu'une ligne, et le second reprend la même
  * ouverture au lieu d'en créer une seconde.
  */
-export async function ouvrirVueUnique(messageId: string, userId: string): Promise<ResultatOuverture> {
+export async function ouvrirVueUnique(
+  messageId: string,
+  userId: string,
+  /**
+   * L'appareil qui demande. `undefined` pour un client plus ancien.
+   *
+   * 🔴 UNE VUE, UN APPAREIL (demande du user, 12/10/2026). Voir la règle de
+   * reprise plus bas, et la colonne `message_ouverture.appareil`.
+   */
+  appareil?: string,
+): Promise<ResultatOuverture> {
   const message = await prisma.message.findFirst({
     where: {
       id: messageId,
@@ -105,12 +138,31 @@ export async function ouvrirVueUnique(messageId: string, userId: string): Promis
     where: { messageId_userId: { messageId, userId } },
   });
   if (existante && ouvertureClose(existante)) return { ok: false, code: "DEJA_OUVERTE" };
+
+  /*
+   * ⚠️ LA REPRISE EST RÉSERVÉE À L'APPAREIL QUI A OUVERT (12/10/2026).
+   *
+   * 🐛 UN SECOND APPAREIL DU MÊME COMPTE POUVAIT VOIR LE MÉDIA. La fenêtre de
+   * reprise existe pour qu'un réseau coupé en plein téléchargement ne fasse pas
+   * perdre la photo ; elle ne regardait pas QUI reprenait. Ouvrir sur le
+   * téléphone puis courir sur l'ordinateur dans les cinq minutes montrait donc
+   * la même photo deux fois — ce que « vue unique » promet justement d'empêcher.
+   *
+   * ⚠️ ON NE REFUSE QUE SI L'ON SAIT : deux appareils CONNUS et DIFFÉRENTS. Si
+   * l'un des deux identifiants manque (client plus ancien, ouverture d'avant
+   * cette colonne), on laisse reprendre — perdre une photo sur un réseau coupé
+   * serait pire que tolérer une reprise qu'on ne peut pas départager.
+   */
+  if (existante && appareil && existante.appareil && existante.appareil !== appareil) {
+    return { ok: false, code: "DEJA_OUVERTE" };
+  }
+
   if (message.media.length === 0) return { ok: false, code: "EFFACEE" };
 
   if (!existante) {
     await prisma.messageOuverture.upsert({
       where: { messageId_userId: { messageId, userId } },
-      create: { messageId, userId },
+      create: { messageId, userId, appareil: appareil ?? null },
       update: {},
     });
     await annoncer(message.convId, messageId, userId, "vue_unique_ouverte");

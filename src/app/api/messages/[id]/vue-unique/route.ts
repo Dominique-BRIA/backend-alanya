@@ -16,9 +16,26 @@ import { ouvrirVueUnique } from "@/modules/messaging/vue-unique";
  * Réponses : 200 { media, fenetreSecondes } ; 403 EXPEDITEUR (on ne rouvre pas
  * son propre envoi) ; 404 INTROUVABLE ; 410 DEJA_OUVERTE ou EFFACEE.
  */
-export const POST = withAuth(async (_req, userId, ctx) => {
+export const POST = withAuth(async (req, userId, ctx) => {
   const { id } = await ctx.params;
-  const r = await ouvrirVueUnique(id, userId);
+
+  /*
+   * ⚠️ L'APPAREIL EST FACULTATIF, ET LU SANS JAMAIS LEVER. Un client plus
+   * ancien n'envoie pas de corps du tout ; `req.json()` lèverait alors, et
+   * refuser l'ouverture pour cette raison ferait perdre la photo à quelqu'un
+   * qui n'y est pour rien.
+   */
+  let appareil: string | undefined;
+  try {
+    const corps = (await req.json()) as { appareil?: unknown };
+    if (typeof corps?.appareil === "string" && corps.appareil.length > 0) {
+      appareil = corps.appareil.slice(0, 64);
+    }
+  } catch {
+    /* pas de corps : client plus ancien */
+  }
+
+  const r = await ouvrirVueUnique(id, userId, appareil);
   if (r.ok) return ok({ media: r.media, fenetreSecondes: r.fenetreSecondes });
   switch (r.code) {
     case "EXPEDITEUR":

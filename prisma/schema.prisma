@@ -1195,6 +1195,25 @@ model MessageOuverture {
   /// Le visionneur a été refermé. `null` tant qu'il est ouvert — ou que
   /// l'application s'est arrêtée avant de le dire (la fenêtre fait foi).
   fermeA    DateTime? @db.Timestamptz
+
+  /// L'APPAREIL qui a commencé cette ouverture.
+  ///
+  /// 🔴 UNE VUE, UN APPAREIL — demande du user, 12/10/2026 : « si je l'ouvre
+  /// déjà avec mon compte sur un appareil, en allant sur l'autre appareil, on
+  /// ne doit pas pouvoir l'ouvrir ».
+  ///
+  /// La clé primaire `[message, compte]` garantissait déjà UNE ouverture par
+  /// compte. Mais la FENÊTRE DE REPRISE — cinq minutes pendant lesquelles une
+  /// ouverture non refermée peut être reprise, pour qu'un réseau qui coupe ne
+  /// fasse pas perdre la photo — ne regardait pas QUI reprenait : un second
+  /// appareil du même compte pouvait donc voir le média pendant ce temps. Avec
+  /// cette colonne, la reprise est réservée à l'appareil qui a ouvert.
+  ///
+  /// ⚠️ NULLE POUR UN CLIENT PLUS ANCIEN qui ne l'envoie pas. On retombe alors
+  /// sur l'ancien comportement — tolérant — plutôt que de refuser une reprise
+  /// légitime : une photo perdue par un réseau coupé serait pire.
+  appareil  String?   @db.VarChar(64)
+
   message   Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@id([messageId, userId])
