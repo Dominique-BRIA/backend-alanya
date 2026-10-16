@@ -12,6 +12,7 @@ import { nomAffichage } from "@/lib/display-name.mjs";
 import { apercuMessage } from "@/lib/message-payload.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
+import { preparerBadges } from "@/lib/badges";
 
 // Convertit le type entier (BD) en string (API)
 function _typeToString(t: number | null): string {
@@ -104,6 +105,8 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
     ]),
   );
 
+  const badgeDe = await preparerBadges();
+
   const conversations = parts.map((p) => {
     const conv = p.conv;
     const others = conv.participants.filter((pp) => pp.userId !== userId);
@@ -173,6 +176,12 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
        * même ses envois (`COMPTE_OFFICIEL`).
        */
       officiel: !conv.isGroup && others.some((o) => o.user.typeCompte === TYPE_COMPTE_OFFICIEL),
+      /*
+       * Le badge à dessiner à côté du nom (`{ type, image, libelle }` ou
+       * null), décidé par le serveur — `src/lib/badges.ts`. Le client affiche
+       * l'image, rien de plus : tout se règle ici et dans la console.
+       */
+      badge: conv.isGroup || isSelf ? null : badgeDe(others[0]?.user),
       /// Mes notes personnelles. Envoyé explicitement : un client qui l'ignore
       /// affiche « Moi » comme titre et se comporte normalement — dégradé,
       /// jamais cassé.
