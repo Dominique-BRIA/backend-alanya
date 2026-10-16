@@ -70,7 +70,9 @@ export function presenterCompteOfficiel(c: Compte) {
  *
  * Aucun e-mail, aucun mobile, aucun mot de passe : aucune voie de connexion
  * ne mène à ce compte. Sa photo est le logo servi par ce serveur même
- * (`public/logo-alanya.png`), en URL absolue comme toute photo en base.
+ * (`public/logo-alanya-officiel.png` : le logo sur FOND BLANC, avec une marge
+ * pour le rond de l'avatar — le logo transparent disparaissait sur fond
+ * sombre), en URL absolue comme toute photo en base.
  */
 export async function creerCompteOfficiel() {
   return prisma.$transaction(async (tx) => {
@@ -88,7 +90,7 @@ export async function creerCompteOfficiel() {
         pseudo: "alanyawork",
         publicNumber: await generateUniquePublicNumber(),
         typeCompte: TYPE_COMPTE_OFFICIEL,
-        avatarUrl: `${env.publicBaseUrl}/logo-alanya.png`,
+        avatarUrl: `${env.publicBaseUrl}/logo-alanya-officiel.png`,
       },
       select: CHAMPS,
     });
