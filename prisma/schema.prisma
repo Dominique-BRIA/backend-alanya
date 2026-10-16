@@ -3505,3 +3505,48 @@ model EnvoiMorceauRecu {
   @@id([envoiId, indice], map: "envoi_morceaux_recus_pkey")
   @@map("envoi_morceaux_recus")
 }
+
+/// Diffusion du compte officiel « Alanya Work », lancée depuis la console de
+/// gestion (lot 1b, 16/10/2026). SQL : `prisma/manual/2026-10_gestion_diffusions.sql`
+/// — c'est lui qui porte les contraintes d'état et les index partiels.
+model Diffusion {
+  id           BigInt           @id @default(autoincrement())
+  clientId     String           @unique @map("client_id") @db.VarChar(64)
+  expediteurId String           @map("expediteur_id") @db.Uuid
+  /// `master` ou `root:<idRoot>`.
+  creePar      String           @map("cree_par") @db.VarChar(64)
+  contenu      String
+  criteres     Json             @db.JsonB
+  estimation   Int              @default(0)
+  /// planifiee | en_cours | terminee | annulee | echec (CHECK en base).
+  statut       String           @default("planifiee") @db.VarChar(16)
+  planifieeA   DateTime         @default(now()) @map("planifiee_a") @db.Timestamptz
+  total        Int              @default(0)
+  envoyes      Int              @default(0)
+  refuses      Int              @default(0)
+  echecs       Int              @default(0)
+  verrouJusqua DateTime?        @map("verrou_jusqua") @db.Timestamptz
+  creeLe       DateTime         @default(now()) @map("cree_le") @db.Timestamptz
+  commenceeLe  DateTime?        @map("commencee_le") @db.Timestamptz
+  termineeLe   DateTime?        @map("terminee_le") @db.Timestamptz
+  envois       DiffusionEnvoi[]
+
+  @@map("diffusion")
+}
+
+/// Un destinataire d'une diffusion. La clé (diffusion, destinataire) rend la
+/// reprise sûre : on n'écrit jamais deux fois au même compte.
+model DiffusionEnvoi {
+  diffusionId BigInt    @map("diffusion_id")
+  userId      String    @map("user_id") @db.Uuid
+  convId      String?   @map("conv_id") @db.Uuid
+  messageId   String?   @map("message_id") @db.Uuid
+  /// envoye | refuse | echec (CHECK en base).
+  statut      String    @db.VarChar(8)
+  motif       String?   @db.VarChar(60)
+  envoyeLe    DateTime  @default(now()) @map("envoye_le") @db.Timestamptz
+  diffusion   Diffusion @relation(fields: [diffusionId], references: [id], onDelete: Cascade)
+
+  @@id([diffusionId, userId])
+  @@map("diffusion_envoi")
+}

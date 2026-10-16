@@ -16,11 +16,15 @@ import { ZodError } from "zod";
 export class ErreurAdmin extends Error {
   status: number;
   code: string;
-  constructor(status: number, message: string, code: string) {
+  /// Champs joints à la réponse, au premier niveau (ex. `count` d'une
+  /// estimation obsolète). Jamais `error` ni `code` : ils seraient écrasés.
+  extra?: Record<string, unknown>;
+  constructor(status: number, message: string, code: string, extra?: Record<string, unknown>) {
     super(message);
     this.name = "ErreurAdmin";
     this.status = status;
     this.code = code;
+    this.extra = extra;
   }
 }
 
@@ -28,12 +32,12 @@ export function okAdmin<T>(data: T, status = 200) {
   return NextResponse.json(data, { status });
 }
 
-export function erreurAdmin(status: number, message: string, code: string) {
-  return NextResponse.json({ error: message, code }, { status });
+export function erreurAdmin(status: number, message: string, code: string, extra?: Record<string, unknown>) {
+  return NextResponse.json({ ...extra, error: message, code }, { status });
 }
 
 export function reponseErreurAdmin(err: unknown) {
-  if (err instanceof ErreurAdmin) return erreurAdmin(err.status, err.message, err.code);
+  if (err instanceof ErreurAdmin) return erreurAdmin(err.status, err.message, err.code, err.extra);
   if (err instanceof ZodError) {
     return NextResponse.json(
       { error: "Données invalides", code: "VALIDATION", details: err.flatten() },

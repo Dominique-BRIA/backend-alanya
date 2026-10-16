@@ -217,11 +217,19 @@ const ECRITURES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 export function routeAdmin<C>(
   permission: Permission,
   gestionnaire: (req: NextRequest, session: SessionAdmin, ctx: C) => Promise<Response>,
+  /// `lecture: true` : un POST qui n'écrit rien (une estimation, un calcul).
+  /// Il reste alors permis à un compte en lecture seule.
+  options: { lecture?: boolean } = {},
 ) {
   return async (req: NextRequest, ctx: C): Promise<Response> => {
     try {
       const session = await identifier(req);
-      if (session.lectureSeule && ECRITURES.has(req.method) && !PERMISES_EN_LECTURE_SEULE.has(permission)) {
+      if (
+        session.lectureSeule &&
+        !options.lecture &&
+        ECRITURES.has(req.method) &&
+        !PERMISES_EN_LECTURE_SEULE.has(permission)
+      ) {
         throw new ErreurAdmin(403, "Accès refusé : vous ne disposez que des droits de lecture", "READ_ONLY");
       }
       return await gestionnaire(req, session, ctx);

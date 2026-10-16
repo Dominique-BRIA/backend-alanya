@@ -19,6 +19,11 @@
  *
  * ⚠️ BASE DE DÉVELOPPEMENT SEULEMENT : le banc crée puis supprime deux lignes
  * `Root` (`banc-lecture`, `banc-inactif`).
+ *
+ * ⚠️ IL FINIT EN ÉPUISANT LE PLAFOND DE CONNEXION DE L'ADRESSE (⑦) : pendant
+ * 15 minutes, plus aucun superroot ne se connecte depuis ce poste. Sans Redis,
+ * redémarrer le serveur Next remet le compteur à zéro — à faire avant de
+ * lancer un autre banc de gestion.
  */
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";

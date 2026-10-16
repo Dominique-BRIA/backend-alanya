@@ -27,4 +27,22 @@ export async function register() {
       .catch((e) => console.error("[vue-unique] purge :", e));
   setTimeout(tour, 30_000);
   setInterval(tour, 5 * 60 * 1000).unref?.();
+
+  /*
+   * LES DIFFUSIONS DU COMPTE OFFICIEL, toutes les 30 secondes (console de
+   * gestion, 16/10/2026).
+   *
+   * Lance les diffusions planifiées arrivées à échéance, et REPREND celles
+   * qu'un redémarrage a interrompues (leur verrou expire). Une diffusion
+   * immédiate n'attend pas ce tour : sa route la lance juste après avoir
+   * répondu — ce tour-ci n'est que le filet.
+   */
+  const { traiterDiffusionsDues } = await import("@/lib/gestion/diffusions");
+  setInterval(() => {
+    traiterDiffusionsDues()
+      .then((n) => {
+        if (n > 0) console.log(`[diffusion] traitées : ${n}`);
+      })
+      .catch((e) => console.error("[diffusion] tour :", e));
+  }, 30_000).unref?.();
 }

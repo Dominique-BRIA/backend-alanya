@@ -5158,6 +5158,23 @@ const PONT_CHEMIN = "/interne/salle/diffuser";
 /// `salle: 0`, ce qui aurait affaibli sa propre validation.
 const PONT_CHEMIN_PERSONNES = "/interne/personnes/diffuser";
 
+/// Le chemin des MESSAGES OFFICIELS — ajouté le 16/10/2026 pour les
+/// diffusions et la bienvenue de la console de gestion.
+///
+/// POURQUOI UNE TROISIÈME PORTE. Ces messages sont écrits par l'API au nom du
+/// compte officiel « Alanya Work » : ils ne passent pas par le WebSocket, qui
+/// ne les voit donc pas naître. Il faut pourtant les livrer comme n'importe
+/// quel message — trame `message` aux connectés, push aux autres.
+///
+/// 🔴 L'APPELANT NE FOURNIT QUE DES IDENTIFIANTS. La porte RELIT chaque message
+/// en base et REFUSE tout ce qui n'a pas été écrit par un compte de type 5 :
+/// elle ne peut donc ni fabriquer une trame `message`, ni livrer celui d'un
+/// autre compte — seulement accélérer la livraison de ce que le compte
+/// officiel a VRAIMENT écrit.
+const PONT_CHEMIN_OFFICIEL = "/interne/officiel/livrer";
+/// Au-delà, l'appelant découpe. 500 identifiants tiennent largement dans 64 Ko.
+const PONT_OFFICIEL_MAX = 500;
+
 /// Plafond du corps. Le pont ne transporte que des codes et quelques
 /// identifiants : au-dela, c'est une erreur ou un abus, et lire sans borne
 /// laisserait un seul appelant gonfler la memoire du process.
@@ -5287,10 +5304,81 @@ function pontVersPersonnes(res, corps) {
   pontRepond(res, 200, { ok: true, servies });
 }
 
+/**
+ * Livre UN message écrit par le compte officiel : trame `message` aux
+ * participants connectés, push aux autres (sourdine respectée). Rend `false`
+ * si le message n'existe pas ou ne vient pas du compte officiel.
+ *
+ * Même livraison que `handleSend`, sans l'écho à l'expéditeur : personne
+ * n'est connecté sous le compte officiel.
+ */
+async function livrerMessageOfficiel(messageId) {
+  const m = await prisma.message.findUnique({
+    where: { id: messageId },
+    include: { media: true, sender: { select: { typeCompte: true, nom: true, pseudo: true } } },
+  });
+  if (!m || m.sender?.typeCompte !== TYPE_COMPTE_OFFICIEL) return false;
+
+  const destinataires = (await participantsOf(m.convId)).filter((uid) => uid !== m.senderId);
+  let statut = m.status;
+  if (destinataires.some((uid) => isUserOnline(uid)) && statut === "SENT") {
+    await prisma.message.update({ where: { id: m.id }, data: { status: "DELIVERED" } });
+    statut = "DELIVERED";
+  }
+  const serialise = { ...(await serializeMessage(m, m.media)), status: statut };
+  for (const uid of destinataires) sendTo(uid, { type: "message", message: serialise });
+
+  if (isPushEnabled()) {
+    const nom = nomAffichage(m.sender) ?? "Alanya Work";
+    const enSourdine = new Set(
+      (
+        await prisma.participant.findMany({
+          where: { convId: m.convId, sourdine: 1 },
+          select: { userId: true },
+        })
+      ).map((p) => p.userId),
+    );
+    for (const uid of destinataires) {
+      if (isUserOnline(uid) || enSourdine.has(uid)) continue;
+      await pushNewMessage(prisma, {
+        recipientId: uid,
+        senderName: nom,
+        senderId: m.senderId,
+        convId: m.convId,
+        convTitle: nom,
+        preview: m.type === "TEXT" ? (m.content ?? "").slice(0, 120) : apercuStructure(m.type, m.content ?? null),
+        messageType: m.type,
+      }).catch(() => {});
+    }
+  }
+  return true;
+}
+
+/** La porte des MESSAGES OFFICIELS : `{ messageIds: [...] }` → livrés un à un. */
+async function pontLivrerOfficiel(res, corps) {
+  const ids = Array.isArray(corps?.messageIds)
+    ? [...new Set(corps.messageIds.filter((id) => typeof id === "string" && id !== ""))]
+    : [];
+  if (ids.length === 0 || ids.length > PONT_OFFICIEL_MAX) {
+    pontRepond(res, 400, { erreur: "BAD_IDS" });
+    return;
+  }
+  let livres = 0;
+  for (const id of ids) {
+    try {
+      if (await livrerMessageOfficiel(id)) livres++;
+    } catch (e) {
+      console.error(`[pont] livraison officielle ${id} :`, e?.message ?? e);
+    }
+  }
+  pontRepond(res, 200, { ok: true, livres });
+}
+
 async function pontTraite(req, res) {
   const chemin = (req.url ?? "").split("?")[0];
   const versPersonnes = chemin === PONT_CHEMIN_PERSONNES;
-  if (req.method !== "POST" || (chemin !== PONT_CHEMIN && !versPersonnes)) {
+  const versOfficiel = chemin === PONT_CHEMIN_OFFICIEL;
+  if (req.method !== "POST" || (chemin !== PONT_CHEMIN && !versPersonnes && !versOfficiel)) {
     pontRepond(res, 404, { erreur: "NOT_FOUND" });
     return;
   }
@@ -5325,6 +5413,10 @@ async function pontTraite(req, res) {
   // aucune ne peut les perdre en divergeant.
   if (versPersonnes) {
     pontVersPersonnes(res, corps);
+    return;
+  }
+  if (versOfficiel) {
+    await pontLivrerOfficiel(res, corps);
     return;
   }
 

@@ -128,6 +128,8 @@ const CHEMIN_PONT = "/interne/salle/diffuser";
 /// fait. Avant, le destinataire serait prevenu d'un message qu'il ne pourrait
 /// pas encore lire.
 const CHEMIN_PONT_PERSONNES = "/interne/personnes/diffuser";
+/// La porte des MESSAGES OFFICIELS (16/10/2026) — voir `livrerMessagesOfficiels`.
+const CHEMIN_PONT_OFFICIEL = "/interne/officiel/livrer";
 const ENTETE_PONT = "x-alanya-interne";
 
 /// Delai d'attente. C'est une requete vers un process de la MEME machine : elle
@@ -393,6 +395,33 @@ export async function previensDemandeInvitation(params: {
  * configure, process arrete, personne de connecte — et n'est JAMAIS une raison
  * de faire echouer l'appelant. Ne leve pas.
  */
+/**
+ * Fait livrer des messages écrits par le compte officiel (diffusions,
+ * bienvenue) : trame `message` aux connectés, push aux autres.
+ *
+ * Le serveur WebSocket relit chaque message et refuse ce qui ne vient pas du
+ * compte officiel — voir `PONT_CHEMIN_OFFICIEL` dans `ws-server.mjs`. Rend le
+ * nombre de messages remis au pont ; `0` s'il est injoignable : les messages
+ * sont écrits, ils s'afficheront à la prochaine ouverture de l'application.
+ */
+export async function livrerMessagesOfficiels(messageIds: string[]): Promise<number> {
+  if (messageIds.length === 0) return 0;
+  if (PAR_RESEAU && !SECRET_PONT) return 0;
+  let livres = 0;
+  for (let i = 0; i < messageIds.length; i += 500) {
+    try {
+      const corps = JSON.stringify({ messageIds: messageIds.slice(i, i + 500) });
+      const reponse = PAR_RESEAU
+        ? await viaReseau(corps, CHEMIN_PONT_OFFICIEL)
+        : await viaSocket(corps, CHEMIN_PONT_OFFICIEL);
+      if (reponse.ok) livres += Math.min(500, messageIds.length - i);
+    } catch {
+      // Pont injoignable : voir ci-dessus, rien à rattraper.
+    }
+  }
+  return livres;
+}
+
 export async function previensDesPersonnes(params: {
   /// Les comptes a prevenir. Tous leurs appareils connectes recevront la trame.
   personnes: string[];
