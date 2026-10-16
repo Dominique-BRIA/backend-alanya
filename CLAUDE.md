@@ -5,6 +5,15 @@
 
 ---
 
+> 📍 **ÉTAT DU CHANTIER EN COURS — à lire en premier :**
+> `backend-alanya/docs/2026-10-16-remarques-prof.md`
+> Ce fichier tient l'état des 14 demandes issues de la présentation au professeur
+> (compression, OTP web, nom personnalisé, documents signés, coffre-fort, API…), avec pour
+> chacune son état, les décisions déjà prises et les motifs des pistes écartées. Il existe
+> parce que le travail se fait depuis plusieurs comptes Claude : la discussion se perd, ce
+> fichier reste. Toute session qui reprend ce chantier commence par le lire et le met à jour
+> dans le même lot que le code.
+
 ## 🚀 API Développeur v1 (`src/app/api/v1/messages/send/route.ts`)
 
 - **Fonction** : Envoi de messages texte via l'API Développeur Alanya.
