@@ -181,6 +181,12 @@ model User {
   /// foi — à clarifier avec l'équipe avant que du code ne s'appuie dessus.
   isDelete Boolean @default(false) @map("isDelete")
 
+  /// Badge « vérifié » posé par la console de gestion (16/10/2026) :
+  /// 0 non demandé, 1 en cours, 2 vérifié, 3 refusé, 4 révoqué, 5 expiré.
+  /// SQL : prisma/manual/2026-10_gestion_console.sql.
+  verificationStatut Int       @default(0) @map("verification_statut") @db.SmallInt
+  verifieJusqua      DateTime? @map("verifie_jusqua") @db.Timestamptz
+
   refreshTokens         RefreshToken[]
   contacts              Contact[]           @relation("UserContacts")
   contactOf             Contact[]           @relation("ContactOf")
@@ -3549,4 +3555,233 @@ model DiffusionEnvoi {
 
   @@id([diffusionId, userId])
   @@map("diffusion_envoi")
+}
+
+// ═════════ CONSOLE DE GESTION — SQL : prisma/manual/2026-10_gestion_console.sql ═════════
+// Le SQL porte les contraintes d'état (CHECK) et les index partiels ; ces
+// modèles ne servent qu'à lire et écrire.
+
+/// Une écriture d'un superroot dans la console.
+model GestionAudit {
+  id         BigInt   @id @default(autoincrement())
+  admin      String   @db.VarChar(64)
+  adminNom   String?  @map("admin_nom") @db.VarChar(100)
+  action     String   @db.VarChar(60)
+  route      String   @db.VarChar(200)
+  cibleType  String?  @map("cible_type") @db.VarChar(40)
+  cibleId    String?  @map("cible_id") @db.VarChar(80)
+  motif      String?  @db.VarChar(500)
+  ip         String?  @db.VarChar(64)
+  statutHttp Int      @map("statut_http")
+  creeLe     DateTime @default(now()) @map("cree_le") @db.Timestamptz
+
+  @@map("gestion_audit")
+}
+
+/// Un réglage de la console (purges, stickers, trajets…), en JSON.
+model GestionReglage {
+  cle        String   @id @db.VarChar(80)
+  valeur     Json     @db.JsonB
+  modifieLe  DateTime @default(now()) @map("modifie_le") @db.Timestamptz
+  modifiePar String?  @map("modifie_par") @db.VarChar(64)
+
+  @@map("gestion_reglage")
+}
+
+model GestionPurgePassage {
+  id          BigInt   @id @default(autoincrement())
+  nom         String   @db.VarChar(60)
+  lanceLe     DateTime @default(now()) @map("lance_le") @db.Timestamptz
+  declencheur String   @db.VarChar(8)
+  parAdmin    String?  @map("par_admin") @db.VarChar(64)
+  ok          Boolean
+  resultat    Json?    @db.JsonB
+  erreur      String?
+  dureeMs     Int?     @map("duree_ms")
+
+  @@map("gestion_purge_passage")
+}
+
+model GestionNumeroHistorique {
+  id        BigInt   @id @default(autoincrement())
+  userId    String   @map("user_id") @db.Uuid
+  ancien    String   @db.VarChar(20)
+  nouveau   String   @db.VarChar(20)
+  changeLe  DateTime @default(now()) @map("change_le") @db.Timestamptz
+  changePar String   @map("change_par") @db.VarChar(64)
+
+  @@map("gestion_numero_historique")
+}
+
+/// Une version du message de bienvenue (brouillon, publiée, archivée).
+model GestionBienvenue {
+  id        BigInt    @id @default(autoincrement())
+  version   Int
+  etat      String    @db.VarChar(10)
+  blocs     Json      @default("[]") @db.JsonB
+  publieLe  DateTime? @map("publie_le") @db.Timestamptz
+  publiePar String?   @map("publie_par") @db.VarChar(64)
+  creeLe    DateTime  @default(now()) @map("cree_le") @db.Timestamptz
+
+  @@map("gestion_bienvenue")
+}
+
+/// Qui a reçu la bienvenue — une fois par compte.
+model GestionBienvenueEnvoi {
+  userId   String   @id @map("user_id") @db.Uuid
+  version  Int
+  statut   String   @db.VarChar(8)
+  motif    String?  @db.VarChar(60)
+  envoyeLe DateTime @default(now()) @map("envoye_le") @db.Timestamptz
+
+  @@map("gestion_bienvenue_envoi")
+}
+
+model GestionSignalement {
+  id        BigInt                     @id @default(autoincrement())
+  cibleType String                     @map("cible_type") @db.VarChar(8)
+  messageId String?                    @map("message_id") @db.Uuid
+  userId    String?                    @map("user_id") @db.Uuid
+  auteurId  String                     @map("auteur_id") @db.Uuid
+  motif     String                     @db.VarChar(40)
+  note      String?                    @db.VarChar(1000)
+  etat      String                     @default("open") @db.VarChar(10)
+  extrait   String?
+  creeLe    DateTime                   @default(now()) @map("cree_le") @db.Timestamptz
+  actions   GestionSignalementAction[]
+
+  @@map("gestion_signalement")
+}
+
+model GestionSignalementAction {
+  id            BigInt             @id @default(autoincrement())
+  signalementId BigInt             @map("signalement_id")
+  action        String             @db.VarChar(30)
+  note          String?            @db.VarChar(1000)
+  admin         String             @db.VarChar(64)
+  adminNom      String?            @map("admin_nom") @db.VarChar(100)
+  creeLe        DateTime           @default(now()) @map("cree_le") @db.Timestamptz
+  signalement   GestionSignalement @relation(fields: [signalementId], references: [id], onDelete: Cascade)
+
+  @@map("gestion_signalement_action")
+}
+
+model GestionVerification {
+  id              BigInt                        @id @default(autoincrement())
+  userId          String                        @map("user_id") @db.Uuid
+  nomRevendique   String                        @map("nom_revendique") @db.VarChar(150)
+  nomApprouve     String?                       @map("nom_approuve") @db.VarChar(150)
+  statut          String                        @default("pending") @db.VarChar(20)
+  motif           String?                       @db.VarChar(500)
+  motifRevocation String?                       @map("motif_revocation") @db.VarChar(500)
+  decidePar       String?                       @map("decide_par") @db.VarChar(100)
+  creeLe          DateTime                      @default(now()) @map("cree_le") @db.Timestamptz
+  decideLe        DateTime?                     @map("decide_le") @db.Timestamptz
+  revoqueLe       DateTime?                     @map("revoque_le") @db.Timestamptz
+  documents       GestionVerificationDocument[]
+
+  @@map("gestion_verification")
+}
+
+model GestionVerificationDocument {
+  id             BigInt              @id @default(autoincrement())
+  verificationId BigInt              @map("verification_id")
+  typeDoc        Int                 @map("type_doc") @db.SmallInt
+  mediaId        String              @map("media_id") @db.Uuid
+  deposeLe       DateTime            @default(now()) @map("depose_le") @db.Timestamptz
+  vues           Int                 @default(0)
+  verification   GestionVerification @relation(fields: [verificationId], references: [id], onDelete: Cascade)
+
+  @@map("gestion_verification_document")
+}
+
+model StickerPack {
+  id           BigInt    @id @default(autoincrement())
+  code         String    @unique @db.VarChar(60)
+  nom          Json      @db.JsonB
+  description  Json?     @db.JsonB
+  auteur       String?   @db.VarChar(100)
+  couvertureId BigInt?   @map("couverture_id")
+  premium      Boolean   @default(false)
+  statut       Int       @default(0) @db.SmallInt
+  ordre        Int       @default(0)
+  version      Int       @default(1)
+  publieLe     DateTime? @map("publie_le") @db.Timestamptz
+  creeLe       DateTime  @default(now()) @map("cree_le") @db.Timestamptz
+  modifieLe    DateTime  @default(now()) @map("modifie_le") @db.Timestamptz
+  stickers     Sticker[]
+
+  @@map("sticker_pack")
+}
+
+model StickerAsset {
+  id           BigInt               @id @default(autoincrement())
+  url          String
+  mime         String               @db.VarChar(60)
+  octets       Int
+  empreinte    String               @unique @db.VarChar(64)
+  espace       String?              @db.VarChar(10)
+  anime        Boolean              @default(false)
+  statut       Int                  @default(0) @db.SmallInt
+  creeLe       DateTime             @default(now()) @map("cree_le") @db.Timestamptz
+  stickers     Sticker[]
+  signalements StickerSignalement[]
+
+  @@map("sticker_asset")
+}
+
+model Sticker {
+  id       BigInt       @id @default(autoincrement())
+  packId   BigInt       @map("pack_id")
+  assetId  BigInt       @map("asset_id")
+  position Int          @default(0)
+  emoji    String       @default("") @db.VarChar(16)
+  nom      Json         @default("{}") @db.JsonB
+  pack     StickerPack  @relation(fields: [packId], references: [id], onDelete: Cascade)
+  asset    StickerAsset @relation(fields: [assetId], references: [id])
+
+  @@map("sticker")
+}
+
+model StickerSignalement {
+  id       BigInt       @id @default(autoincrement())
+  assetId  BigInt       @map("asset_id")
+  auteurId String       @map("auteur_id") @db.Uuid
+  motif    String       @db.VarChar(40)
+  statut   Int          @default(0) @db.SmallInt
+  creeLe   DateTime     @default(now()) @map("cree_le") @db.Timestamptz
+  asset    StickerAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@map("sticker_signalement")
+}
+
+model Trajet {
+  id              BigInt        @id @default(autoincrement())
+  userId          String        @map("user_id") @db.Uuid
+  nature          String        @db.VarChar(5)
+  statut          String        @default("ouvert") @db.VarChar(10)
+  demarreLe       DateTime      @default(now()) @map("demarre_le") @db.Timestamptz
+  echeance        DateTime?     @db.Timestamptz
+  prolongations   Int           @default(0)
+  confirme        Boolean       @default(false)
+  alerteLe        DateTime?     @map("alerte_le") @db.Timestamptz
+  alerteResolueLe DateTime?     @map("alerte_resolue_le") @db.Timestamptz
+  closLe          DateTime?     @map("clos_le") @db.Timestamptz
+  raisonCloture   String?       @map("raison_cloture") @db.VarChar(30)
+  pointsPurges    Boolean       @default(false) @map("points_purges")
+  points          TrajetPoint[]
+
+  @@map("trajet")
+}
+
+model TrajetPoint {
+  id         BigInt   @id @default(autoincrement())
+  trajetId   BigInt   @map("trajet_id")
+  lat        Float
+  lng        Float
+  precisionM Float?   @map("precision_m") @db.Real
+  releveLe   DateTime @default(now()) @map("releve_le") @db.Timestamptz
+  trajet     Trajet   @relation(fields: [trajetId], references: [id], onDelete: Cascade)
+
+  @@map("trajet_point")
 }

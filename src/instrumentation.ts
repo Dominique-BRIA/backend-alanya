@@ -38,11 +38,27 @@ export async function register() {
    * répondu — ce tour-ci n'est que le filet.
    */
   const { traiterDiffusionsDues } = await import("@/lib/gestion/diffusions");
+  const { poursuivreRattrapage } = await import("@/lib/gestion/bienvenue");
   setInterval(() => {
     traiterDiffusionsDues()
       .then((n) => {
         if (n > 0) console.log(`[diffusion] traitées : ${n}`);
       })
       .catch((e) => console.error("[diffusion] tour :", e));
+    // Le rattrapage de la bienvenue demandé depuis la console, s'il reste à faire.
+    poursuivreRattrapage()
+      .then((n) => {
+        if (n > 0) console.log(`[bienvenue] rattrapage : ${n} compte(s) servi(s)`);
+      })
+      .catch((e) => console.error("[bienvenue] rattrapage :", e));
   }, 30_000).unref?.();
+
+  /*
+   * LES PURGES DE LA CONSOLE, une fois par heure : chacune décide elle-même si
+   * son dernier passage automatique date de plus d'un jour.
+   */
+  const { purgesAutomatiques } = await import("@/lib/gestion/purges");
+  setInterval(() => {
+    purgesAutomatiques().catch((e) => console.error("[purges] tour :", e));
+  }, 60 * 60 * 1000).unref?.();
 }

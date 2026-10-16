@@ -64,6 +64,9 @@ export interface SessionAdmin {
   type: number;
   isMaster: boolean;
   lectureSeule: boolean;
+  /// Ce que la route veut voir au journal d'audit, en plus de ce que
+  /// `routeAdmin` déduit seul (cible du chemin) : un motif, une cible précise.
+  audit?: { cibleType?: string; cibleId?: string; motif?: string | null };
 }
 
 function cle(base: string): string {
@@ -222,8 +225,10 @@ export function routeAdmin<C>(
   options: { lecture?: boolean } = {},
 ) {
   return async (req: NextRequest, ctx: C): Promise<Response> => {
+    let session: SessionAdmin | null = null;
+    let reponse: Response;
     try {
-      const session = await identifier(req);
+      session = await identifier(req);
       if (
         session.lectureSeule &&
         !options.lecture &&
@@ -232,9 +237,45 @@ export function routeAdmin<C>(
       ) {
         throw new ErreurAdmin(403, "Accès refusé : vous ne disposez que des droits de lecture", "READ_ONLY");
       }
-      return await gestionnaire(req, session, ctx);
+      reponse = await gestionnaire(req, session, ctx);
     } catch (err) {
-      return reponseErreurAdmin(err);
+      reponse = reponseErreurAdmin(err);
     }
+    // Toute ÉCRITURE d'une session identifiée va au journal, refus compris :
+    // une tentative refusée en dit autant qu'une action réussie.
+    if (session && ECRITURES.has(req.method) && !options.lecture) {
+      await journaliser(req, session, permission, reponse.status);
+    }
+    return reponse;
   };
+}
+
+/**
+ * Inscrit une écriture au journal d'audit (`gestion_audit`).
+ *
+ * La cible est déduite du chemin — `/api/admin/users/<id>/ban` → `users`,
+ * `<id>` — sauf si la route l'a précisée dans `session.audit`.
+ *
+ * ⚠️ UN ÉCHEC D'ÉCRITURE DU JOURNAL N'ANNULE PAS L'ACTION : elle a déjà eu
+ * lieu. On le dit dans les journaux du serveur, sans le cacher.
+ */
+async function journaliser(req: NextRequest, session: SessionAdmin, action: string, statut: number) {
+  const morceaux = req.nextUrl.pathname.replace(/^\/api\/admin\/?/, "").split("/").filter(Boolean);
+  try {
+    await prisma.gestionAudit.create({
+      data: {
+        admin: session.isMaster ? "master" : `root:${session.idRoot}`,
+        adminNom: session.isMaster ? "Master Super Root" : session.username,
+        action,
+        route: `${req.method} ${req.nextUrl.pathname}`.slice(0, 200),
+        cibleType: (session.audit?.cibleType ?? morceaux[0] ?? null)?.slice(0, 40) ?? null,
+        cibleId: (session.audit?.cibleId ?? morceaux[1] ?? null)?.slice(0, 80) ?? null,
+        motif: session.audit?.motif?.slice(0, 500) ?? null,
+        ip: (req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip"))?.slice(0, 64) ?? null,
+        statutHttp: statut,
+      },
+    });
+  } catch (e) {
+    console.error("[gestion] journal d'audit :", e);
+  }
 }

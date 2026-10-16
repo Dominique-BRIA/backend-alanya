@@ -1,5 +1,6 @@
-import { type NextRequest } from "next/server";
+import { after, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { envoyerBienvenue } from "@/lib/gestion/bienvenue";
 import { invaliderProfil } from "@/lib/cache-redis.mjs";
 import { ok, fail, handleError } from "@/lib/http";
 import { setupSchema } from "@/lib/validation";
@@ -119,6 +120,12 @@ export async function POST(req: NextRequest) {
     }
 
     const tokens = await issueTokenPair(user.id, deviceId);
+
+    // Le compte est prêt : la bienvenue d'« Alanya Work » part juste après la
+    // réponse (console de gestion). Sans version publiée, il ne se passe rien ;
+    // un échec ne remonte jamais jusqu'à l'inscription.
+    after(() => envoyerBienvenue(user.id).then(() => undefined));
+
     return ok(
       {
         user: {

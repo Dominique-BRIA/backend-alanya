@@ -144,3 +144,24 @@ function compteurLocal(key: string, limit: number, windowMs: number): RateLimitR
   bucket.count += 1;
   return { allowed: true, remaining: limit - bucket.count, retryAfterSec: 0 };
 }
+
+/**
+ * Le compteur a-t-il déjà atteint `limit` ? LIT SANS COMPTER.
+ *
+ * Pour les plafonds qui ne comptent que les ÉCHECS (connexion à la console de
+ * gestion, 16/10/2026) : on consulte avant d'essayer, et l'on n'appelle
+ * `rateLimit` qu'après un échec. Compter aussi les réussites ferait se bloquer
+ * entre eux des administrateurs derrière une même adresse.
+ */
+export async function plafondAtteint(key: string, limit: number): Promise<boolean> {
+  const c = redis();
+  if (c) {
+    try {
+      return Number((await c.get(cleCompteur(key))) ?? 0) >= limit;
+    } catch {
+      // Redis muet : la fenêtre locale répond.
+    }
+  }
+  const bucket = buckets.get(key);
+  return !!bucket && bucket.resetAt > Date.now() && bucket.count >= limit;
+}

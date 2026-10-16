@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server";
 import { z } from "zod";
-import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { clientIp, plafondAtteint, rateLimit } from "@/lib/rate-limit";
 import { connecter, emettreJetons } from "@/lib/gestion/session";
 import { profilAdmin } from "@/lib/gestion/profil";
 import { erreurAdmin, okAdmin, reponseErreurAdmin } from "@/lib/gestion/reponses";
@@ -23,6 +23,7 @@ const corpsSchema = z
   .refine((c) => c.username || c.email, { message: "Identifiant requis" });
 
 const FENETRE_MS = 15 * 60 * 1000;
+const ECHECS_MAX = 10;
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,16 +31,25 @@ export async function POST(req: NextRequest) {
     if (!corps.success) return erreurAdmin(400, "Identifiant et mot de passe requis", "CREDENTIALS_REQUIRED");
     const identifiant = (corps.data.username ?? corps.data.email)!;
 
-    // Deux compteurs : par adresse (un attaquant qui essaie tous les comptes)
-    // et par identifiant (un attaquant qui change d'adresse). Le second est le
-    // seul à protéger le compte maître, unique et connu de nom.
-    const parIp = await rateLimit(`gestion-login:ip:${clientIp(req)}`, 10, FENETRE_MS);
-    const parCompte = await rateLimit(`gestion-login:id:${identifiant.toLowerCase()}`, 10, FENETRE_MS);
-    if (!parIp.allowed || !parCompte.allowed) {
+    // Deux compteurs d'ÉCHECS : par adresse (un attaquant qui essaie tous les
+    // comptes) et par identifiant (un attaquant qui change d'adresse). Le
+    // second est le seul à protéger le compte maître, unique et connu de nom.
+    // Les réussites ne comptent pas : plusieurs administrateurs derrière une
+    // même adresse ne doivent pas se bloquer entre eux.
+    const cleIp = `gestion-login:ip:${clientIp(req)}`;
+    const cleCompte = `gestion-login:id:${identifiant.toLowerCase()}`;
+    if ((await plafondAtteint(cleIp, ECHECS_MAX)) || (await plafondAtteint(cleCompte, ECHECS_MAX))) {
       return erreurAdmin(429, "Trop de tentatives, réessayez plus tard", "RATE_LIMITED");
     }
 
-    const session = await connecter(identifiant, corps.data.password);
+    let session;
+    try {
+      session = await connecter(identifiant, corps.data.password);
+    } catch (e) {
+      await rateLimit(cleIp, ECHECS_MAX, FENETRE_MS);
+      await rateLimit(cleCompte, ECHECS_MAX, FENETRE_MS);
+      throw e;
+    }
     const jetons = await emettreJetons(session);
     return okAdmin({ ...jetons, user: profilAdmin(session) });
   } catch (err) {
