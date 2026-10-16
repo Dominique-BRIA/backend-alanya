@@ -238,7 +238,7 @@ try {
   const direct = await prisma.conversation.create({ data: { isGroup: false, participants: { create: [{ userId: a.id }, { userId: b.id }] } } });
   nettoyage.groupes.push(direct.id);
   const insulte = await prisma.message.create({ data: { convId: direct.id, senderId: b.id, type: "TEXT", content: "message signalé" } });
-  const sig = await appel("POST", "/api/signalements", { jeton: jetonMobile(a.id), corps: { cible: "message", messageId: insulte.id, motif: "harcelement", note: "banc" } });
+  const sig = await appel("POST", "/api/signalements", { jeton: jetonMobile(a.id), corps: { cible: "message", messageId: insulte.id, motif: "harassment", note: "banc" } });
   verifie("l'application signale → 201", sig.status === 201, sig.json);
   verifie("deux fois → 409", (await appel("POST", "/api/signalements", { jeton: jetonMobile(a.id), corps: { cible: "message", messageId: insulte.id, motif: "spam" } })).status === 409);
   verifie("son propre message → 400", (await appel("POST", "/api/signalements", { jeton: jetonMobile(b.id), corps: { cible: "message", messageId: insulte.id, motif: "spam" } })).status === 400);

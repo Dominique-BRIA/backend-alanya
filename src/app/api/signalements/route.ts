@@ -9,7 +9,7 @@ import { MOTIFS, signaler } from "@/lib/gestion/signalements";
  * POST /api/signalements — un utilisateur signale un message ou un compte.
  *
  * Corps : `{ cible: "message"|"user", messageId?, userId?, motif, note?, extrait? }`.
- * Motifs : spam, harcelement, contenu_inapproprie, fraude, usurpation, autre.
+ * Motifs : harassment, hate, violence, sexual, scam, spam, impersonation, other.
  * `extrait` ne sert que pour un message CHIFFRÉ : le serveur n'en a pas le texte.
  *
  * Les signalements sont triés dans la console de gestion. ⚠️ Route de

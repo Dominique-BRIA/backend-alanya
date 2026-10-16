@@ -19,8 +19,10 @@ import { type SessionAdmin } from "./session";
  * fournit, en le déchiffrant chez lui — et c'est son choix de le révéler.
  */
 
-export const MOTIFS = ["spam", "harcelement", "contenu_inapproprie", "fraude", "usurpation", "autre"] as const;
-const TYPES_MESSAGE: Record<string, number> = { TEXT: 0, IMAGE: 1, FILE: 2, AUDIO: 3, VIDEO: 4, SYSTEM: 5, CONTACT: 6, LOCATION: 7 };
+// Le vocabulaire de la console (libellés `lib/report-labels.ts` d'Alanya-admin).
+export const MOTIFS = ["harassment", "hate", "violence", "sexual", "scam", "spam", "impersonation", "other"] as const;
+// Codification de la console : 1 image, 2 vidéo, 3 audio, 4 document.
+const TYPES_MESSAGE: Record<string, number> = { TEXT: 0, IMAGE: 1, VIDEO: 2, AUDIO: 3, FILE: 4, SYSTEM: 5, CONTACT: 6, LOCATION: 7 };
 
 const signalementSchema = z.object({
   cible: z.enum(["message", "user"]),

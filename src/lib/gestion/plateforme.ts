@@ -13,7 +13,8 @@ import { ErreurAdmin } from "./reponses";
  */
 
 const LIBELLE_CHIFFRE = "🔒 Message chiffré";
-const TYPES_MEDIA: Record<string, number> = { TEXT: 0, IMAGE: 1, FILE: 2, AUDIO: 3, VIDEO: 4 };
+// Codification de la console : 1 image, 2 vidéo, 3 audio, 4 document.
+const TYPES_MEDIA: Record<string, number> = { TEXT: 0, IMAGE: 1, VIDEO: 2, AUDIO: 3, FILE: 4 };
 
 /** Une adresse où l'administrateur peut VOIR le fichier : publique, sinon signée (10 min). */
 async function adresseConsultable(m: { url: string; espace: string | null; chiffre: boolean }) {

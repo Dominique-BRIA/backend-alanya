@@ -84,7 +84,29 @@ export type Permission = (typeof TOUTES_LES_PERMISSIONS)[number];
  */
 export const PERMISES_EN_LECTURE_SEULE: ReadonlySet<Permission> = new Set(["profile.password"]);
 
-/** Les permissions d'une session. Aujourd'hui : toutes. */
+/**
+ * Ce que la console d'origine savait faire et que NOUS ne faisons pas : la
+ * facturation grand public (exclue le 15/10/2026), les clés de sauvegarde de
+ * son chiffrement (le nôtre est différent), le « rôle » et le « socle » d'un
+ * compte (chez nous, le type de compte appartient à alanyaCenter). Ne pas les
+ * déclarer suffit à faire disparaître les boutons de la console.
+ */
+const NON_PRISES_EN_CHARGE: ReadonlySet<Permission> = new Set([
+  "billing.codes",
+  "billing.gift",
+  "billing.plans",
+  "billing.read",
+  "billing.settings",
+  "backup.keys",
+  "users.role",
+  "users.socle",
+  // Le profil d'un superroot (nom, e-mail) n'existe pas dans la table Root.
+  "profile.update",
+  // Ni mode maintenance, ni interrupteur de liaison au téléphone chez nous.
+  "settings.write",
+]);
+
+/** Les permissions d'une session : toutes celles qui ont un sens chez nous. */
 export function permissionsDe(): Permission[] {
-  return [...TOUTES_LES_PERMISSIONS];
+  return TOUTES_LES_PERMISSIONS.filter((p) => !NON_PRISES_EN_CHARGE.has(p));
 }
