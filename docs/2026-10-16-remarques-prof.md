@@ -33,12 +33,18 @@ sur le dernier APK (fabriqué par GitHub Actions — **ne jamais lancer Gradle e
 mesurant les six grandeurs : résolution, débit et poids, avant et après.
 Code : `lib/core/compression_video.dart`, `android/app/src/main/kotlin/com/alanya237/work/CompresseurVideo.kt`.
 
-#### A2 — Web : bouton « meilleure qualité » absent pour la vidéo 🟨
-La ligne « poids initial → poids final » s'affiche, mais le bouton de montée en qualité
-n'apparaît que pour les photos. Attendu : comportement identique photo et vidéo.
-Code : `app/(protected)/chats/[chatId]/chat.tsx` (condition `gain.niveauSuperieurPossible || niveau === "haute"`).
+#### A2 — Web : bouton « meilleure qualité » absent pour la vidéo ✅ 16/10 (web `5ac99b5`, mobile `e806354`)
+**Ce n'était pas un défaut d'affichage.** `niveauSuperieurPossible` posait encore la question
+d'avant l'escalier — « la source dépasse-t-elle 720p ? » — alors que depuis le 13/10 le niveau
+normal descend **une marche en dessous**. Une vidéo filmée en 720p partait donc en 360p et
+aucun bouton ne permettait de remonter. La question juste est comparative : le niveau haut
+donne-t-il une définition plus fine que le normal ? Le même défaut dormait côté photo, entre
+640 et 1600 px — invisible sur une photo de téléphone, qui dépasse toujours le plafond.
+Et l'étiquette mentait : elle annonçait « Envoyer en 1080p » même quand la source ne pouvait
+pas le rendre. Elle annonce maintenant la définition qu'elle va produire, en neuf langues
+(clés `media_envoyer_definition` / `media_revenir_definition`).
 
-#### A3 — Seuil de déclenchement au débit ✅ *décidé le 16/10, implémentation à faire* ⬜
+#### A3 — Seuil de déclenchement au débit ✅ 16/10 (web `5ac99b5`, mobile `e806354`)
 **Demande du professeur** : compresser toute vidéo dont le débit dépasse ~1,2 Mbit/s, et
 viser directement le palier le plus bas.
 **Décision prise** : on adopte **le déclencheur au débit** (le professeur a raison : le poids
@@ -47,9 +53,23 @@ peut porter) **et on garde l'escalier de définition** (une marche à la fois). 
 la descente directe au palier le plus bas : elle réglerait un problème de poids en sacrifiant
 la définition, et rendrait illisible le texte d'une vidéo de cours — c'est précisément le cas
 d'usage pour lequel le niveau haut a été fixé à 1080p.
-**Levier de poids retenu si le professeur veut plus léger** : baisser le débit du palier 720p
-de 1,6 à 1,2 Mbit/s (environ −25 % de poids, définition intacte), plutôt que descendre en 480p.
-**Reste à trancher par le professeur** : plafond à 480p, oui ou non.
+**Ce qui est en place depuis le 16/10** :
+- `SEUIL_DEBIT` = 1 450 000 bits/s, soit le débit du palier 720p (1 200 000) **plus la marge
+  du son** (250 000). Sous ce débit de fichier, on ne touche à rien, quelle que soit la
+  définition ;
+- le palier 720p descend de 1,6 à **1,2 Mbit/s** — le chiffre du professeur — soit un quart
+  de poids en moins à définition intacte ;
+- l'escalier de définition est inchangé : >720→720, 361-720→360, 241-360→240, ≤240 rien.
+
+**Ce seuil unique a remplacé la garde contre la cascade** du 13/10, qui reconnaissait nos
+propres fichiers à leur forme (petit côté sur un palier, débit sous celui du palier). Il n'y a
+plus de forme à reconnaître : le seuil **est** le débit du palier 720p plus le son, donc aucune
+de nos sorties ne le dépasse et aucune ne redéclenche la compression. L'invariant tient par
+construction et un banc le vérifie palier par palier
+(`test/compression_video_test.dart`, 27 cas, tous verts).
+
+**Reste à trancher par le professeur** : plafond à 480p, oui ou non. Lui présenter le 720p à
+1,2 Mbit/s comme alternative — à 480p le texte d'une vidéo de cours devient illisible.
 Code : `src/lib/video-compression.ts` (web, référence), `lib/core/compression_video.dart` (mobile).
 
 #### A4 — Passage au codec H.265/HEVC ⛔ écarté le 16/10
@@ -68,7 +88,7 @@ dépourvus d'encodeur H.264 (Firefox).
 **Si le sujet est rouvert un jour**, la seule architecture viable est « HEVC au stockage +
 repli H.264 fabriqué sur l'appareil de l'expéditeur », jamais un transcodage serveur.
 
-#### A5 — Lenteur de la compression et de l'envoi ⬜ *diagnostiqué le 16/10*
+#### A5 — Lenteur de la compression et de l'envoi 🟨 *diagnostiqué le 16/10, 1 levier sur 4*
 **Constat** : chez nous, compression puis envoi sont perçus comme beaucoup plus longs que
 chez WhatsApp. Trois causes structurelles trouvées dans le code web, par ordre d'impact :
 1. **Tout est en série** : on compresse à 100 %, puis on chiffre, puis on téléverse. Le temps
@@ -78,10 +98,25 @@ chez WhatsApp. Trois causes structurelles trouvées dans le code web, par ordre 
    appelé sans `hardwareAcceleration`, on prend donc ce que le navigateur décide — souvent un
    encodeur logiciel. Sur mobile, WhatsApp utilise l'encodeur matériel du téléphone.
 3. **La compression tourne sur le fil principal**, elle entre en concurrence avec l'interface.
-Leviers, du plus rentable au moins rentable : faire chevaucher encodage et téléversement ;
-sonder `hardwareAcceleration: "prefer-hardware"` en premier ; déplacer le transcodage dans un
-Worker ; enfin réduire le nombre de pixels (le levier du professeur).
-Code : `src/lib/video-compression.ts:364` (sondage des codecs), `:472` (`fastStart`).
+⚠️ **Contrainte posée par le user le 16/10** : la compression doit RESTER dans la page de
+prévisualisation, avec sa progression, la ligne « initial → final » et le bouton de meilleure
+qualité. On ne copie donc pas WhatsApp, qui ne compresse qu'après l'appui sur « Envoyer ».
+Le chevauchement doit se faire **sans** déplacer la compression : on téléverse le fichier
+compressé pendant que l'utilisateur écrit sa légende, et on annule si le niveau change.
+
+⚠️ **Le biais de la comparaison, à garder en tête** : WhatsApp Web ne transcode pas la vidéo,
+il envoie le fichier tel quel ; et sur mobile WhatsApp utilise l'encodeur matériel du
+téléphone. Une partie de sa « vitesse » consiste à ne pas faire le travail.
+
+Leviers, du plus rentable au moins rentable :
+1. ⬜ faire chevaucher encodage/chiffrement et téléversement (le gain perçu le plus grand) ;
+2. ✅ **16/10** — sonder `hardwareAcceleration: "prefer-hardware"` avant d'accepter l'encodeur
+   logiciel : deux passes, les trois profils H.264 en matériel d'abord ;
+3. ⬜ déplacer le transcodage dans un Worker (l'interface cesse d'être bloquée) ;
+4. ⬜ réduire le nombre de pixels — le levier du professeur, le seul qui coûte de la qualité.
+Mesure : `msEncodage` est désormais rendu avec le résultat de la compression web. Il reste à
+mesurer le chiffrement et le téléversement.
+Code : `src/lib/video-compression.ts` (`configurationAvc`, `fastStart: "in-memory"`).
 
 ### B. Sécurité et identité
 
@@ -169,6 +204,12 @@ faisabilité, pas de réalisation immédiate.
 
 ## Journal
 
+- **16/10/2026, soir** — Livré : A2 et A3, web (`5ac99b5`, poussé) et mobile (`e806354`, à
+  pousser), plus le premier des quatre leviers de A5. Bancs : 27 cas vidéo + la ligne d'envoi +
+  la parité des neuf langues, tous verts ; `tsc` et `npm run build` verts côté web.
+  ⚠️ Les dépôts `backend-alanya` et `alanya` ont un `origin` en HTTPS sans identifiants
+  enregistrés — seul le dépôt web est en SSH. Leurs commits attendent donc une poussée manuelle
+  du user, ou le passage de leur `origin` en SSH.
 - **16/10/2026** — Remarques du professeur mises en spécification (14 points). Décisions :
   H.265 écarté (A4), escalier de définition conservé et déclencheur au débit adopté (A3),
   causes de la lenteur identifiées (A5). En attente d'arbitrage du professeur : plafond 480p.
