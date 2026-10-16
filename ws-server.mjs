@@ -23,6 +23,7 @@ import {
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
 import { MEMBRE_ACTIF } from "./src/lib/appartenance.mjs";
+import { ecritureVersOfficiel, MESSAGE_REFUS_OFFICIEL, TYPE_COMPTE_OFFICIEL } from "./src/lib/compte-officiel.mjs";
 // Le cache de lecture. Redis absent ou en panne : ces fonctions interrogent la
 // base exactement comme le faisait le code qu'elles remplacent — voir
 // `src/lib/cache-redis.mjs` pour la raison de chaque choix.
@@ -1192,6 +1193,15 @@ async function handleSend(ws, msg) {
    * ⚠️ LES MEDIAS SONT GARDES PLUS BAS, une fois leurs lignes lues : un fichier
    * en clair est refuse dans un fil chiffre depuis le lot D (chapitre 26).
    */
+  // On ne répond pas au compte officiel (`src/lib/compte-officiel.mjs`). Refus
+  // AVEC un code : sans lui, la bulle de l'expéditeur tournerait pour toujours.
+  if (await ecritureVersOfficiel(prisma, convId, ws.userId)) {
+    ws.send(
+      JSON.stringify({ type: "error", code: "COMPTE_OFFICIEL", message: MESSAGE_REFUS_OFFICIEL, tempId }),
+    );
+    return;
+  }
+
   const filChiffre = await prisma.conversation.findUnique({
     where: { id: convId },
     select: { e2eeActif: true, isGroup: true },
@@ -3300,6 +3310,25 @@ async function handleCallRing(ws, msg) {
      * séparer aurait dupliqué la garde ci-dessous, c'est-à-dire le seul endroit
      * où un oubli ne se voit pas tout de suite.
      */
+    /*
+     * LE COMPTE OFFICIEL NE DÉCROCHE JAMAIS — personne ne l'ouvre. On répond
+     * « refusé » en son nom, l'état que les clients savent déjà traiter : ils
+     * raccrochent aussitôt au lieu de sonner dans le vide jusqu'au délai.
+     */
+    if (cible?.typeCompte === TYPE_COMPTE_OFFICIEL) {
+      ws.send(
+        JSON.stringify({
+          type: "call_state",
+          callId,
+          state: "rejected",
+          convId: call.convId,
+          from: cible.id,
+          userId: cible.id,
+          code: "COMPTE_OFFICIEL",
+        }),
+      );
+      return; // personne ne sonne
+    }
     if (ouvreUnStandard(cible)) {
       /**
        * ⚠️ GARDE DE RÉ-ENTRÉE. `call_ring` n'arrive pas forcément une seule
@@ -4081,6 +4110,10 @@ async function handleForwardMessage(ws, msg) {
     });
     if (motif) {
       refuses.push({ convId: targetConvId, motif });
+      continue;
+    }
+    if (await ecritureVersOfficiel(prisma, targetConvId, ws.userId)) {
+      refuses.push({ convId: targetConvId, motif: "COMPTE_OFFICIEL" });
       continue;
     }
 

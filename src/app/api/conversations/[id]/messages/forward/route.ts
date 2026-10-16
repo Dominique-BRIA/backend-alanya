@@ -8,6 +8,7 @@ import { assertParticipant } from "@/modules/messaging/access";
 import { apercuMessage } from "@/lib/message-payload.mjs";
 import { MEDIA_ORDONNE } from "@/lib/media-ordre";
 import { refusTransfert } from "@/lib/e2ee-clair.mjs";
+import { ecritureVersOfficiel, MESSAGE_REFUS_OFFICIEL } from "@/lib/compte-officiel.mjs";
 
 const forwardSchema = z.object({
   messageId: z.string().uuid(),
@@ -94,6 +95,10 @@ export const POST = withAuth(
           refuses.push({ convId: targetConvId, motif });
           continue;
         }
+        if (await ecritureVersOfficiel(prisma, targetConvId, userId)) {
+          refuses.push({ convId: targetConvId, motif: "COMPTE_OFFICIEL" });
+          continue;
+        }
 
         // Copie les médias (nouvelles entrées pointant vers le même binaire B2/local).
         const mediaConnect: { connect: Array<{ id: string }> } = { connect: [] };
@@ -162,6 +167,11 @@ export const POST = withAuth(
        * 201 vide laisserait croire le message parti.
        */
       if (results.length === 0 && refuses.length > 0) {
+        // Seul le compte officiel a refusé : le dire, sans quoi on chercherait
+        // un chiffrement qui n'existe pas.
+        if (refuses.every((r) => r.motif === "COMPTE_OFFICIEL")) {
+          return fail(MESSAGE_REFUS_OFFICIEL, 403, "COMPTE_OFFICIEL");
+        }
         return fail(
           "Transfert impossible vers ou depuis une conversation chiffrée.",
           409,

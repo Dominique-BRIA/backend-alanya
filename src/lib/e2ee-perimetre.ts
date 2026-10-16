@@ -11,6 +11,9 @@
  *   2 → AGENT : une personne rattachée à une entreprise ;
  *   3 → NUMÉRO DE CENTRE D'APPELS : le standard lui-même ;
  *   4 → CENTRE VOCAL : un standard dont les touches jouent des sons ;
+ *   5 → COMPTE OFFICIEL « Alanya Work » (diffusions, bienvenue) — 🔴 JAMAIS
+ *       dans la liste blanche : c'est le serveur qui écrit en son nom, et il
+ *       ne peut pas écrire dans un fil chiffré (voir `compte-officiel.mjs`) ;
  *   9 → ADMINISTRATEUR de la plateforme (modération).
  *
  * ── LA RÈGLE A CHANGÉ LE 09/10/2026 (décision du user, cours ch. 31 et 33) ──

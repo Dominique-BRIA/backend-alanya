@@ -11,6 +11,7 @@ import { nomAffichage } from "@/lib/display-name.mjs";
 // clients qui lisent `conversation.lastMessage` tel quel.
 import { apercuMessage } from "@/lib/message-payload.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 
 // Convertit le type entier (BD) en string (API)
 function _typeToString(t: number | null): string {
@@ -165,6 +166,13 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
        * avant les clients, sans coordonner les deux.
        */
       e2eeActif: conv.e2eeActif,
+      /*
+       * Un fil avec le compte officiel « Alanya Work » : on n'y répond pas.
+       * Le client remplace alors la saisie par un bandeau et masque l'appel.
+       * FACULTATIF : un client ancien l'ignore, et le serveur refuse quand
+       * même ses envois (`COMPTE_OFFICIEL`).
+       */
+      officiel: !conv.isGroup && others.some((o) => o.user.typeCompte === TYPE_COMPTE_OFFICIEL),
       /// Mes notes personnelles. Envoyé explicitement : un client qui l'ignore
       /// affiche « Moi » comme titre et se comporte normalement — dégradé,
       /// jamais cassé.

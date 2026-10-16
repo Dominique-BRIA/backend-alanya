@@ -4,6 +4,7 @@ import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
 import { refusMediaEnClair } from "@/lib/e2ee-clair.mjs";
+import { ecritureVersOfficiel } from "@/lib/compte-officiel.mjs";
 import type { ChargeGroupe } from "@/lib/e2ee-groupe-charge";
 
 /**
@@ -62,7 +63,9 @@ export type ResultatEnvoi =
         // Groupe chiffré : l'appareil signataire n'a pas d'identité publiée.
         | "APPAREIL_INCONNU"
         // Groupe chiffré : l'identifiant tiré par l'appareil est déjà pris.
-        | "ID_DEJA_PRIS";
+        | "ID_DEJA_PRIS"
+        // On ne répond pas au compte officiel (`compte-officiel.mjs`).
+        | "COMPTE_OFFICIEL";
     };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
@@ -185,6 +188,11 @@ export async function creerMessage(params: {
     where: { id: convId },
     select: { isGroup: true, e2eeActif: true, cleVersion: true },
   });
+
+  // Personne ne répond au compte officiel ; lui seul écrit dans ses fils.
+  if (await ecritureVersOfficiel(prisma, convId, expediteurId)) {
+    return { ok: false, motif: "COMPTE_OFFICIEL" };
+  }
 
   /*
    * 🔴 ON N'ÉCRIT PAS EN CLAIR DANS UNE CONVERSATION CHIFFRÉE.

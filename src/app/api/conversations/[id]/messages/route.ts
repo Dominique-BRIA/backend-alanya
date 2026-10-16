@@ -16,6 +16,7 @@ import {
 import { idMessageClient, lireChargeGroupe } from "@/lib/e2ee-groupe-charge";
 import { annoncerMessageChiffre } from "@/lib/e2ee-annonce";
 import { membresActifs } from "@/lib/appartenance.mjs";
+import { MESSAGE_REFUS_OFFICIEL } from "@/lib/compte-officiel.mjs";
 
 const PAGE_SIZE = 50;
 
@@ -472,6 +473,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
         409,
         "CHARGE_GROUPE_INVALIDE",
       );
+    }
+    // Distinct de « BLOCKED » : personne n'a bloqué personne, ce compte ne
+    // reçoit simplement pas de réponses.
+    if (envoi.motif === "COMPTE_OFFICIEL") {
+      return fail(MESSAGE_REFUS_OFFICIEL, 403, "COMPTE_OFFICIEL");
     }
     return fail("Message non distribuable", 403, "BLOCKED");
   }
