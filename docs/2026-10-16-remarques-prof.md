@@ -27,10 +27,34 @@
 
 ### A. Compression et codec
 
-#### A1 — Compression mobile : résultat attendu non obtenu 🟨
-Le poids obtenu sur Android ne correspond toujours pas à celui du web. À re-diagnostiquer
-sur le dernier APK (fabriqué par GitHub Actions — **ne jamais lancer Gradle en local**), en
-mesurant les six grandeurs : résolution, débit et poids, avant et après.
+#### A1 — Compression mobile : résultat attendu non obtenu 🟨 *audité le 16/10*
+Le poids obtenu sur Android ne correspond toujours pas à celui du web. À re-mesurer sur le
+prochain APK (fabriqué par GitHub Actions — **ne jamais lancer Gradle en local**), en relevant
+les six grandeurs : résolution, débit et poids, avant et après.
+
+**Audit de la chaîne mobile du 16/10, point par point** — ce qui a été vérifié et trouvé SAIN,
+à ne pas re-diagnostiquer :
+- les commits de compression des 12 et 13/10 sont bien sur `origin` : l'APK du jour les contient ;
+- la durée rendue par `getMediaInfo` est en **millisecondes** (`METADATA_KEY_DURATION`), donc le
+  débit mesuré côté Dart est juste ;
+- les deux bouts du canal `alanya/compression_video` s'accordent (chemin, bords, débit), et les
+  callbacks du transcodeur reviennent sur le fil principal ;
+- le chemin d'envoi utilise bien les octets compressés (`_fichiers`, jamais `widget.files`).
+
+**Ce qui était cassé, et qui l'est encore ?** Un seul défaut trouvé, et il était à moi : le
+retour SUCCÈS du module ne portait pas `definitionAutreNiveau` — le cas normal, donc le seul que
+l'utilisateur voit. Corrigé (`f61d136`).
+
+**La vraie leçon** : les 27 bancs vidéo n'éprouvaient que des FONCTIONS PURES. Un champ oublié
+entre le module et l'écran passait inaperçu. `test/compression_video_bout_en_bout_test.dart`
+monte désormais le trajet complet, les deux canaux natifs simulés.
+
+**Divergence web/mobile connue et assumée** : au niveau HAUT, sur une source déjà en 1080p, le
+transcodeur mobile peut décider de laisser passer la piste telle quelle (la définition visée
+égale celle de la source) et ne produit alors aucun fichier ; la vidéo part intacte. Le web, lui,
+ré-encode à un débit plus bas. Le résultat mobile est plus lourd mais de meilleure qualité, ce
+qui est défendable pour un bouton qui promet « meilleure qualité ». À ne pas « corriger » sans y
+réfléchir.
 Code : `lib/core/compression_video.dart`, `android/app/src/main/kotlin/com/alanya237/work/CompresseurVideo.kt`.
 
 #### A2 — Web : bouton « meilleure qualité » absent pour la vidéo ✅ 16/10 (web `5ac99b5`, mobile `e806354`)
@@ -120,6 +144,31 @@ Code : `src/lib/video-compression.ts` (`configurationAvc`, `fastStart: "in-memor
 
 ### B. Sécurité et identité
 
+#### B0 — Le code de sécurité dans les paramètres d'une discussion ✅ 16/10 (web `26cbd34`, mobile `314e318`)
+**Demande du user** : dans les paramètres d'une discussion, l'entrée « Chiffrement · Vérifier le
+code de sécurité » doit exister sur le web comme sur le mobile, et elle ne doit **rien activer**
+— pas de bouton « activer », pas de mot de passe demandé. Elle montre le code de sécurité (et
+son QR). L'activation du chiffrement vit en **un seul endroit** : les réglages de l'application.
+
+**Web** : l'écran de comparaison existait mais plus rien ne l'ouvrait depuis le retrait du
+bouclier de l'en-tête le 12/10. Il vit maintenant dans le panneau d'infos de la discussion.
+⚠️ Piège rencontré : pour une conversation à deux, `ConvInfo.members` porte une entrée dont
+l'`id` est celui de la CONVERSATION — un code calculé là-dessus ne correspond à personne. D'où
+le champ `pairUserId`, renseigné par les deux constructeurs.
+**Mobile** : la rangée menait à l'activation (mot de passe + création de l'archive) dès que la
+conversation n'était pas encore chiffrée. ⚠️ **La création de l'archive aux deux serrures
+n'existait QUE là** : elle est passée dans l'écran « Sauvegarde chiffrée » des réglages, sans
+quoi le défaut du 26/09/2026 revenait (déconnexion ⇒ tous les messages chiffrés vides).
+**Les deux** : le code se calcule désormais sans attendre un premier message — la session est
+ouverte à la demande (paquet de pré-clés, signature vérifiée). Vérifier AVANT d'écrire est
+précisément l'usage d'un code de sécurité.
+
+**Reste ouvert** : le user a signalé le 16/10, sur l'APK de 10 h, « le téléphone n'a pas pu
+générer la clé de chiffrement ». Ce message venait de la branche `echecDemarrage` de l'ancienne
+activation ; il signale que **cet appareil** n'a pas réussi à préparer ses clés au démarrage.
+La cause reste à trouver (`e2ee_fournisseur.dart:256`) — le message a déménagé avec l'activation,
+le défaut qu'il révèle n'est pas réglé.
+
 #### B1 — Second facteur à la connexion web (OTP) ⬜
 Identifiant + mot de passe est jugé insuffisant. Code à usage unique délivré **dans
 l'application Android**, saisi sur le web. Optionnel pour un particulier (réglage de compte),
@@ -204,6 +253,13 @@ faisabilité, pas de réalisation immédiate.
 
 ## Journal
 
+- **16/10/2026, nuit** — Audit de la chaîne mobile demandé par le user (A1) : un défaut trouvé
+  et corrigé, cinq points vérifiés sains, un banc de bout en bout ajouté. Code de sécurité
+  rendu atteignable sur le web et dépouillé de son activation sur le mobile (B0). Bancs : 487
+  mobiles verts (6 ignorés, pré-existants), `tsc` et `npm run build` verts.
+  ⚠️ `backend-alanya` et `alanya` attendent toujours une poussée manuelle : pas d'identifiant
+  HTTPS sur la machine, `gh` non connecté, et repointer leur `origin` vers SSH est refusé par
+  le classifieur de permissions.
 - **16/10/2026, soir** — Livré : A2 et A3, web (`5ac99b5`, poussé) et mobile (`e806354`, à
   pousser), plus le premier des quatre leviers de A5. Bancs : 27 cas vidéo + la ligne d'envoi +
   la parité des neuf langues, tous verts ; `tsc` et `npm run build` verts côté web.
