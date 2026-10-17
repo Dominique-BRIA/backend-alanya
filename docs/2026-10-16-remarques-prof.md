@@ -92,6 +92,16 @@ de nos sorties ne le dépasse et aucune ne redéclenche la compression. L'invari
 construction et un banc le vérifie palier par palier
 (`test/compression_video_test.dart`, 27 cas, tous verts).
 
+**PLAFOND ABSOLU À 720p depuis le 17/10** (web `9e4837f`, mobile `6796bea`) : le niveau haut
+visait 1080p, le user l'a ramené à 720 — « le 1080 ne doit pas être là ». Si la source est déjà
+sous 720p, le niveau haut ne compresse plus du tout : elle part entière.
+⚠️ **Conséquence assumée** : une source au-dessus de 720p n'a plus de bouton de meilleure
+qualité, puisque les DEUX niveaux rendent exactement 720p. Le bouton apparaît là où il manquait
+vraiment, entre 241 et 720 px, où l'escalier dégradait une vidéo déjà acceptable.
+🔴 **ET C'EST CE QUI A SUPPRIMÉ LA DIVERGENCE WEB/MOBILE** décrite en A1 : plus aucun cas où la
+définition visée égale celle de la source, donc plus de piste laissée passer par le transcodeur
+natif. Le prorata de surface a disparu des deux côtés avec le plafond variable qui le justifiait.
+
 **Reste à trancher par le professeur** : plafond à 480p, oui ou non. Lui présenter le 720p à
 1,2 Mbit/s comme alternative — à 480p le texte d'une vidéo de cours devient illisible.
 Code : `src/lib/video-compression.ts` (web, référence), `lib/core/compression_video.dart` (mobile).
@@ -227,11 +237,52 @@ feuille de route du 11/10 : albums Privé / Famille / Autres, 5 à 10 Go, albums
 Un logiciel sur l'ordinateur, à la manière de Dropbox : les fichiers déposés dans un dossier
 remontent dans le compte et se retrouvent depuis n'importe quelle machine. Dépend de D2.
 
-#### D4 — Limites d'envoi : 250 Mo et fichiers `.apk` 🟨
-**Déjà en place** : plafond de 250 Mo côté mobile (`lib/core/plafond_media.dart:27`).
+#### D4 — Limites d'envoi : 300 Mo et fichiers `.apk` 🟨
+**300 Mo depuis le 17/10** (demande du user), à trois endroits qui doivent rester égaux :
+`MEDIA_MAX_SIZE_MB` (`src/lib/env.ts`, `fec6170`), `TAILLE_MEDIA_MAX_MO` du web (`9e4837f`) et
+`plafondMediaOctets` du mobile (`6796bea`).
+⚠️ **IL RESTE LE RELAIS, ET SANS LUI LE 300 Mo EST UN MENSONGE** : `client_max_body_size` vaut
+1 Mo par défaut chez nginx. Un fichier accepté aux deux écrans revient alors en 413 après
+plusieurs minutes de téléversement. À poser sur le VPS (sauvegarde, `nginx -t`, puis `reload`) :
+
+```nginx
+client_max_body_size 320m;   # 300 Mo + la marge du multipart
+client_body_timeout   120s;
+proxy_request_buffering off;  # on streame au lieu de tamponner 300 Mo sur disque
+proxy_read_timeout    600s;
+proxy_send_timeout    600s;
+send_timeout          600s;
+```
+La voie des morceaux n'envoie qu'un morceau par requête (1 Mio par défaut,
+`ENVOI_TAILLE_MORCEAU_KO`, 8 Mio au plus) : c'est la voie d'un seul bloc —
+statuts, répondeur, fichiers sous 1 Mio — qui a besoin des 320 Mo. Prévoir aussi la place disque
+de `ENVOIS_MORCEAUX_DIR` (`./storage/envois`) : un envoi y vit à sa taille finale, et la
+réservation refuse en 507 s'il reste moins d'1 Gio de marge.
 **À vérifier** : qu'aucun filtre de type ne bloque l'APK dans les deux sélecteurs de fichiers
 (aucun filtre trouvé dans le code, mais la vérification n'a pas été faite à l'usage), et que
 le plafond de 250 Mo est bien appliqué côté web.
+
+#### D5 — L'envoi ne disparaît plus, et il reprend ✅ 17/10 (web `9e4837f`)
+**Signalé par le user** : « quand ça coupe, surtout sur le web, ça disparaît totalement de la
+discussion » — alors que le fichier non envoyé doit rester avec son horloge. Et : « quand la
+connexion revient, ça doit seulement continuer au lieu de recommencer ».
+
+Trois défauts derrière ce seul symptôme, tous côté web :
+1. **une seule panne était reconnue**, le statut 0. Un téléversement long meurt plutôt sur un
+   502/503/504 : le relais s'impatiente avant le serveur et répond lui-même. C'était traité
+   comme un refus définitif → bulle retirée, fichier jeté. Les cinq statuts 408, 429, 502, 503,
+   504 disent « pas cette fois », pas « jamais ». ⚠️ 413 reste définitif, lui — le remettre en
+   file le ferait échouer en boucle, en silence ;
+2. **rien ne réessayait** : les trois signaux de la file (montage, `online`, reconnexion du
+   WebSocket) supposent que le réseau est TOMBÉ, alors qu'un envoi coupé par le relais échoue
+   connexion debout. Une minuterie d'une minute réveille la file tant qu'il y reste quelque
+   chose, et ne touche à rien quand elle est vide ;
+3. **la file renvoyait le fichier entier** par la route d'un seul bloc. Un envoi coupé à 90 %
+   repartait de zéro : à 1 Mbit/s en montée, 300 Mo demandent quarante minutes. Elle passe
+   désormais par `/api/media/envois` et demande au serveur ses `manquants` — **le mobile le
+   faisait déjà** (`lib/features/chat/envoi_morceaux/`), le web était en retard. La réservation
+   (`envoiId`, `envoiJeton`) est rangée dans la file DÈS QU'ELLE EXISTE, avant le premier
+   morceau, et les morceaux déjà reçus comptent dans l'avancement affiché.
 
 ### E. Confort d'usage
 
@@ -253,6 +304,10 @@ faisabilité, pas de réalisation immédiate.
 
 ## Journal
 
+- **17/10/2026** — Plafond vidéo ramené à 720p des deux côtés (A3), ce qui a supprimé la
+  divergence de A1 ; plafond des fichiers porté à 300 Mo dans les trois dépôts (D4) ; envoi web
+  rendu reprenable et persistant (D5). Bancs : 484 mobiles verts, `tsc` et `npm run build`
+  verts. ⚠️ Reste au user : la configuration nginx de D4, sans laquelle le 300 Mo ne tient pas.
 - **16/10/2026, nuit** — Audit de la chaîne mobile demandé par le user (A1) : un défaut trouvé
   et corrigé, cinq points vérifiés sains, un banc de bout en bout ajouté. Code de sécurité
   rendu atteignable sur le web et dépouillé de son activation sur le mobile (B0). Bancs : 487
