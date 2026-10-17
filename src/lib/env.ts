@@ -114,7 +114,7 @@ export const env = {
 
   media: {
     storageDir: optional("MEDIA_STORAGE_DIR", "./storage/media"),
-    maxSizeMb: Number(optional("MEDIA_MAX_SIZE_MB", "250")),
+    maxSizeMb: Number(optional("MEDIA_MAX_SIZE_MB", "300")),
     // Envois en morceaux (voir `src/lib/envoi-morceaux.mjs`) : où le fichier
     // se reconstitue avant d'être rangé, et la taille d'un morceau (Ko, 1024
     // par défaut, bornée entre 256 et 8192).
