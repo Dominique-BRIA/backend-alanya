@@ -95,9 +95,24 @@ construction et un banc le vérifie palier par palier
 **PLAFOND ABSOLU À 720p depuis le 17/10** (web `9e4837f`, mobile `6796bea`) : le niveau haut
 visait 1080p, le user l'a ramené à 720 — « le 1080 ne doit pas être là ». Si la source est déjà
 sous 720p, le niveau haut ne compresse plus du tout : elle part entière.
-⚠️ **Conséquence assumée** : une source au-dessus de 720p n'a plus de bouton de meilleure
-qualité, puisque les DEUX niveaux rendent exactement 720p. Le bouton apparaît là où il manquait
-vraiment, entre 241 et 720 px, où l'escalier dégradait une vidéo déjà acceptable.
+**LES DEUX NIVEAUX, EN UN TABLEAU** (web `1fa5027`, mobile — même règle) :
+
+| Source | Niveau normal (défaut) | Bouton « meilleure qualité » |
+|---|---|---|
+| plus de 720p | 720p à 1,2 Mbit/s | **720p à 2,5 Mbit/s** |
+| 241 à 720p | une marche plus bas (360 ou 240) | **l'original, intact** |
+| 240p ou moins | rien | rien — aucun bouton, aucune flèche |
+| déjà sous 1,45 Mbit/s | rien | rien — aucun bouton, aucune flèche |
+
+🔴 **RIEN N'EST JAMAIS AGRANDI** : sous 720p, le niveau haut ne touche à rien. C'est le sens
+historique du bouton — « envoyer la taille originale » — que le plafond du professeur borne à
+720p sans le remplacer.
+⚠️ **AU-DESSUS DE 720p, C'EST LE DÉBIT QUI DISTINGUE LES DEUX NIVEAUX**, et non la définition :
+2,5 Mbit/s contre 1,2. Sans cela les deux niveaux rendaient le même fichier et le bouton avait
+été caché — ce que le user a refusé le 17/10 : « les deux boutons doivent être toujours là ; le
+seul moment où on ne voit rien, c'est quand l'application ne compresse pas ».
+⚠️ Une vidéo déjà plus légère que 2,5 Mbit/s part intacte même au-dessus de 720p : le plafond
+borne ce que nous PRODUISONS, il n'oblige pas à dégrader un fichier déjà léger.
 🔴 **ET C'EST CE QUI A SUPPRIMÉ LA DIVERGENCE WEB/MOBILE** décrite en A1 : plus aucun cas où la
 définition visée égale celle de la source, donc plus de piste laissée passer par le transcodeur
 natif. Le prorata de surface a disparu des deux côtés avec le plafond variable qui le justifiait.
