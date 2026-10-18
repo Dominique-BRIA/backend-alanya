@@ -150,6 +150,7 @@ model User {
   /// SQL : prisma/manual/2026-10_deux_etapes.sql.
   deuxEtapes Boolean @default(false) @map("deux_etapes")
   defisConnexion DefiConnexion[]
+  consultationsDocuments DocumentConsultation[]
 
   // --- F6 : Exclusion de compte ---
   exclus        Int       @default(0) @db.SmallInt
@@ -636,6 +637,22 @@ model DefiConnexion {
 
   @@index([userId, creeLe(sort: Desc)], map: "defi_connexion_user_idx")
   @@map("defi_connexion")
+}
+
+/// La trace d'une consultation de DOCUMENT SENSIBLE (18/10/2026) : qui, sur
+/// quel appareil, quand. SQL : prisma/manual/2026-10_documents_sensibles.sql.
+model DocumentConsultation {
+  id       String   @id @default(uuid()) @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaId  String   @map("media_id") @db.VarChar(64)
+  convId   String?  @map("conv_id") @db.VarChar(64)
+  appareil String?  @db.VarChar(200)
+  ip       String?  @db.VarChar(64)
+  creeLe   DateTime @default(now()) @map("cree_le") @db.Timestamptz
+
+  @@index([mediaId, creeLe(sort: Desc)], map: "document_consultation_media_idx")
+  @@map("document_consultation")
 }
 
 // Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.
