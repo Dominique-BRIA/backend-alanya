@@ -2,12 +2,15 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { deuxEtapesImposee } from "@/lib/deux-etapes";
 
 const REGLAGES = {
   readReceipts: true,
   lastSeenVisibility: true,
   chiffrementActif: true,
   nomVerrouille: true,
+  deuxEtapes: true,
+  typeCompte: true,
 } as const;
 
 // GET /api/account/privacy — réglages de confidentialité de l'utilisateur.
@@ -27,6 +30,10 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     chiffrementActif: u?.chiffrementActif ?? true,
     // « Personne ne peut me renommer » (18/10/2026) — voir `User.nomVerrouille`.
     nomVerrouille: u?.nomVerrouille ?? false,
+    // Connexion web en deux étapes (18/10/2026) — voir `deux-etapes.ts`.
+    // `deuxEtapesImposee` : agent d'entreprise, l'interrupteur est grisé.
+    deuxEtapes: u ? u.deuxEtapes || deuxEtapesImposee(u) : false,
+    deuxEtapesImposee: u ? deuxEtapesImposee(u) : false,
   });
 });
 
@@ -40,7 +47,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     lastSeenVisibility?: number;
     chiffrementActif?: boolean;
     nomVerrouille?: boolean;
+    deuxEtapes?: boolean;
   } = {};
+
+  // Connexion web en deux étapes : au choix, sauf pour un compte qui l'a
+  // imposée (l'éteindre n'y change rien, voir `deuxEtapesExigee`).
+  if (typeof body?.deuxEtapes === "boolean") {
+    data.deuxEtapes = body.deuxEtapes;
+  }
 
   /*
    * ⚠️ LE COUPER N'OUVRE RIEN DE CE QUI EST DÉJÀ FERMÉ : les conversations
@@ -79,5 +93,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     readReceipts: u.readReceipts,
     lastSeenVisibility: u.lastSeenVisibility,
     nomVerrouille: u.nomVerrouille,
+    deuxEtapes: u.deuxEtapes || deuxEtapesImposee(u),
+    deuxEtapesImposee: deuxEtapesImposee(u),
   });
 });

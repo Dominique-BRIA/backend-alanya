@@ -2,22 +2,11 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { ALANYA_ID_REGEX, loginSchema } from "@/lib/validation";
-import {
-  fermeLesAutresSessions,
-  reactiveAppareil,
-  typeDeviceDeLAppareil,
-} from "@/lib/sessions";
-import {
-  MESSAGE_TELEPHONE_DEJA_ASSOCIE,
-  estUnTelephone,
-  lieOuVerifie,
-} from "@/lib/telephone-lie";
+import { estUnTelephone } from "@/lib/telephone-lie";
 import { verifyPassword } from "@/lib/password";
-import { issueTokenPair } from "@/modules/auth/tokens";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
-import { recordAccess } from "@/lib/user-access";
-import { nomAffichage } from "@/lib/display-name.mjs";
-import { avatarPublicUrl } from "@/lib/avatar";
+import { DUREE_DEFI_MS, deuxEtapesExigee, lancerDefi } from "@/lib/deux-etapes";
+import { terminerConnexion } from "@/modules/auth/terminer-connexion";
 
 // POST /api/auth/login
 // Connexion par email OU par numéro public (6 ou 8 chiffres) + mot de passe.
@@ -55,84 +44,33 @@ export async function POST(req: NextRequest) {
     }
 
     /*
-     * Un compte, un téléphone : un second téléphone est REFUSÉ, le premier
-     * n'est plus déconnecté. Voir `src/lib/telephone-lie.ts`.
+     * 🔴 CONNEXION WEB EN DEUX ÉTAPES (18/10/2026) — voir `src/lib/deux-etapes.ts`.
      *
-     * ⚠️ AVANT tout ce qui suit — présence, journal, éviction, jetons. Un
-     * téléphone refusé ne doit rien laisser derrière lui : ni « en ligne », ni
-     * session fermée chez le téléphone lié.
+     * Le mot de passe est bon, mais pour un navigateur dont le compte l'exige,
+     * AUCUNE SESSION n'est délivrée ici : un code part dans l'application, et
+     * c'est `POST /api/auth/login/code` qui finira la connexion.
+     *
+     * ⚠️ RIEN D'AUTRE NE BOUGE AVANT LE CODE : ni présence, ni journal, ni
+     * éviction des autres sessions. Un mot de passe volé ne doit même pas
+     * pouvoir déconnecter le vrai titulaire de son navigateur.
      */
-    if (estUnTelephone(deviceId, typeDevice)) {
-      /*
-       * Sans identifiant, impossible de savoir si c'est le téléphone lié :
-       * l'accepter laisserait n'importe quel client contourner la règle en
-       * omettant le champ. L'application l'envoie depuis juillet 2026.
-       */
-      if (!deviceId) {
+    if (!estUnTelephone(deviceId, typeDevice) && deuxEtapesExigee(user)) {
+      const defi = await lancerDefi(user.id, req);
+      if (!defi.ok) {
         return fail(
-          "Mettez l'application à jour pour vous connecter",
-          400,
-          "TELEPHONE_NON_IDENTIFIE",
+          "La connexion web de ce compte demande un code envoyé dans l'application Alanya. Installez-la sur votre téléphone et connectez-vous-y d'abord.",
+          409,
+          "DEUX_ETAPES_SANS_APPLICATION",
         );
       }
-      if (!(await lieOuVerifie(user.id, deviceId))) {
-        return fail(MESSAGE_TELEPHONE_DEJA_ASSOCIE, 409, "TELEPHONE_DEJA_ASSOCIE");
-      }
+      return ok({
+        deuxEtapes: true,
+        defiId: defi.defiId,
+        expireDans: DUREE_DEFI_MS / 1000,
+      });
     }
 
-    // F5 : marque l'utilisateur en ligne
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { isOnline: 1, lastSeen: new Date() },
-    });
-
-    // Journal des connexions : trace horodatee, jamais bloquante.
-    await recordAccess(prisma, { userId: user.id, req });
-
-    /*
-     * Session unique par famille d'appareil : au plus un mobile et un poste.
-     *
-     * Côté mobile, l'éviction ne peut plus toucher le téléphone lié : on
-     * n'arrive ici qu'EN ÉTANT lui. Elle ne ferme donc que des restes — une
-     * session d'un autre téléphone ouverte avant la règle du téléphone lié.
-     *
-     * ⚠️ AVANT `issueTokenPair`, jamais après : la révocation touche les jetons
-     * du compte, et le couple qu'on s'apprête à émettre serait emporté avec les
-     * autres. Voir `src/lib/sessions.ts`.
-     */
-    const famille = await typeDeviceDeLAppareil(user.id, deviceId, typeDevice);
-    // `appareil_total` compte le mobile ET le web : 2 = un téléphone et un
-    // navigateur. Réglé par compte depuis la plateforme d'administration, il
-    // n'était lu par aucun code jusqu'ici.
-    const sessionsFermees = await fermeLesAutresSessions(
-      user.id,
-      deviceId,
-      famille,
-      user.appareilTotal,
-    );
-    // Cet appareil vient de prouver son identité : c'est le seul moment où une
-    // révocation précédente peut être levée. Voir `reactiveAppareil`.
-    await reactiveAppareil(user.id, deviceId);
-
-    const tokens = await issueTokenPair(user.id, deviceId);
-    return ok({
-      /*
-       * Les appareils qu'on vient d'évincer. Le client les annonce au serveur
-       * temps réel une fois sa connexion ouverte : l'API Next et `ws-server.mjs`
-       * sont deux process sans canal entre eux, et c'est le client qui fait le
-       * lien — exactement comme pour la déconnexion à distance existante.
-       */
-      sessionsFermees,
-      user: {
-        id: user.id,
-        email: user.email,
-        publicNumber: user.publicNumber,
-        pseudo: nomAffichage(user),
-        avatarUrl: avatarPublicUrl(user.avatarUrl ?? null),
-        isOnline: 1,
-      },
-      ...tokens,
-    });
+    return terminerConnexion(user, req, deviceId, typeDevice);
   } catch (err) {
     return handleError(err);
   }

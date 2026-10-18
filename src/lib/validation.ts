@@ -49,7 +49,7 @@ export const verifySchema = z.object({
  * Facultatif a dessein — un client plus ancien continue de se connecter, sa
  * session ne sera simplement pas revocable individuellement.
  */
-const deviceIdSchema = z.string().trim().min(8).max(255).optional();
+export const deviceIdSchema = z.string().trim().min(8).max(255).optional();
 
 /**
  * Famille de l'appareil qui se connecte — 0 = web, 1 = Android, 2 = iOS,
@@ -60,7 +60,7 @@ const deviceIdSchema = z.string().trim().min(8).max(255).optional();
  * n'évince personne s'il ne sait rien — mieux vaut une session de trop qu'un
  * utilisateur éjecté de son ordinateur parce qu'il a ouvert son téléphone.
  */
-const typeDeviceSchema = z.number().int().min(0).max(9).optional();
+export const typeDeviceSchema = z.number().int().min(0).max(9).optional();
 
 export const setupSchema = z.object({
   // Reste OBLIGATOIRE : le formulaire ne le demande plus, mais il y recopie le

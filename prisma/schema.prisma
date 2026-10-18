@@ -145,6 +145,12 @@ model User {
   /// partout et un nouveau est refusé. SQL : prisma/manual/2026-10_nom_verrouille.sql.
   nomVerrouille Boolean @default(false) @map("nom_verrouille")
 
+  /// Connexion WEB en deux étapes : un code envoyé dans l'application
+  /// (18/10/2026). Imposée aux agents d'entreprise quel que soit ce champ.
+  /// SQL : prisma/manual/2026-10_deux_etapes.sql.
+  deuxEtapes Boolean @default(false) @map("deux_etapes")
+  defisConnexion DefiConnexion[]
+
   // --- F6 : Exclusion de compte ---
   exclus        Int       @default(0) @db.SmallInt
   excludeAt     DateTime? @map("exclude_at") @db.Timestamptz
@@ -611,6 +617,25 @@ model Commentaire {
   @@index([idRapport, created_at], map: "commentaire_idRapport_idx")
   @@index([idBordAgent], map: "commentaire_idBordAgent_idx")
   @@map("commentaire")
+}
+
+/// Un défi de connexion web en deux étapes : le code (son empreinte SHA-256,
+/// jamais le code) envoyé dans l'application. Voir `src/lib/deux-etapes.ts`.
+model DefiConnexion {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  empreinte  String   @db.VarChar(64)
+  /// attente | valide | refuse | epuise (CHECK en base).
+  statut     String   @default("attente") @db.VarChar(12)
+  tentatives Int      @default(0) @db.SmallInt
+  navigateur String?  @db.VarChar(200)
+  ip         String?  @db.VarChar(64)
+  creeLe     DateTime @default(now()) @map("cree_le") @db.Timestamptz
+  expireLe   DateTime @map("expire_le") @db.Timestamptz
+
+  @@index([userId, creeLe(sort: Desc)], map: "defi_connexion_user_idx")
+  @@map("defi_connexion")
 }
 
 // Jetons FCM (Firebase Cloud Messaging) pour notifications push mobile/web.

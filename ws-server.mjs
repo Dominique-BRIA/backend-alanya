@@ -5200,7 +5200,10 @@ const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
 ///
 /// `vue_unique_*` (02/10/2026) : « ouverte » et « effacee », deux sonnettes
 /// d'identifiants pour les messages à vue unique — aucune ne change un message.
-const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique)_[a-z0-9_]+$/;
+///
+/// `connexion_web_*` (18/10/2026) : le code d'une connexion web en deux
+/// étapes, porté à l'application du titulaire — à lui seul (`deux-etapes.ts`).
+const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web)_[a-z0-9_]+$/;
 
 /// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
 /// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines
