@@ -10,15 +10,35 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const { id } = await ctx.params;
   const data = updateContactSchema.parse(await req.json());
 
-  const contact = await prisma.contact.findUnique({ where: { id } });
+  const contact = await prisma.contact.findUnique({
+    where: { id },
+    include: { contact: { select: { nomVerrouille: true } } },
+  });
   if (!contact || contact.userId !== userId) {
     return fail("Contact introuvable", 404, "NOT_FOUND");
+  }
+
+  /*
+   * Le nom donné : une chaîne vide ou `null` l'EFFACE (on revient au nom du
+   * profil). 🐛 Avant, `null` devenait `undefined` : impossible d'effacer.
+   *
+   * 🔴 UN COMPTE QUI REFUSE D'ÊTRE RENOMMÉ (`nomVerrouille`) : on peut effacer,
+   * jamais poser un nom (18/10/2026).
+   */
+  const alias =
+    data.alias === undefined ? undefined : data.alias?.trim() ? data.alias.trim() : null;
+  if (alias && contact.contact.nomVerrouille) {
+    return fail(
+      "Cette personne ne permet pas qu'on lui donne un autre nom",
+      409,
+      "NOM_VERROUILLE",
+    );
   }
 
   const updated = await prisma.contact.update({
     where: { id },
     data: {
-      alias: data.alias ?? undefined,
+      alias,
       isBlocked: data.isBlocked ?? undefined,
     },
   });

@@ -3457,6 +3457,7 @@ async function handleCallRing(ws, msg) {
         callId,
         convId: call.convId,
         callerName,
+        callerId: callerIdAffiche,
         callType: call.type,
       }).catch(() => {});
       return;
@@ -3549,6 +3550,7 @@ async function handleCallRing(ws, msg) {
         callId,
         convId: call.convId,
         callerName,
+        callerId: callerIdAffiche,
         callType: call.type,
         isGroup,
         groupName,
@@ -3975,6 +3977,7 @@ async function handleCallInvite(ws, msg) {
       callId,
       convId: call.convId,
       callerName,
+      callerId: ws.userId,
       callType: call.type,
       isGroup: true,
       groupName,

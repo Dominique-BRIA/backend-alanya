@@ -140,6 +140,11 @@ model User {
   /// l'autre : c'est ce que « pour toute l'application » veut dire.
   chiffrementActif Boolean @default(true) @map("chiffrement_actif")
 
+  /// Les autres ne peuvent pas renommer ce compte dans leur répertoire
+  /// (18/10/2026) : vrai, leurs noms donnés (`Contact.alias`) sont ignorés
+  /// partout et un nouveau est refusé. SQL : prisma/manual/2026-10_nom_verrouille.sql.
+  nomVerrouille Boolean @default(false) @map("nom_verrouille")
+
   // --- F6 : Exclusion de compte ---
   exclus        Int       @default(0) @db.SmallInt
   excludeAt     DateTime? @map("exclude_at") @db.Timestamptz

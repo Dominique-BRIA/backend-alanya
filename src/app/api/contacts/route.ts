@@ -17,6 +17,7 @@ interface ContactWithUser {
     pseudo: string | null;
     avatarUrl: string | null;
     statusMsg: string | null;
+    nomVerrouille: boolean;
   };
 }
 
@@ -43,7 +44,10 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   return ok({
     contacts: contacts.map((c: ContactWithUser) => ({
       id: c.id,
-      alias: c.alias,
+      // Un compte qui refuse d'être renommé : son nom donné est ignoré (il
+      // reste en base, et revient s'il rouvre la possibilité).
+      alias: c.contact.nomVerrouille ? null : c.alias,
+      nomVerrouille: c.contact.nomVerrouille,
       isBlocked: c.isBlocked,
       user: {
         id: c.contact.id,
@@ -88,8 +92,13 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
   });
   if (existing) return fail("Ce contact est déjà dans ton répertoire", 409, "ALREADY_CONTACT");
 
+  // Un compte qui refuse d'être renommé s'enregistre sous son propre nom.
+  const cible = await prisma.user.findUnique({
+    where: { id: targetId },
+    select: { nomVerrouille: true },
+  });
   const created = await prisma.contact.create({
-    data: { userId, contactId: targetId, alias },
+    data: { userId, contactId: targetId, alias: cible?.nomVerrouille ? null : alias },
     include: { contact: true },
   });
 
@@ -97,6 +106,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     {
       id: created.id,
       alias: created.alias,
+      nomVerrouille: created.contact.nomVerrouille,
       isBlocked: created.isBlocked,
       user: {
         id: created.contact.id,

@@ -155,6 +155,32 @@ export async function sendPushToUser(prisma, userId, { title, body, data = {}, d
   }
 }
 
+/**
+ * Le nom que le DESTINATAIRE a donné à [autreId] dans son répertoire, s'il en
+ * a donné un — `null` sinon (18/10/2026).
+ *
+ * 🔴 DEMANDE DU PATRON : « quand tu m'écris, quand tu m'appelles, c'est ce
+ * nom-là qui doit s'afficher ». Une notification se construit ici, souvent
+ * application fermée : c'est donc ici, et pour CHAQUE destinataire, que le
+ * nom donné remplace celui du compte.
+ *
+ * ⚠️ UN COMPTE QUI REFUSE D'ÊTRE RENOMMÉ (`nomVerrouille`) garde son nom.
+ * Ne lève jamais : une erreur rend `null`, donc le nom du compte.
+ */
+async function nomDonnePar(prisma, destinataireId, autreId) {
+  if (!destinataireId || !autreId) return null;
+  try {
+    const c = await prisma.contact.findUnique({
+      where: { userId_contactId: { userId: destinataireId, contactId: autreId } },
+      select: { alias: true, contact: { select: { nomVerrouille: true } } },
+    });
+    const alias = c?.alias?.trim();
+    return alias && !c.contact.nomVerrouille ? alias : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function pushNewMessage(prisma, {
   recipientId,
   senderName,
@@ -169,6 +195,14 @@ export async function pushNewMessage(prisma, {
   messageType,
 }) {
   if (!isPushEnabled()) return;
+
+  // Le nom donné par le destinataire. En tête-à-tête, le titre EST le nom de
+  // l'expéditeur : il change avec lui ; un nom de groupe, lui, reste.
+  const nomDonne = await nomDonnePar(prisma, recipientId, senderId);
+  if (nomDonne) {
+    if (convTitle === senderName) convTitle = nomDonne;
+    senderName = nomDonne;
+  }
 
   const title = convTitle || senderName || "Nouveau message";
   // ⚠️ VIDEO manquait : une vidéo reçue application fermée annonçait
@@ -220,11 +254,15 @@ export async function pushIncomingCall(prisma, {
   callId,
   convId,
   callerName,
+  // L'identité AFFICHÉE de l'appelant (masque d'entreprise compris), pour le
+  // nom que le destinataire lui a donné. Facultatif : absent, rien ne change.
+  callerId,
   callType,
   isGroup,
   groupName,
 }) {
   if (!isPushEnabled()) return;
+  callerName = (await nomDonnePar(prisma, recipientId, callerId)) ?? callerName;
 
   const title = isGroup ? `Appel de groupe · ${groupName || "Groupe"}` : "Appel entrant";
   const body = isGroup
@@ -390,8 +428,9 @@ export async function pushMeetingRequestDecided(prisma, {
  * découvrir dix appels manqués d'un coup en rouvrant l'application. Être
  * injoignable n'est pas la même chose qu'être tenu dans l'ignorance.
  */
-export async function pushCallMissed(prisma, { recipientId, callId, convId, callerName, callType }) {
+export async function pushCallMissed(prisma, { recipientId, callId, convId, callerName, callerId, callType }) {
   if (!isPushEnabled()) return;
+  callerName = (await nomDonnePar(prisma, recipientId, callerId)) ?? callerName;
   const qui = callerName || "Quelqu'un";
   await sendPushToUser(prisma, recipientId, {
     title: qui,

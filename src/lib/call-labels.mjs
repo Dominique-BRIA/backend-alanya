@@ -263,6 +263,9 @@ export function serialiseAppelPour(call, conv, pourUserId) {
     callerId: masque ? masque.id : call.initiatorId,
     isGroup,
     peerName,
+    // Le compte affiché (masque compris) : le client y applique le nom que
+    // l'utilisateur lui a donné dans son répertoire (18/10/2026).
+    peerId: isGroup ? null : (peer?.id ?? null),
     peerNumber: isGroup ? null : (peer?.publicNumber ?? null),
     peerAvatarUrl: isGroup ? null : (peer?.avatarUrl ?? null),
     // Un appel via un standard reste un tête-à-tête pour les deux personnes qui

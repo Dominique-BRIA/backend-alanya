@@ -165,10 +165,14 @@ export async function repertoireDe(
 
   const contacts = await prisma.contact.findMany({
     where: { userId, contactId: { in: cites } },
-    select: { contactId: true, alias: true },
+    select: { contactId: true, alias: true, contact: { select: { nomVerrouille: true } } },
   });
 
-  return new Map(contacts.map((c) => [c.contactId, c.alias] as const));
+  // Un compte qui refuse d'être renommé (18/10/2026) : présent au répertoire,
+  // mais sans nom donné.
+  return new Map(
+    contacts.map((c) => [c.contactId, c.contact.nomVerrouille ? null : c.alias] as const),
+  );
 }
 
 /// Un compte, tel qu'il faut le lire pour en tirer une ligne affichable.
