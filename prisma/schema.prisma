@@ -649,6 +649,10 @@ model DocumentConsultation {
   convId   String?  @map("conv_id") @db.VarChar(64)
   appareil String?  @db.VarChar(200)
   ip       String?  @db.VarChar(64)
+  // CONSULTATION, TELECHARGEMENT, PARTAGE ou TRANSFERT (contrainte en base).
+  action    String   @default("CONSULTATION") @db.VarChar(16)
+  // Le code écrit dans les métadonnées de la copie signée qui est sortie.
+  codeTrace String?  @unique(map: "document_consultation_code_idx") @map("code_trace") @db.VarChar(32)
   creeLe   DateTime @default(now()) @map("cree_le") @db.Timestamptz
 
   @@index([mediaId, creeLe(sort: Desc)], map: "document_consultation_media_idx")
