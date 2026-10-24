@@ -5,7 +5,7 @@ import { ok, fail, handleError } from "@/lib/http";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-context";
 import { assertParticipant } from "@/modules/messaging/access";
-import { apercuMessage } from "@/lib/message-payload.mjs";
+import { apercuMessage, codeTypeDernierMessage } from "@/lib/message-payload.mjs";
 import { MEDIA_ORDONNE } from "@/lib/media-ordre";
 import { refusTransfert } from "@/lib/e2ee-clair.mjs";
 import { ecritureVersOfficiel, MESSAGE_REFUS_OFFICIEL } from "@/lib/compte-officiel.mjs";
@@ -145,12 +145,7 @@ export const POST = withAuth(
             lastMessage: apercuMessage(original.type, original.content)?.slice(0, 500) ?? null,
             lastMessageAt: new Date(),
             lastMessageSenderID: userId,
-            lastMessageType:
-              original.type === "TEXT" ? 0
-              : original.type === "IMAGE" ? 1
-              : original.type === "AUDIO" ? 3
-              : original.type === "VIDEO" ? 4
-              : 2,
+            lastMessageType: codeTypeDernierMessage(original.type),
             lastMessageStatus: 0,
           },
         });

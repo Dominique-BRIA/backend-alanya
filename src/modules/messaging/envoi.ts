@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
-import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
+import { apercuMessage, codeTypeDernierMessage, tronqueContenu } from "@/lib/message-payload.mjs";
 import { stickerPourEnvoi } from "@/lib/sticker-message.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
@@ -536,8 +536,7 @@ export async function creerMessage(params: {
       lastMessage: apercuMessage(type, content)?.slice(0, 500) ?? null,
       lastMessageAt: new Date(),
       lastMessageSenderID: expediteurId,
-      lastMessageType:
-        type === "TEXT" ? 0 : type === "IMAGE" ? 1 : type === "AUDIO" ? 3 : type === "VIDEO" ? 4 : 2,
+      lastMessageType: codeTypeDernierMessage(type),
       lastMessageStatus: 0,
     },
   });

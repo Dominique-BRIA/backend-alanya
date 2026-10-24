@@ -22,6 +22,8 @@ function _typeToString(t: number | null): string {
     case 2: return "FILE";
     case 3: return "AUDIO";
     case 4: return "VIDEO";
+    // Le sticker d'Alanya2026 (`codeTypeDernierMessage`).
+    case 10: return "STICKER";
     default: return "TEXT";
   }
 }

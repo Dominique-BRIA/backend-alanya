@@ -109,6 +109,11 @@ verifier("sticker en clair → 201", envoi.statut === 201 || envoi.statut === 20
 verifier("charge RÉÉCRITE depuis la base (émoji, animé, dimensions)", lu.emoji === emoji && lu.a === 0 && lu.w === 512 && lu.sid === Number(sid) && lu.asset === Number(asset), msg.content);
 const apercu = sql(`select "lastMessage" from conversation where "conversID" = '${convId}'`)[0];
 verifier("l'aperçu de la conversation dit « Sticker »", apercu === `${emoji} Sticker` || apercu === "Sticker", apercu);
+const codeType = sql(`select "lastMessageType" from conversation where "conversID" = '${convId}'`)[0];
+verifier("le type du dernier message vaut 10 (sticker), pas 2 (fichier)", codeType === "10", codeType);
+const liste = (await appel("GET", "/conversations", { jeton: a })).donnees;
+const ligne = (Array.isArray(liste) ? liste : liste.conversations ?? []).find((c) => c.id === convId);
+verifier("la liste des conversations rend le dernier message en STICKER", ligne?.lastMessage?.type === "STICKER", JSON.stringify(ligne?.lastMessage));
 const inconnu = await appel("POST", `/conversations/${convId}/messages`, { jeton: a, corps: { type: "STICKER", content: charge({ sid: 999999 }) } });
 verifier("sticker inconnu → 404 STICKER_NOT_FOUND", inconnu.statut === 404 && (inconnu.donnees.error?.code ?? inconnu.donnees.code) === "STICKER_NOT_FOUND", JSON.stringify(inconnu.donnees));
 const illisible = await appel("POST", `/conversations/${convId}/messages`, { jeton: a, corps: { type: "STICKER", content: "salut" } });

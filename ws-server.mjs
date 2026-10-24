@@ -67,6 +67,7 @@ import {
   apercuMessage,
   tronqueContenu,
   LONGUEUR_MAX_CONTENU,
+  codeTypeDernierMessage,
 } from "./src/lib/message-payload.mjs";
 import { stickerPourEnvoi } from "./src/lib/sticker-message.mjs";
 import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
@@ -1598,7 +1599,7 @@ async function handleSend(ws, msg) {
       lastMessage: apercuMessage(type, content ?? null)?.slice(0, 500) ?? null,
       lastMessageAt: new Date(),
       lastMessageSenderID: ws.userId,
-      lastMessageType: type === "TEXT" ? 0 : type === "IMAGE" ? 1 : type === "AUDIO" ? 3 : type === "VIDEO" ? 4 : 2,
+      lastMessageType: codeTypeDernierMessage(type),
       lastMessageStatus: 0,
     },
   });
@@ -4171,12 +4172,7 @@ async function handleForwardMessage(ws, msg) {
         lastMessage: apercuMessage(original.type, original.content)?.slice(0, 500) ?? null,
         lastMessageAt: new Date(),
         lastMessageSenderID: ws.userId,
-        lastMessageType:
-          original.type === "TEXT" ? 0
-          : original.type === "IMAGE" ? 1
-          : original.type === "AUDIO" ? 3
-          : original.type === "VIDEO" ? 4
-          : 2,
+        lastMessageType: codeTypeDernierMessage(original.type),
         lastMessageStatus: 0,
       },
     });

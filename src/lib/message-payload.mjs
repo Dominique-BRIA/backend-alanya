@@ -268,6 +268,29 @@ export function apercuMessage(type, content, nomFichier = null) {
 }
 
 /**
+ * Le code numérique de `conversation.lastMessageType` (colonne du référentiel
+ * de l'équipe) : 0 texte, 1 image, 3 vocal, 4 vidéo, 10 sticker — la valeur
+ * d'Alanya2026 —, 2 pour tout le reste (fichier, contact, position).
+ *
+ * 🐛 UN STICKER TOMBAIT DANS LE « 2 » DES FICHIERS (24/10/2026) : la liste du
+ * web affichait « [Fichier] 👋 Sticker ». Un seul endroit décide désormais,
+ * pour les quatre qui écrivent la colonne.
+ *
+ * @param {string} type
+ * @returns {number}
+ */
+export function codeTypeDernierMessage(type) {
+  switch (type) {
+    case "TEXT": return 0;
+    case "IMAGE": return 1;
+    case "AUDIO": return 3;
+    case "VIDEO": return 4;
+    case "STICKER": return 10;
+    default: return 2;
+  }
+}
+
+/**
  * Longueur maximale de `message.content`, en caractères.
  *
  * 🔴 C'EST UNE CONTRAINTE DE BASE, pas une préférence : depuis le 25/08/2026 la
