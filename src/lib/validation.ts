@@ -240,7 +240,7 @@ export const sendMessageSchema = z.object({
    * qu'on préfère simplement ne pas dédupliquer.
    */
   tempId: z.string().max(64).optional(),
-  type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO", "CONTACT", "LOCATION"]).default("TEXT"),
+  type: z.enum(["TEXT", "IMAGE", "FILE", "AUDIO", "VIDEO", "CONTACT", "LOCATION", "STICKER"]).default("TEXT"),
   mediaId: z.string().uuid().optional(),
   mediaIds: z.array(z.string().uuid()).max(10).optional(),
   replyToId: z.string().uuid().optional(),
@@ -310,7 +310,7 @@ export const sendMessageSchema = z.object({
   // rendre — et l'erreur n'apparaîtrait que chez le destinataire, longtemps
   // après. Le format est tenu par `src/lib/message-payload.mjs`, seul endroit
   // que les trois clients traversent.
-  message: "Charge invalide : un message CONTACT ou LOCATION doit porter sa charge JSON dans content",
+  message: "Charge invalide : un message CONTACT, LOCATION ou STICKER doit porter sa charge JSON dans content",
   path: ["content"],
 });
 

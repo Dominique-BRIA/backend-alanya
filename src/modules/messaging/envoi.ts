@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { apercuMessage, tronqueContenu } from "@/lib/message-payload.mjs";
+import { stickerPourEnvoi } from "@/lib/sticker-message.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
 import { refusMediaEnClair } from "@/lib/e2ee-clair.mjs";
@@ -39,7 +40,8 @@ export type TypeMessage =
   | "AUDIO"
   | "VIDEO"
   | "CONTACT"
-  | "LOCATION";
+  | "LOCATION"
+  | "STICKER";
 
 export type ResultatEnvoi =
   | { ok: true; message: Awaited<ReturnType<typeof creerLigneMessage>> }
@@ -65,7 +67,10 @@ export type ResultatEnvoi =
         // Groupe chiffré : l'identifiant tiré par l'appareil est déjà pris.
         | "ID_DEJA_PRIS"
         // On ne répond pas au compte officiel (`compte-officiel.mjs`).
-        | "COMPTE_OFFICIEL";
+        | "COMPTE_OFFICIEL"
+        // Sticker en clair refusé (`sticker-message.mjs`) : voir `codeSticker`.
+        | "STICKER_REFUSE";
+      codeSticker?: string;
     };
 
 /** Isolée pour que `ResultatEnvoi` puisse en déduire le type de retour exact. */
@@ -299,7 +304,18 @@ export async function creerMessage(params: {
    */
   const longueur = tronqueContenu(type, params.content ?? null);
   if (longueur.refuse) return { ok: false, motif: "CONTENU_TROP_LONG" };
-  const content = params.vueUnique === true ? null : longueur.contenu;
+  let content = params.vueUnique === true ? null : longueur.contenu;
+
+  /*
+   * Un STICKER EN CLAIR (24/10/2026) : le serveur relit tout en base et
+   * réécrit la charge. Dans un fil chiffré, il n'a pas la charge et ne
+   * contrôle rien — c'est le contrat d'Alanya2026 (`stickerMessage.js`).
+   */
+  if (type === "STICKER" && params.chiffre !== true) {
+    const s = await stickerPourEnvoi(prisma, content);
+    if (!s.ok) return { ok: false, motif: "STICKER_REFUSE", codeSticker: s.code };
+    content = s.contenu;
+  }
 
   /*
    * Blocage. On répond par un refus, jamais par un faux succès : mentir à

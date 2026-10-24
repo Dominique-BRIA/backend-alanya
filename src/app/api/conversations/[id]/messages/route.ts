@@ -481,6 +481,13 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     if (envoi.motif === "COMPTE_OFFICIEL") {
       return fail(MESSAGE_REFUS_OFFICIEL, 403, "COMPTE_OFFICIEL");
     }
+    // Les codes du contrat des stickers d'Alanya2026 (`stickerMessage.js`).
+    if (envoi.motif === "STICKER_REFUSE") {
+      const code = envoi.codeSticker ?? "STICKER_INVALID_PAYLOAD";
+      if (code === "STICKER_NOT_FOUND") return fail("Sticker introuvable", 404, code);
+      if (code === "STICKER_PACK_UNAVAILABLE") return fail("Pack de stickers indisponible", 404, code);
+      return fail("Sticker invalide", 400, code);
+    }
     return fail("Message non distribuable", 403, "BLOCKED");
   }
 

@@ -325,12 +325,22 @@ export async function packsPublies() {
       id: Number(p.id),
       code: p.code,
       nom: p.nom,
+      description: p.description,
       auteur: p.auteur,
       version: p.version,
       couverture: p.couvertureId ? urlFichier(p.stickers.find((s) => s.id === p.couvertureId)?.assetId ?? 0) : null,
       stickers: p.stickers
         .filter((s) => r.valeur.animatedEnabled || !s.asset.anime)
-        .map((s) => ({ id: Number(s.id), emoji: s.emoji, url: urlFichier(s.assetId), anime: s.asset.anime })),
+        // `assetId` (24/10/2026) : c'est lui que porte un message sticker,
+        // et `nom` sert à la recherche et à l'accessibilité.
+        .map((s) => ({
+          id: Number(s.id),
+          assetId: Number(s.assetId),
+          emoji: s.emoji,
+          nom: s.nom,
+          url: urlFichier(s.assetId),
+          anime: s.asset.anime,
+        })),
     })),
   };
 }

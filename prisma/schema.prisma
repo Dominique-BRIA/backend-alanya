@@ -1123,6 +1123,9 @@ enum MessageType {
   CONTACT
   /// Position GPS partagée. Charge JSON dans `content` (même module).
   LOCATION
+  /// Sticker (24/10/2026). Charge JSON dans `content` (même module) ; l'image
+  /// est celle du catalogue, `/api/stickers/fichier/<asset>`.
+  STICKER
 }
 
 enum MessageStatus {
@@ -3829,6 +3832,7 @@ model StickerPack {
   creeLe       DateTime  @default(now()) @map("cree_le") @db.Timestamptz
   modifieLe    DateTime  @default(now()) @map("modifie_le") @db.Timestamptz
   stickers     Sticker[]
+  installations StickerInstallation[]
 
   @@map("sticker_pack")
 }
@@ -3858,8 +3862,38 @@ model Sticker {
   nom      Json         @default("{}") @db.JsonB
   pack     StickerPack  @relation(fields: [packId], references: [id], onDelete: Cascade)
   asset    StickerAsset @relation(fields: [assetId], references: [id])
+  favoris  StickerFavori[]
 
   @@map("sticker")
+}
+
+/// Les packs qu'un compte a dans son panneau de stickers (24/10/2026), comme
+/// les « Mes stickers » de WhatsApp. Une ligne retirée garde `installe =
+/// false` : un compte SANS AUCUNE ligne n'a jamais ouvert ses stickers, et
+/// reçoit à sa première lecture tous les packs publiés (`/api/stickers/me`).
+/// SQL manuel `2026-10_stickers_utilisateur.sql`.
+model StickerInstallation {
+  userId    String      @map("user_id") @db.Uuid
+  packId    BigInt      @map("pack_id")
+  installe  Boolean     @default(true)
+  position  Int         @default(0)
+  modifieLe DateTime    @default(now()) @map("modifie_le") @db.Timestamptz
+  pack      StickerPack @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@id([userId, packId])
+  @@map("sticker_installation")
+}
+
+/// Les stickers favoris d'un compte (l'étoile de WhatsApp), communs à ses
+/// appareils. Même SQL manuel.
+model StickerFavori {
+  userId    String   @map("user_id") @db.Uuid
+  stickerId BigInt   @map("sticker_id")
+  ajouteLe  DateTime @default(now()) @map("ajoute_le") @db.Timestamptz
+  sticker   Sticker  @relation(fields: [stickerId], references: [id], onDelete: Cascade)
+
+  @@id([userId, stickerId])
+  @@map("sticker_favori")
 }
 
 model StickerSignalement {

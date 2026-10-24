@@ -68,6 +68,7 @@ import {
   tronqueContenu,
   LONGUEUR_MAX_CONTENU,
 } from "./src/lib/message-payload.mjs";
+import { stickerPourEnvoi } from "./src/lib/sticker-message.mjs";
 import { rafraichirApercuApresEdition } from "./src/lib/apercu-conversation.mjs";
 import { refusMediaEnClair, refusModification, refusTransfert } from "./src/lib/e2ee-clair.mjs";
 import { refusDelaiModification, refusDelaiSuppression } from "./src/lib/delais-message.mjs";
@@ -1123,6 +1124,16 @@ async function handleSend(ws, msg) {
   if (structure && !chargeValide(type, content ?? null)) {
     ws.send(JSON.stringify({ type: "error", message: "Charge de message invalide", tempId }));
     return;
+  }
+  // Sticker (24/10/2026) : relu en base et réécrit, comme par la route HTTP.
+  // Ce chemin n'écrit qu'en clair : un fil chiffré passe par la route.
+  if (type === "STICKER") {
+    const s = await stickerPourEnvoi(prisma, content ?? null);
+    if (!s.ok) {
+      ws.send(JSON.stringify({ type: "error", message: "Sticker indisponible", code: s.code, tempId }));
+      return;
+    }
+    content = s.contenu;
   }
 
   /**

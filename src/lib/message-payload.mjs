@@ -1,5 +1,5 @@
 /**
- * Charges utiles des messages CONTACT et LOCATION.
+ * Charges utiles des messages CONTACT, LOCATION et STICKER.
  *
  * POURQUOI ICI : trois clients parlent à ce backend (Flutter, React, et
  * l'application de l'équipe). Une règle de format décidée dans un seul d'entre
@@ -26,6 +26,12 @@
  *   LOCATION {"v":1,"location":{"lat":3.848,"lng":11.502,
  *                               "accuracy":12.5,"label":"Douala"}}
  *
+ *   STICKER  {"v":1,"pack":"salutations","sid":12,"asset":40,
+ *             "emoji":"👋","w":512,"h":512,"a":0}
+ *            (24/10/2026, contrat des stickers d'Alanya2026 §1, plus
+ *            `asset` : l'image se lit par `/api/stickers/fichier/<asset>`,
+ *            y compris dans un fil chiffré où le serveur ne voit pas la charge)
+ *
  * `alanyaId` et `avatarUrl` sont facultatifs : un contact du répertoire
  * téléphonique n'a pas de compte Alanya. La PHOTO d'un tel contact ne va JAMAIS
  * dans cette charge — elle est envoyée comme média du message (`media[0]`), la
@@ -38,7 +44,7 @@
  */
 
 /** Types dont la charge vit dans `content` et qui n'exigent aucun média. */
-export const TYPES_STRUCTURES = new Set(["CONTACT", "LOCATION"]);
+export const TYPES_STRUCTURES = new Set(["CONTACT", "LOCATION", "STICKER"]);
 
 /** Version courante de la charge. Un client plus ancien lira `v` et saura. */
 export const VERSION_CHARGE = 1;
@@ -118,6 +124,42 @@ export function litPosition(content) {
   };
 }
 
+const entierPositif = (v) => (Number.isSafeInteger(v) && v > 0 ? v : null);
+
+/**
+ * Sticker porté par un message STICKER, ou `null` si la charge est invalide.
+ *
+ * ⚠️ VERSION INCONNUE = REFUS côté serveur (on ne devine pas la forme d'un
+ * format futur) ; les clients, eux, la tolèrent et affichent « Sticker ».
+ * `w`, `h`, `a` et `emoji` sont informatifs : pour un fil en clair, le serveur
+ * les RÉÉCRIT depuis la base (`sticker-message.mjs`).
+ */
+export function litSticker(content) {
+  if (typeof content !== "string" || content.length > 512) return null;
+  const c = litJson(content);
+  if (c === null || Array.isArray(c) || c.v !== 1) return null;
+  const sid = entierPositif(c.sid);
+  const asset = entierPositif(c.asset);
+  const pack = texteNettoye(c.pack, 60);
+  if (sid === null || asset === null || pack === null) return null;
+  const dim = (v) => (Number.isInteger(v) && v > 0 && v <= 4096 ? v : 512);
+  return {
+    v: 1,
+    pack,
+    sid,
+    asset,
+    emoji: texteNettoye(c.emoji, 16) ?? "",
+    w: dim(c.w),
+    h: dim(c.h),
+    a: c.a === 1 ? 1 : 0,
+  };
+}
+
+/** La forme CANONIQUE d'un sticker : toujours les mêmes clés, dans le même ordre. */
+export function chargeSticker({ pack, sid, asset, emoji, w, h, a }) {
+  return JSON.stringify({ v: 1, pack, sid, asset, emoji: emoji ?? "", w: w ?? 512, h: h ?? 512, a: a === 1 ? 1 : 0 });
+}
+
 /**
  * Vrai si `content` est une charge valide pour ce `type`.
  *
@@ -127,6 +169,7 @@ export function litPosition(content) {
 export function chargeValide(type, content) {
   if (type === "CONTACT") return litContacts(content) !== null;
   if (type === "LOCATION") return litPosition(content) !== null;
+  if (type === "STICKER") return litSticker(content) !== null;
   return true;
 }
 
@@ -155,6 +198,11 @@ export function apercuStructure(type, content) {
     const position = litPosition(content);
     if (position === null) return "📍 Position";
     return position.label !== null ? `📍 ${position.label}` : "📍 Position partagée";
+  }
+  if (type === "STICKER") {
+    // Comme WhatsApp : « Sticker », précédé de son émoji quand il en a un.
+    const s = litSticker(content);
+    return s && s.emoji ? `${s.emoji} Sticker` : "Sticker";
   }
   return null;
 }
@@ -375,6 +423,18 @@ if (process.argv[1] && process.argv[1].endsWith("message-payload.mjs")) {
       avatarUrl: `https://alanyavox.com/api/media/${"0".repeat(40)}${i}`,
     })),
   });
+  // --- STICKER (24/10/2026) -------------------------------------------------
+  const sticker = JSON.stringify({ v: 1, pack: "salutations", sid: 12, asset: 40, emoji: "👋", w: 512, h: 512, a: 0 });
+  verifie("sticker → lu", litSticker(sticker), { v: 1, pack: "salutations", sid: 12, asset: 40, emoji: "👋", w: 512, h: 512, a: 0 });
+  verifie("sticker → libellé avec son émoji", apercuMessage("STICKER", sticker), "👋 Sticker");
+  verifie("sticker sans émoji → « Sticker »", apercuStructure("STICKER", JSON.stringify({ v: 1, pack: "p", sid: 1, asset: 2 })), "Sticker");
+  verifie("sticker, sid texte → refusé", litSticker(JSON.stringify({ v: 1, pack: "p", sid: "1 OR 1=1", asset: 2 })), null);
+  verifie("sticker, sid négatif → refusé", litSticker(JSON.stringify({ v: 1, pack: "p", sid: -5, asset: 2 })), null);
+  verifie("sticker, version 2 → refusé", litSticker(JSON.stringify({ v: 2, pack: "p", sid: 1, asset: 2 })), null);
+  verifie("sticker, sans asset → refusé", chargeValide("STICKER", JSON.stringify({ v: 1, pack: "p", sid: 1 })), false);
+  verifie("sticker, tableau → refusé", litSticker("[1,2]"), null);
+  verifie("sticker canonique → mêmes clés, même ordre", chargeSticker({ pack: "p", sid: 1, asset: 2 }), '{"v":1,"pack":"p","sid":1,"asset":2,"emoji":"","w":512,"h":512,"a":0}');
+
   verifie("charge structurée trop longue → refusée", tronqueContenu("CONTACT", contactEnorme).refuse, true);
   verifie("charge structurée trop longue → rien à écrire", tronqueContenu("CONTACT", contactEnorme).contenu, null);
   // Le témoin doit rester un cas RÉEL : si ce contrôle casse, c'est que la
