@@ -3612,6 +3612,11 @@ model Diffusion {
   traductions  Json             @default("{}") @db.JsonB
   /// Diffusion en statut : langue → id du statut créé pour elle.
   statuts      Json?            @db.JsonB
+  /// Boutons d'une diffusion en message (24/10/2026) : livrés en message à
+  /// part, juste après, comme le bloc « Boutons » de la bienvenue.
+  /// `[{ action, target, libelles }]`, NULL sans bouton. SQL manuel
+  /// `2026-10_diffusion_boutons.sql`.
+  boutons      Json?            @db.JsonB
   envois       DiffusionEnvoi[]
 
   @@map("diffusion")

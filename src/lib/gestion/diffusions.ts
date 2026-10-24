@@ -53,6 +53,12 @@ import { auteurId, type SessionAdmin } from "./session";
  * envoie à ceux qu'on a comptés, pas à ceux d'une autre date.
  */
 
+/// Comme WhatsApp : trois boutons au plus sous une annonce.
+export const BOUTONS_MAX = 3;
+const LIBELLE_BOUTON_MAX = 60;
+/// Les écrans qu'un bouton peut ouvrir — ceux de la bienvenue.
+const ECRANS_BOUTON = ["profile", "statuses", "help"] as const;
+
 const MAX_CONDITIONS = 20;
 const MAX_IDS = 500;
 export const CONTENU_MAX = 4000;
@@ -194,6 +200,11 @@ export function presenterDiffusion(d: LigneDiffusion, nomExpediteur: string | nu
     content: d.contenu,
     contentEn: (d.traductions as Traductions)?.en ?? null,
     translations: d.traductions,
+    buttons: ((d.boutons as BoutonDiffusion[] | null) ?? []).map((b) => ({
+      action: b.action,
+      target: b.target,
+      labels: b.libelles,
+    })),
     type: d.typeMedia,
     mediaUrl: d.mediaUrl,
     backgroundColor: d.couleur,
@@ -230,7 +241,56 @@ const creationSchema = z.object({
   clientId: z.string().trim().min(8).max(64),
   confirmedEstimate: z.coerce.number().int().nullish(),
   scheduledAt: z.string().datetime({ offset: true }).nullish(),
+  buttons: z
+    .array(
+      z.object({
+        action: z.string().optional(),
+        target: z.string().optional(),
+        labels: z.record(z.unknown()).optional(),
+      }),
+    )
+    .optional(),
 });
+
+/** Un bouton tel qu'il est rangé sur la diffusion. */
+export type BoutonDiffusion = { action: "url" | "route"; target: string; libelles: Traductions };
+
+/**
+ * Les boutons d'une diffusion (24/10/2026). Refusés plutôt qu'écartés en
+ * silence : une annonce part et ne se rattrape pas, l'admin doit savoir
+ * qu'un bouton n'arrivera pas.
+ */
+function lireBoutons(brut: z.infer<typeof creationSchema>["buttons"], kind: number): BoutonDiffusion[] | null {
+  const liste = brut ?? [];
+  if (!liste.length) return null;
+  if (kind === 1) throw new ErreurAdmin(400, "Un statut ne porte pas de bouton", "BUTTONS_NOT_ALLOWED");
+  if (liste.length > BOUTONS_MAX) {
+    throw new ErreurAdmin(400, `${BOUTONS_MAX} boutons au plus`, "TOO_MANY_BUTTONS");
+  }
+  return liste.map((b, i) => {
+    const n = i + 1;
+    const action = b.action === "url" ? "url" : "route";
+    const target = (b.target ?? "").trim();
+    if (action === "url") {
+      let ok = false;
+      try {
+        const u = new URL(target);
+        ok = u.protocol === "https:" || u.protocol === "http:";
+      } catch {}
+      if (!ok) throw new ErreurAdmin(400, `Bouton ${n} : lien http(s) attendu`, "INVALID_BUTTON");
+    } else if (!(ECRANS_BOUTON as readonly string[]).includes(target)) {
+      throw new ErreurAdmin(400, `Bouton ${n} : écran inconnu`, "INVALID_BUTTON");
+    }
+    const libelles = nettoyerTraductions(b.labels, LIBELLE_BOUTON_MAX + 1);
+    if (LANGUES_CONTENU.some((l) => (libelles[l]?.length ?? 0) > LIBELLE_BOUTON_MAX)) {
+      throw new ErreurAdmin(400, `Bouton ${n} : ${LIBELLE_BOUTON_MAX} caractères au plus`, "INVALID_BUTTON");
+    }
+    if (languesManquantes(libelles).length > 0) {
+      throw new ErreurAdmin(400, `Bouton ${n} : libellé requis en français et en anglais`, "TRANSLATION_MISSING");
+    }
+    return { action, target, libelles };
+  });
+}
 
 export async function creerDiffusion(brut: unknown, session: SessionAdmin) {
   const corps = creationSchema.safeParse(brut);
@@ -267,6 +327,7 @@ export async function creerDiffusion(brut: unknown, session: SessionAdmin) {
     couleur = c.backgroundColor.trim().toUpperCase();
   }
   const contenu = traductions.fr ?? "";
+  const boutons = lireBoutons(c.buttons, kind);
 
   let planifieeA = new Date();
   if (c.scheduledAt) {
@@ -300,6 +361,7 @@ export async function creerDiffusion(brut: unknown, session: SessionAdmin) {
         mediaUrl: typeMedia === 0 ? null : mediaUrl,
         couleur,
         traductions: traductions as Prisma.InputJsonValue,
+        ...(boutons ? { boutons: boutons as Prisma.InputJsonValue } : {}),
       },
     });
   } catch (e) {
@@ -371,6 +433,22 @@ async function messageDeDiffusion(d: LigneDiffusion, langue: string | null, conv
 }
 
 /**
+ * Les BOUTONS d'une diffusion (24/10/2026), dans la langue du destinataire :
+ * un message à part, juste après — exactement comme le bloc « Boutons » de la
+ * bienvenue (`messageDuBloc`). Son texte (« Libellé : lien ») est ce que lit
+ * un client qui ignore les boutons ; les clients à jour dessinent les boutons.
+ * `null` sans bouton.
+ */
+async function messageBoutonsDeDiffusion(d: LigneDiffusion, langue: string | null, convId: string) {
+  const boutons = ((d.boutons as BoutonDiffusion[] | null) ?? [])
+    .map((b) => ({ label: texteDans(b.libelles ?? {}, langue), action: b.action, target: b.target }))
+    .filter((x): x is { label: string; action: "url" | "route"; target: string } => !!x.label && !!x.target);
+  if (!boutons.length) return null;
+  const texte = boutons.map((x) => (x.action === "url" ? `${x.label} : ${x.target}` : x.label)).join("\n");
+  return creerMessage({ convId, expediteurId: d.expediteurId, type: "TEXT", content: texte, boutons });
+}
+
+/**
  * Diffusion en statut : un statut de 24 h du compte officiel PAR LANGUE
  * rédigée (`statut.text` n'a qu'une langue), créé au début de l'envoi. Rend
  * la table langue → statut, enregistrée sur la diffusion pour la reprise.
@@ -404,7 +482,7 @@ function statutPour(statuts: Record<string, string>, langue: string | null): str
   return texteDans(statuts as Traductions, langue) ?? Object.values(statuts)[0] ?? null;
 }
 
-/** Écrit à UN destinataire, après avoir réservé sa ligne. Rend l'id du message, ou null. */
+/** Écrit à UN destinataire, après avoir réservé sa ligne. Rend les ids des messages à livrer (aucun si rien n'est parti). */
 async function ecrireA(d: LigneDiffusion, userId: string, langue: string | null, statuts: Record<string, string> | null) {
   try {
     // La réservation : si la ligne existe déjà, ce compte est servi (ou en cours).
@@ -412,7 +490,7 @@ async function ecrireA(d: LigneDiffusion, userId: string, langue: string | null,
       data: { diffusionId: d.id, userId, statut: "echec", motif: "EN_COURS" },
     });
   } catch {
-    return null;
+    return [];
   }
   try {
     if (statuts) {
@@ -423,7 +501,7 @@ async function ecrireA(d: LigneDiffusion, userId: string, langue: string | null,
         where: { diffusionId_userId: { diffusionId: d.id, userId } },
         data: statutId ? { statut: "envoye", motif: null } : { statut: "refuse", motif: "STATUT_ABSENT" },
       });
-      return null;
+      return [];
     }
     const conv = await findOrCreateDirectConversation(d.expediteurId, userId);
     const r = await messageDeDiffusion(d, langue, conv.id);
@@ -433,7 +511,17 @@ async function ecrireA(d: LigneDiffusion, userId: string, langue: string | null,
         ? { statut: "envoye", motif: null, convId: conv.id, messageId: r.message.id }
         : { statut: "refuse", motif: r.motif, convId: conv.id },
     });
-    return r.ok ? r.message.id : null;
+    if (!r.ok) return [];
+    // Les boutons ne partent qu'avec le message : un échec ici n'annule pas
+    // ce qui est déjà arrivé, il se lit dans les journaux.
+    const ids = [r.message.id];
+    try {
+      const b = await messageBoutonsDeDiffusion(d, langue, conv.id);
+      if (b?.ok) ids.push(b.message.id);
+    } catch (e) {
+      console.error("[diffusions] boutons non envoyés", d.id, userId, e);
+    }
+    return ids;
   } catch (e) {
     await prisma.diffusionEnvoi
       .update({
@@ -441,7 +529,7 @@ async function ecrireA(d: LigneDiffusion, userId: string, langue: string | null,
         data: { statut: "echec", motif: String((e as Error)?.message ?? e).slice(0, 60) },
       })
       .catch(() => {});
-    return null;
+    return [];
   }
 }
 
@@ -471,8 +559,7 @@ async function traiterDiffusion(id: bigint) {
   const statuts = d.kind === 1 ? await statutsDeDiffusion(d) : null;
   for (const { id: userId, langue } of cibles) {
     if (deja.has(userId)) continue;
-    const messageId = await ecrireA(d, userId, langue, statuts);
-    if (messageId) aLivrer.push(messageId);
+    aLivrer.push(...(await ecrireA(d, userId, langue, statuts)));
     if (++depuisPoint >= 25) {
       depuisPoint = 0;
       await point();

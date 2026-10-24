@@ -77,7 +77,53 @@ const statut = await appel("POST", "/admin/broadcasts", {
 });
 verifier("diffusion en statut créée", statut.statut === 200 || statut.statut === 201, JSON.stringify(statut.donnees).slice(0, 200));
 
+// 3. Boutons (24/10/2026) : les refus d'abord, puis une annonce texte à deux
+//    boutons, un lien et un écran, en trois langues.
+const lien = { action: "url", target: "https://alanyavox.com", labels: { fr: "Découvrir", en: "Discover", zh: "了解" } };
+const ecran = { action: "route", target: "profile", labels: { fr: "Mon profil", en: "My profile", zh: "我的资料" } };
+const annonce = (boutons, suffixe, extra = {}) =>
+  appel("POST", "/admin/broadcasts", {
+    jeton: j,
+    corps: {
+      content: "Annonce", contentEn: "Announcement", translations: { zh: "公告" },
+      type: 0, criteria, clientId: `banc-${Date.now()}-${suffixe}`, confirmedEstimate: 3, buttons: boutons, ...extra,
+    },
+  });
+for (const [nom, boutons, code, extra] of [
+  ["un statut ne porte pas de bouton", [lien], "BUTTONS_NOT_ALLOWED", { kind: 1 }],
+  ["quatre boutons", [lien, ecran, lien, ecran], "TOO_MANY_BUTTONS"],
+  ["un lien javascript:", [{ ...lien, target: "javascript:alert(1)" }], "INVALID_BUTTON"],
+  ["un écran inconnu", [{ ...ecran, target: "admin" }], "INVALID_BUTTON"],
+  ["un libellé sans l'anglais", [{ ...lien, labels: { fr: "Découvrir" } }], "TRANSLATION_MISSING"],
+]) {
+  const r = await annonce(boutons, `refus-${code}-${Math.random()}`, extra);
+  verifier(`boutons — ${nom} → 400 ${code}`, r.statut === 400 && r.donnees.code === code, JSON.stringify(r.donnees));
+}
+// Les messages de cette annonce se reconnaissent à leur heure : la ligne de
+// commande de psql, sous Windows, ne passe pas les accents d'un filtre.
+const depuisBoutons = sql("select now()")[0];
+const avecBoutons = await annonce([lien, ecran], "d");
+verifier("diffusion à boutons créée", avecBoutons.statut === 200 || avecBoutons.statut === 201, JSON.stringify(avecBoutons.donnees).slice(0, 200));
+
 await attendre(10000);
+
+for (const [langue, texte, l1, l2] of [["fr", "Annonce", "Découvrir", "Mon profil"], ["zh", "公告", "了解", "我的资料"], ["es", "Announcement", "Discover", "My profile"]]) {
+  const fil = sql(`
+    select replace(coalesce(m.content, ''), chr(10), ' / ') || '|' || coalesce(m.boutons::text, '')
+      from message m join users u on u.email = 'langue-${langue}@banc-gestion.test'
+     where m."conversationID" in (select "conversID" from conv_participants where "alanyaID" = u."alanyaID")
+       and m.type = 'TEXT' and m."sendAt" >= '${depuisBoutons}'
+     order by m."sendAt", m.boutons nulls first`);
+  verifier(`${langue} : le texte arrive, puis ses boutons`, fil.length === 2 && fil[0] === `${texte}|`, JSON.stringify(fil));
+  const boutons = fil[1] ? JSON.parse(fil[1].split("|").slice(1).join("|")) : [];
+  verifier(
+    `${langue} : boutons dans sa langue (lien puis écran)`,
+    boutons.length === 2 &&
+      boutons[0].label === l1 && boutons[0].action === "url" && boutons[0].target === "https://alanyavox.com" &&
+      boutons[1].label === l2 && boutons[1].action === "route" && boutons[1].target === "profile",
+    JSON.stringify(boutons),
+  );
+}
 
 for (const [langue, legende, texteStatut] of [["fr", "Nouveauté", "Maintenance ce soir"], ["zh", "新功能", "今晚维护"], ["es", "What's new", "Maintenance tonight"]]) {
   const messages = sql(`
