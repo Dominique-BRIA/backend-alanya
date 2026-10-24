@@ -9,5 +9,6 @@ import { enMaintenance } from "@/lib/maintenance";
  * pendant la maintenance, celle-ci jamais.
  */
 export async function GET() {
-  return ok({ maintenance: await enMaintenance() });
+  // Toujours la base : c'est d'ici que l'écran d'attente apprend la levée.
+  return ok({ maintenance: await enMaintenance({ frais: true }) });
 }

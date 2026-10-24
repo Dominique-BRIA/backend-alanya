@@ -13,16 +13,19 @@ import { HttpError } from "@/lib/http";
  * transforment en écran d'attente. La console (`/api/admin/*`, `routeAdmin`)
  * et les fichiers publics restent servis : c'est elle qui lève la maintenance.
  *
- * Le réglage est relu au plus toutes les 10 s par processus : basculer ne
- * coûte pas une lecture de base à chaque requête.
+ * Le réglage est relu au plus toutes les 10 s : basculer ne coûte pas une
+ * lecture de base à chaque requête. ⚠️ Sous Next.js, chaque route peut avoir
+ * SA copie de ce module (et de ce cache) : une bascule prend donc jusqu'à
+ * 10 s pour atteindre toutes les routes. `GET /api/maintenance`, qu'interroge
+ * l'écran d'attente, lit la base à chaque fois (`{ frais: true }`).
  */
 export const CLE_REGLAGES_PLATEFORME = "plateforme.reglages";
 const DUREE_CACHE_MS = 10_000;
 
 let cache: { maintenance: boolean; lu: number } | null = null;
 
-export async function enMaintenance(): Promise<boolean> {
-  if (cache && Date.now() - cache.lu < DUREE_CACHE_MS) return cache.maintenance;
+export async function enMaintenance(options: { frais?: boolean } = {}): Promise<boolean> {
+  if (!options.frais && cache && Date.now() - cache.lu < DUREE_CACHE_MS) return cache.maintenance;
   let maintenance = false;
   try {
     const r = await prisma.gestionReglage.findUnique({ where: { cle: CLE_REGLAGES_PLATEFORME } });
@@ -35,7 +38,7 @@ export async function enMaintenance(): Promise<boolean> {
   return maintenance;
 }
 
-/** Après une bascule depuis la console : effet immédiat dans ce processus. */
+/** Après une bascule depuis la console : effet immédiat pour la route qui l'a reçue. */
 export function oublierMaintenance() {
   cache = null;
 }
