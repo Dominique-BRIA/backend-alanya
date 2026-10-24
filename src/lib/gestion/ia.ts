@@ -41,16 +41,34 @@ async function demander<T>(consigne: string, contenu: string): Promise<T> {
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: consigne }] },
         contents: [{ role: "user", parts: [{ text: contenu }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 2048, responseMimeType: "application/json" },
+        /*
+         * 🐛 « RÉPONSE ILLISIBLE » (signalé le 24/10/2026) : gemini-2.5-flash
+         * RÉFLÉCHIT avant de répondre, et sa réflexion se paie sur la même
+         * limite. Mesuré : 1 840 jetons de réflexion sur 2 048 pour traduire la
+         * bienvenue en deux langues — le JSON s'arrêtait au milieu
+         * (`MAX_TOKENS`). Traduire ne demande pas de réflexion : on la coupe
+         * (`thinkingBudget: 0`, aussi plus rapide), et la limite est relevée.
+         */
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 8192,
+          responseMimeType: "application/json",
+          thinkingConfig: { thinkingBudget: 0 },
+        },
       }),
       signal: AbortSignal.timeout(30_000),
     },
   ).catch(() => null);
   if (!reponse?.ok) throw new ErreurAdmin(502, "L'assistance n'a pas répondu, réessayez", "AI_UNAVAILABLE");
   const json = (await reponse.json().catch(() => null)) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    candidates?: { finishReason?: string; content?: { parts?: { text?: string; thought?: boolean }[] } }[];
   } | null;
-  const texte = json?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  const candidat = json?.candidates?.[0];
+  // Les fragments de réflexion éventuels ne font pas partie de la réponse.
+  const texte = candidat?.content?.parts?.filter((p) => !p.thought).map((p) => p.text ?? "").join("") ?? "";
+  if (candidat?.finishReason === "MAX_TOKENS") {
+    throw new ErreurAdmin(502, "Texte trop long pour l'assistance : traduisez-le en plusieurs blocs", "AI_TOO_LONG");
+  }
   try {
     return JSON.parse(texte) as T;
   } catch {
