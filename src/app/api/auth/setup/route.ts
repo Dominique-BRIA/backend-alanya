@@ -2,7 +2,7 @@ import { after, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { envoyerBienvenue } from "@/lib/gestion/bienvenue";
 import { invaliderProfil } from "@/lib/cache-redis.mjs";
-import { ok, fail, handleError } from "@/lib/http";
+import { ok, fail, handleError, estViolationUnicite } from "@/lib/http";
 import { setupSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { hashPassword } from "@/lib/password";
@@ -11,6 +11,8 @@ import { issueTokenPair } from "@/modules/auth/tokens";
 import { recordAccess } from "@/lib/user-access";
 import { normaliserTelephone } from "@/lib/telephone.mjs";
 import { estUnTelephone, lieOuVerifie } from "@/lib/telephone-lie";
+
+const MOBILE_PRIS = "Ce numéro est déjà utilisé par un autre compte";
 
 // POST /api/auth/setup
 // Étape finale d'inscription : choix du pseudo + mot de passe + pays.
@@ -84,20 +86,42 @@ export async function POST(req: NextRequest) {
      */
     const mobileNormalise = mobile ? normaliserTelephone(mobile, prefixePays) : null;
 
+    /*
+     * ⚠️ LE NUMÉRO EST UNIQUE, LE NOM NON. Sans ce contrôle, un numéro déjà
+     * porté par un autre compte faisait échouer l'écriture sur la contrainte,
+     * et l'utilisateur lisait le message brut de Prisma (« Unique constraint
+     * failed on the fields: (`mobile`) », capture du 24/10/2026). Même réponse
+     * que `POST /api/account/mobile`.
+     */
+    if (mobileNormalise) {
+      const prise = await prisma.user.findFirst({
+        where: { mobile: mobileNormalise, NOT: { id: user.id } },
+        select: { id: true },
+      });
+      if (prise) return fail(MOBILE_PRIS, 409, "MOBILE_TAKEN");
+    }
+
     const passwordHash = await hashPassword(password);
 
     // F4 : on écrit directement dans users (plus de table profiles)
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        passwordHash,
-        pseudo,
-        nom: nom ?? null,
-        mobile: mobileNormalise,
-        idPays: idPays ?? null,
-        typeCompte: 0,
-      },
-    });
+    try {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          pseudo,
+          nom: nom ?? null,
+          mobile: mobileNormalise,
+          idPays: idPays ?? null,
+          typeCompte: 0,
+        },
+      });
+    } catch (err) {
+      // Deux inscriptions simultanées avec le même numéro : le contrôle
+      // ci-dessus est passé pour les deux, la contrainte départage.
+      if (estViolationUnicite(err)) return fail(MOBILE_PRIS, 409, "MOBILE_TAKEN");
+      throw err;
+    }
 
     // Le compte existait déjà (créé à la vérification) : son profil a pu être
     // lu, donc mis en cache, avant que ce nom-ci ne soit posé.
