@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { requireUser, UnauthorizedError } from "@/lib/auth-context";
@@ -15,6 +16,7 @@ import {
 // GET /api/me — profil de l'utilisateur authentifié.
 export async function GET(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const { sub } = requireUser(req);
     const user = await prisma.user.findUnique({ where: { id: sub } });
     if (!user) return fail("Utilisateur introuvable", 404);

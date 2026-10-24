@@ -1,3 +1,4 @@
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { after, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { envoyerBienvenue } from "@/lib/gestion/bienvenue";
@@ -20,6 +21,7 @@ const MOBILE_PRIS = "Ce numéro est déjà utilisé par un autre compte";
 // Étape finale d'inscription : choix du pseudo + mot de passe + pays.
 export async function POST(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const header = req.headers.get("authorization");
     if (!header?.startsWith("Bearer ")) return fail("setupToken manquant", 401, "NO_TOKEN");
     const token = header.slice("Bearer ".length).trim();

@@ -1,3 +1,4 @@
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { type NextRequest } from "next/server";
 import { verifyAccessToken, type TokenPayload } from "./jwt";
 import { fail, handleError } from "./http";
@@ -34,6 +35,8 @@ export function withAuth(
 ) {
   return async (req: NextRequest, ctx: { params: Promise<Record<string, string>> }) => {
     try {
+      // Pendant une maintenance, l'application est refusée (voir `maintenance.ts`).
+      await refuserSiMaintenance();
       const { sub } = requireUser(req);
       return await handler(req, sub, ctx);
     } catch (err) {

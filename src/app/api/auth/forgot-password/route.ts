@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { emailSchema } from "@/lib/validation";
@@ -10,6 +11,7 @@ import { rateLimit, clientIp } from "@/lib/rate-limit";
 // Déclenche l'envoi d'un code OTP si l'email existe.
 export async function POST(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const rl = await rateLimit(`forgot:${clientIp(req)}`, 5, 60_000); // 5 req/min
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 

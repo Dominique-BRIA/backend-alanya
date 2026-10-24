@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { z } from "zod";
@@ -168,6 +169,7 @@ const FENETRE_ID_RECUPERATION_MS = 15 * 60_000;
 // Vérifie le code OTP de réinitialisation et met à jour le mot de passe.
 export async function POST(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const rl = await rateLimit(`reset:${clientIp(req)}`, 10, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 

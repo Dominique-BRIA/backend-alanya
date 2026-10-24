@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { ok, fail, handleError } from "@/lib/http";
 import { refreshSchema } from "@/lib/validation";
 import {
@@ -14,6 +15,7 @@ import {
 // Échange un refresh token valide contre un nouveau couple access/refresh (avec rotation).
 export async function POST(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const { refreshToken } = refreshSchema.parse(await req.json());
     try {
       const tokens = await rotateRefreshToken(refreshToken);

@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { verifySchema } from "@/lib/validation";
@@ -14,6 +15,7 @@ const MAX_ATTEMPTS = 5;
 // numéro public à 6 chiffres et renvoie un « setupToken » pour l'étape pseudo + mot de passe.
 export async function POST(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const rl = await rateLimit(`verify:${clientIp(req)}`, 10, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 

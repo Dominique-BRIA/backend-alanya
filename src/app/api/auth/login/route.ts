@@ -1,4 +1,5 @@
 import { type NextRequest } from "next/server";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { prisma } from "@/lib/prisma";
 import { ok, fail, handleError } from "@/lib/http";
 import { ALANYA_ID_REGEX, loginSchema } from "@/lib/validation";
@@ -12,6 +13,7 @@ import { terminerConnexion } from "@/modules/auth/terminer-connexion";
 // Connexion par email OU par numéro public (6 ou 8 chiffres) + mot de passe.
 export async function POST(req: NextRequest) {
   try {
+    await refuserSiMaintenance();
     const rl = await rateLimit(`login:${clientIp(req)}`, 5, 60_000);
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
