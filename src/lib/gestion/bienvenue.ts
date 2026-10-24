@@ -6,6 +6,8 @@ import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { livrerMessagesOfficiels } from "@/lib/salle-temps-reel";
 import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 import { trouverCompteOfficiel } from "./compte-officiel";
+import { copieDuMedia, mediaDeConsole } from "./medias";
+import { languesManquantes, nettoyerTraductions, texteDans, type Traductions } from "./langues-contenu";
 import { ErreurAdmin } from "./reponses";
 import { auteur, ecrireReglage, lireReglage } from "./outils";
 import { type SessionAdmin } from "./session";
@@ -24,14 +26,37 @@ import { type SessionAdmin } from "./session";
  * processus, ne peuvent pas l'envoyer deux fois. Republier une version ne
  * renvoie rien à ceux qui l'ont déjà reçue.
  *
- * Décisions du user (15/10) : en français seul, des blocs de TEXTE (chacun
- * part comme un message), pas de statut de bienvenue.
+ * 🔁 24/10/2026 : à l'identique d'Alanya2026 — des blocs `text`, `image`,
+ * `video` et `cta` (boutons), rédigés en français, anglais et chinois. Chaque
+ * bloc part comme un message, dans la langue de l'application du destinataire
+ * (repli anglais, puis français : `langues-contenu.ts`).
+ *
+ * ⚠️ LES BOUTONS PARTENT EN TEXTE pour l'instant : nos clients affichent un
+ * type de message inconnu comme du texte brut, et un message « boutons »
+ * montrerait du JSON. Un bloc `cta` est donc envoyé en texte lisible
+ * (« Libellé : lien »), jusqu'à ce que l'application et le web sachent le
+ * dessiner.
  */
 
-const BLOCS_MAX = 5;
+const BLOCS_MAX = 10;
 const TEXTE_MAX = 4000;
+const BOUTONS_MAX = 3;
 
-type Bloc = { ordre: number; type: "text"; texte: string };
+type TypeBloc = "text" | "image" | "video" | "cta";
+type Bouton = { action: "route" | "url"; target: string };
+/// `texte` : forme d'avant le 24/10/2026 (français seul), relue telle quelle.
+type Bloc = {
+  ordre: number;
+  type: TypeBloc;
+  translations?: Traductions;
+  texte?: string;
+  mediaUrl?: string | null;
+  boutons?: Bouton[];
+  libellesBoutons?: Traductions[];
+};
+
+/** Les traductions d'un bloc, y compris d'un bloc enregistré avant les langues. */
+const traductionsDe = (b: Bloc): Traductions => b.translations ?? (b.texte ? { fr: b.texte } : {});
 type Version = Prisma.GestionBienvenueGetPayload<object>;
 
 function presenterVersion(v: Version | null) {
@@ -44,13 +69,32 @@ function presenterVersion(v: Version | null) {
     isDraft: v.etat === "brouillon",
     publishedAt: v.publieLe,
     publishedBy: null,
-    blocks: blocs.map((b, i) => ({
-      id: i + 1,
-      sortOrder: b.ordre,
-      blockType: "text" as const,
-      contentFr: b.texte,
-      translations: { fr: b.texte },
-    })),
+    blocks: blocs.map((b, i) => {
+      const t = traductionsDe(b);
+      const libelles = b.libellesBoutons ?? [];
+      return {
+        id: i + 1,
+        sortOrder: b.ordre,
+        blockType: b.type,
+        contentFr: t.fr ?? "",
+        contentEn: t.en ?? "",
+        translations: t,
+        mediaUrl: b.mediaUrl ?? undefined,
+        ...(b.type === "cta"
+          ? {
+              ctaJson: {
+                buttons: (b.boutons ?? []).map((bt, j) => ({
+                  labelFr: libelles[j]?.fr ?? "",
+                  labelEn: libelles[j]?.en ?? "",
+                  action: bt.action,
+                  target: bt.target,
+                })),
+              },
+              ctaTranslations: libelles,
+            }
+          : {}),
+      };
+    }),
   };
 }
 
@@ -97,27 +141,68 @@ const blocsSchema = z
   .array(
     z.object({
       sortOrder: z.coerce.number().int().optional(),
-      blockType: z.string().optional(),
+      blockType: z.enum(["text", "image", "video", "cta"]).optional(),
       contentFr: z.string().optional(),
-      translations: z.record(z.string()).optional(),
+      contentEn: z.string().optional(),
+      translations: z.record(z.unknown()).optional(),
+      mediaUrl: z.string().max(2000).nullable().optional(),
+      ctaJson: z
+        .object({
+          buttons: z
+            .array(
+              z.object({
+                labelFr: z.string().optional(),
+                labelEn: z.string().optional(),
+                action: z.string().optional(),
+                target: z.string().max(1000).optional(),
+              }),
+            )
+            .max(BOUTONS_MAX),
+        })
+        .nullable()
+        .optional(),
+      ctaTranslations: z.array(z.record(z.unknown())).max(BOUTONS_MAX).optional(),
     }),
   )
   .max(BLOCS_MAX);
 
+/** Un bloc de l'éditeur, dans notre forme. Ne contrôle pas les langues : un brouillon reste enregistrable. */
+function blocDeLEditeur(b: z.infer<typeof blocsSchema>[number], i: number): Bloc {
+  const type: TypeBloc = b.blockType ?? "text";
+  const t = nettoyerTraductions({ fr: b.contentFr, en: b.contentEn, ...(b.translations ?? {}) }, TEXTE_MAX);
+  const bloc: Bloc = { ordre: b.sortOrder ?? i, type, translations: t };
+  if (type === "image" || type === "video") bloc.mediaUrl = b.mediaUrl?.trim() || null;
+  if (type === "cta") {
+    const boutons = b.ctaJson?.buttons ?? [];
+    bloc.boutons = boutons.map((bt) => ({ action: bt.action === "url" ? "url" : "route", target: (bt.target ?? "").trim() }));
+    bloc.libellesBoutons = boutons.map((bt, j) =>
+      nettoyerTraductions({ fr: bt.labelFr, en: bt.labelEn, ...(b.ctaTranslations?.[j] ?? {}) }, 60),
+    );
+    bloc.translations = {};
+  }
+  return bloc;
+}
+
+/** Un bloc utile : du texte, un média, ou au moins un bouton. */
+function blocUtile(b: Bloc): boolean {
+  if (b.type === "image" || b.type === "video") return !!b.mediaUrl;
+  if (b.type === "cta") return (b.boutons ?? []).length > 0;
+  return Object.keys(traductionsDe(b)).length > 0;
+}
+
 export async function enregistrerBrouillon(brut: unknown) {
   const r = blocsSchema.safeParse((brut as { blocks?: unknown })?.blocks);
   if (!r.success) throw new ErreurAdmin(400, `De 1 à ${BLOCS_MAX} blocs`, "VALIDATION");
-  if (r.data.some((b) => b.blockType && b.blockType !== "text")) {
-    throw new ErreurAdmin(400, "Seuls les blocs de texte sont pris en charge", "BLOCK_TYPE_NOT_SUPPORTED");
-  }
   const blocs: Bloc[] = r.data
-    .map((b, i) => ({ ordre: b.sortOrder ?? i, type: "text" as const, texte: (b.translations?.fr ?? b.contentFr ?? "").trim() }))
-    .filter((b) => b.texte)
+    .map(blocDeLEditeur)
+    .filter(blocUtile)
     .sort((a, b) => a.ordre - b.ordre)
     .map((b, i) => ({ ...b, ordre: i }));
   if (blocs.length === 0) throw new ErreurAdmin(400, "Le message est vide", "CONTENT_REQUIRED");
-  if (blocs.some((b) => b.texte.length > TEXTE_MAX)) {
-    throw new ErreurAdmin(400, `Un bloc dépasse ${TEXTE_MAX} caractères`, "CONTENT_TOO_LONG");
+  for (const b of blocs) {
+    if ((b.type === "image" || b.type === "video") && !(await mediaDeConsole(b.mediaUrl))) {
+      throw new ErreurAdmin(400, `Bloc ${b.ordre + 1} : le média doit être envoyé depuis la console`, "MEDIA_NOT_FOUND");
+    }
   }
   const existant = await brouillon();
   if (existant) {
@@ -136,6 +221,23 @@ export async function publier(session: SessionAdmin) {
     // L'éditeur montre la version publiée quand il n'y a pas de brouillon :
     // « Publier » sans rien modifier ne doit pas parler de brouillon absent.
     if (!b) throw new ErreurAdmin(409, "Aucune modification à publier : cette version est déjà en ligne", "NO_DRAFT");
+    // Leur règle : les langues requises (fr, en) sont exigées à la publication
+    // seulement, et seulement là où il y a du texte — une légende vide partout
+    // est permise sur une image ou une vidéo. Les libellés des boutons aussi.
+    const blocs = (b.blocs as Bloc[]) ?? [];
+    const nonTraduits = blocs
+      .filter((x) => x.type !== "cta")
+      .filter((x) => Object.keys(traductionsDe(x)).length > 0 && languesManquantes(traductionsDe(x)).length > 0)
+      .map((x) => x.ordre + 1);
+    if (nonTraduits.length) {
+      throw new ErreurAdmin(400, `Traduction manquante — bloc(s) ${nonTraduits.join(", ")}`, "TRANSLATION_MISSING");
+    }
+    const boutonsNonTraduits = blocs
+      .filter((x) => x.type === "cta" && (x.libellesBoutons ?? []).some((l) => languesManquantes(l).length > 0))
+      .map((x) => x.ordre + 1);
+    if (boutonsNonTraduits.length) {
+      throw new ErreurAdmin(400, `Libellé de bouton non traduit — bloc(s) ${boutonsNonTraduits.join(", ")}`, "TRANSLATION_MISSING");
+    }
     await tx.gestionBienvenue.updateMany({ where: { etat: "publie" }, data: { etat: "archive" } });
     return tx.gestionBienvenue.update({
       where: { id: b.id },
@@ -154,11 +256,11 @@ export async function publier(session: SessionAdmin) {
 export async function envoyerBienvenue(userId: string, livrer = true): Promise<string[]> {
   try {
     const v = await versionPubliee();
-    const blocs = ((v?.blocs as Bloc[]) ?? []).filter((b) => b.texte);
+    const blocs = ((v?.blocs as Bloc[]) ?? []).filter(blocUtile);
     if (!v || blocs.length === 0) return [];
     const officiel = await trouverCompteOfficiel();
     if (!officiel || officiel.id === userId) return [];
-    const u = await prisma.user.findUnique({ where: { id: userId }, select: { isDelete: true, exclus: true, typeCompte: true } });
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { isDelete: true, exclus: true, typeCompte: true, langue: true } });
     if (!u || u.isDelete || u.exclus === 1 || u.typeCompte === TYPE_COMPTE_OFFICIEL) return [];
 
     // La réservation : une clé par compte, l'unicité de la base tranche.
@@ -174,7 +276,8 @@ export async function envoyerBienvenue(userId: string, livrer = true): Promise<s
     const ids: string[] = [];
     let refus: string | null = null;
     for (const b of blocs) {
-      const r = await creerMessage({ convId: conv.id, expediteurId: officiel.id, type: "TEXT", content: b.texte });
+      const r = await messageDuBloc(b, u.langue, conv.id, officiel.id);
+      if (r === null) continue;
       if (r.ok) ids.push(r.message.id);
       else {
         refus = r.motif;
@@ -194,6 +297,32 @@ export async function envoyerBienvenue(userId: string, livrer = true): Promise<s
       .catch(() => {});
     return [];
   }
+}
+
+/**
+ * Écrit le message d'un bloc, dans la langue du destinataire. `null` si le
+ * bloc n'a rien à dire dans cette langue ni dans le repli.
+ */
+async function messageDuBloc(b: Bloc, langue: string | null, convId: string, officielId: string) {
+  const texte = texteDans(traductionsDe(b), langue);
+  if (b.type === "image" || b.type === "video") {
+    const source = await mediaDeConsole(b.mediaUrl);
+    if (!source) return null;
+    const media = await copieDuMedia(source, officielId);
+    return creerMessage({ convId, expediteurId: officielId, type: b.type === "image" ? "IMAGE" : "VIDEO", content: texte, mediaId: media.id });
+  }
+  if (b.type === "cta") {
+    const lignes = (b.boutons ?? [])
+      .map((bt, j) => {
+        const libelle = texteDans(b.libellesBoutons?.[j] ?? {}, langue);
+        return libelle && bt.target ? `${libelle} : ${bt.target}` : null;
+      })
+      .filter((x): x is string => !!x);
+    if (!lignes.length) return null;
+    return creerMessage({ convId, expediteurId: officielId, type: "TEXT", content: lignes.join("\n") });
+  }
+  if (!texte) return null;
+  return creerMessage({ convId, expediteurId: officielId, type: "TEXT", content: texte });
 }
 
 const CLE_RATTRAPAGE = "bienvenue.rattrapage";

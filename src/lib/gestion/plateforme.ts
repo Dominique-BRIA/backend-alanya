@@ -152,7 +152,11 @@ export async function supprimerMedia(id: string) {
     include: { message: { select: { id: true, content: true, _count: { select: { media: true } } } } },
   });
   if (!m) throw new ErreurAdmin(404, "Média introuvable", "MEDIA_NOT_FOUND");
-  await effacerDefinitivement(m.url, m.espace).catch(() => {});
+  // ⚠️ UN FICHIER PEUT ÊTRE PARTAGÉ : chaque message de la bienvenue ou d'une
+  // diffusion a sa ligne, mais toutes désignent le MÊME fichier stocké (voir
+  // `medias.ts`). Tant qu'une autre ligne le désigne, seul ce message le perd.
+  const partage = await prisma.mediaFile.count({ where: { url: m.url, espace: m.espace, NOT: { id } } });
+  if (partage === 0) await effacerDefinitivement(m.url, m.espace).catch(() => {});
   await prisma.mediaFile.delete({ where: { id } });
   if (m.message && m.message._count.media <= 1 && !m.message.content?.trim()) {
     await prisma.message.update({ where: { id: m.message.id }, data: { deletedAt: new Date() } });

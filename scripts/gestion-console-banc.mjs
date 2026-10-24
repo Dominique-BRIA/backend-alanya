@@ -126,9 +126,15 @@ try {
   const vide = await appel("GET", "/api/admin/welcome");
   verifie("état : ni publiée ni brouillon", vide.json?.active === null && vide.json?.draft === null, vide.json);
   const image = await appel("PUT", "/api/admin/welcome/draft", { corps: { blocks: [{ blockType: "image", contentFr: "x" }] } });
-  verifie("bloc image → 400", image.status === 400, image.json);
+  verifie("bloc image sans média → 400", image.status === 400, image.json);
+  // Français ET anglais : les deux langues requises pour publier (24/10/2026).
   const brouillon = await appel("PUT", "/api/admin/welcome/draft", {
-    corps: { blocks: [{ sortOrder: 0, blockType: "text", translations: { fr: "Bienvenue sur Alanya Work !" } }, { sortOrder: 1, blockType: "text", contentFr: "Deuxième bloc" }] },
+    corps: {
+      blocks: [
+        { sortOrder: 0, blockType: "text", translations: { fr: "Bienvenue sur Alanya Work !", en: "Welcome to Alanya Work!" } },
+        { sortOrder: 1, blockType: "text", contentFr: "Deuxième bloc", contentEn: "Second block" },
+      ],
+    },
   });
   verifie("brouillon : 2 blocs, version 1", brouillon.json?.isDraft === true && brouillon.json.blocks.length === 2 && brouillon.json.version === 1, brouillon.json);
   const pub = await appel("POST", "/api/admin/welcome/publish");
