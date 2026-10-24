@@ -155,13 +155,23 @@ export async function livrerStatutBienvenue(userId: string): Promise<string[]> {
   }
 }
 
-/** Les statuts de bienvenue livrés à ce lecteur, non expirés. */
+/**
+ * Les statuts officiels livrés à ce lecteur : sa bienvenue, et les diffusions
+ * en statut qui l'ont touché (`gestion_statut_destinataire`).
+ */
 export async function statutsLivresA(userId: string): Promise<string[]> {
-  const lignes = await prisma.gestionStatutBienvenueLivraison.findMany({ where: { userId }, select: { statutId: true } });
-  return lignes.map((l) => l.statutId);
+  const [bienvenue, diffusions] = await Promise.all([
+    prisma.gestionStatutBienvenueLivraison.findMany({ where: { userId }, select: { statutId: true } }),
+    prisma.gestionStatutDestinataire.findMany({ where: { userId }, select: { statutId: true } }),
+  ]);
+  return [...bienvenue, ...diffusions].map((l) => l.statutId);
 }
 
-/** Ce statut a-t-il été livré à ce lecteur ? (clé de visibilité) */
+/** Ce statut officiel a-t-il été livré à ce lecteur ? (clé de visibilité) */
 export async function statutLivreA(userId: string, statutId: string): Promise<boolean> {
-  return (await prisma.gestionStatutBienvenueLivraison.count({ where: { userId, statutId } })) > 0;
+  const [a, b] = await Promise.all([
+    prisma.gestionStatutBienvenueLivraison.count({ where: { userId, statutId } }),
+    prisma.gestionStatutDestinataire.count({ where: { userId, statutId } }),
+  ]);
+  return a + b > 0;
 }

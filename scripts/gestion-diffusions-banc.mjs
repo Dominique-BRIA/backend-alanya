@@ -9,7 +9,8 @@
  *   ④ reprise : une diffusion remise « en cours » n'écrit pas deux fois ;
  *   ⑤ planification : envoyée par la boucle de fond à l'échéance ;
  *     annulation d'une planifiée, et 404 la seconde fois ;
- *   ⑥ lecture seule : l'estimation passe, la création non.
+ *   ⑥ rôle Admin (1) : il estime et diffuse, comme chez Alanya2026
+ *     (`broadcasts.send` est une permission d'admin).
  *
  * Durée : ~1 min 30 (la boucle de fond tourne toutes les 30 s).
  *
@@ -70,7 +71,6 @@ const messagesOfficiels = (officielId, userId) =>
 
 const T0 = new Date(Date.now() - 1000).toISOString();
 const crees = [];
-let rootLecture = null;
 try {
   const admin = (
     await appel("POST", "/api/admin/auth/login", {
@@ -110,12 +110,13 @@ try {
   verifie("champ inconnu (genre) → 400 INVALID_CRITERIA", mauvais.status === 400 && mauvais.json?.code === "INVALID_CRITERIA", mauvais);
 
   titre("② Refus à la création");
-  const base = { content: "Bonjour depuis le banc", criteria: critP1 };
+  // Français ET anglais : les deux langues requises (24/10/2026, comme chez Alanya2026).
+  const base = { content: "Bonjour depuis le banc", contentEn: "Hello from the bench", criteria: critP1 };
   const media = await appel("POST", "/api/admin/broadcasts", { jeton: admin, corps: { ...base, type: 1, clientId: idClient("m") } });
-  verifie("média → 400 MEDIA_NOT_SUPPORTED", media.json?.code === "MEDIA_NOT_SUPPORTED", media);
-  const statut = await appel("POST", "/api/admin/broadcasts", { jeton: admin, corps: { ...base, isStatus: true, clientId: idClient("s") } });
-  verifie("en statut → 400 STATUS_NOT_SUPPORTED", statut.json?.code === "STATUS_NOT_SUPPORTED", statut);
-  const vide = await appel("POST", "/api/admin/broadcasts", { jeton: admin, corps: { ...base, content: "  ", clientId: idClient("v") } });
+  verifie("image sans média → 400 MEDIA_REQUIRED", media.json?.code === "MEDIA_REQUIRED", media);
+  const sansAnglais = await appel("POST", "/api/admin/broadcasts", { jeton: admin, corps: { ...base, contentEn: undefined, clientId: idClient("s") } });
+  verifie("sans l'anglais → 400 TRANSLATION_MISSING", sansAnglais.json?.code === "TRANSLATION_MISSING", sansAnglais);
+  const vide = await appel("POST", "/api/admin/broadcasts", { jeton: admin, corps: { ...base, content: "  ", contentEn: "  ", clientId: idClient("v") } });
   verifie("texte vide → 400 CONTENT_REQUIRED", vide.json?.code === "CONTENT_REQUIRED", vide);
   const perime = await appel("POST", "/api/admin/broadcasts", {
     jeton: admin,
@@ -146,7 +147,7 @@ try {
   verifie("B n'a rien reçu", (await messagesOfficiels(off.alanyaID, b.id)) === 0);
   verifie("C (autre pays) n'a rien reçu", (await messagesOfficiels(off.alanyaID, c.id)) === 0);
   const enDirect = trames.find((t) => t.type === "message" && t.message?.senderId === off.alanyaID);
-  verifie("A connecté l'a reçu EN DIRECT (trame message)", enDirect?.message?.content === base.content, trames.map((t) => t.type));
+  verifie("A connecté l'a reçu EN DIRECT (trame message)", [base.content, base.contentEn].includes(enDirect?.message?.content), trames.map((t) => t.type));
   const motif = await prisma.diffusionEnvoi.findUnique({
     where: { diffusionId_userId: { diffusionId: BigInt(cree.json.id), userId: b.id } },
   });
@@ -159,6 +160,7 @@ try {
     jeton: admin,
     corps: {
       content: "Diffusion planifiée",
+      contentEn: "Scheduled broadcast",
       criteria: crit({ field: "idPays", op: "eq", value: p2.idPays }),
       scheduledAt: new Date(Date.now() + 3000).toISOString(),
       clientId: idClient("plan"),
@@ -184,16 +186,18 @@ try {
   const ann2 = await appel("DELETE", `/api/admin/broadcasts/scheduled/${loin.json?.id}`, { jeton: admin });
   verifie("seconde annulation → 404 JOB_NOT_FOUND", ann2.status === 404 && ann2.json?.code === "JOB_NOT_FOUND", ann2);
 
-  titre("⑥ Lecture seule");
-  rootLecture = await prisma.root.create({ data: { username: "banc-diff-lecture", password: "lecture-2026", type: 0, actif: 1 } });
-  const lect = (await appel("POST", "/api/admin/auth/login", { corps: { username: "banc-diff-lecture", password: "lecture-2026" } })).json?.accessToken;
-  const est = await appel("POST", "/api/admin/broadcasts/estimate", { jeton: lect, corps: { criteria: critP1 } });
-  verifie("estimation permise → 200", est.status === 200, est);
-  const env = await appel("POST", "/api/admin/broadcasts", { jeton: lect, corps: { ...base, clientId: idClient("l") } });
-  verifie("création refusée → 403 READ_ONLY", env.status === 403 && env.json?.code === "READ_ONLY", env);
+  titre("⑥ Rôle Admin");
+  const adm = (await appel("POST", "/api/admin/auth/login", { corps: { email: "admin@banc-gestion.test", password: "Banc-gestion-2026" } })).json?.accessToken;
+  const est = await appel("POST", "/api/admin/broadcasts/estimate", { jeton: adm, corps: { criteria: critP1 } });
+  verifie("un admin estime → 200", est.status === 200, est);
+  const planAdm = await appel("POST", "/api/admin/broadcasts", {
+    jeton: adm,
+    corps: { ...base, scheduledAt: new Date(Date.now() + 3_600_000).toISOString(), clientId: idClient("adm") },
+  });
+  verifie("un admin planifie une diffusion → 201", planAdm.status === 201, planAdm);
+  await appel("DELETE", `/api/admin/broadcasts/scheduled/${planAdm.json?.id}`, { jeton: adm });
 } finally {
   await prisma.diffusion.deleteMany({ where: { clientId: { startsWith: "banc-diff-" } } }).catch(() => {});
-  if (rootLecture) await prisma.root.delete({ where: { idRoot: rootLecture.idRoot } }).catch(() => {});
   await prisma.blocked.deleteMany({ where: { alanyaID: { in: crees } } }).catch(() => {});
   for (const id of crees) {
     const ids = (await prisma.participant.findMany({ where: { userId: id }, select: { convId: true } })).map((p) => p.convId);

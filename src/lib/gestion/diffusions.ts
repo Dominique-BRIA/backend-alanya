@@ -6,6 +6,8 @@ import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { livrerMessagesOfficiels } from "@/lib/salle-temps-reel";
 import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 import { idCompteOfficielRequis } from "./compte-officiel";
+import { copieDuMedia, mediaDeConsole } from "./medias";
+import { languesManquantes, LANGUES_CONTENU, nettoyerTraductions, texteDans, type Traductions } from "./langues-contenu";
 import { ErreurAdmin } from "./reponses";
 import { auteurId, type SessionAdmin } from "./session";
 
@@ -33,6 +35,14 @@ import { auteurId, type SessionAdmin } from "./session";
  *      refait : mieux vaut un message manquant qu'un message en double.
  *   4. La livraison en direct (trame + push) passe par le pont interne,
  *      par paquets — voir `livrerMessagesOfficiels`.
+ *
+ * ── CE QUI PART (24/10/2026, comme chez Alanya2026) ─────────────────────
+ *
+ * Un texte, une image ou une vidéo légendée, rédigés en français, anglais
+ * (requis) et chinois ; chacun reçoit sa langue (repli anglais, puis
+ * français). `kind` 1 : la diffusion part en STATUT de 24 h du compte
+ * officiel — un statut par langue, et chaque destinataire touché reçoit une
+ * ligne de `gestion_statut_destinataire` vers celui de sa langue.
  *
  * ── LES CRITÈRES ────────────────────────────────────────────────────────
  *
@@ -180,12 +190,13 @@ export function presenterDiffusion(d: LigneDiffusion, nomExpediteur: string | nu
     senderId: d.expediteurId,
     senderName: nomExpediteur,
     createdBy: d.creePar,
-    kind: 0,
+    kind: d.kind,
     content: d.contenu,
-    contentEn: null,
-    type: 0,
-    mediaUrl: null,
-    backgroundColor: null,
+    contentEn: (d.traductions as Traductions)?.en ?? null,
+    translations: d.traductions,
+    type: d.typeMedia,
+    mediaUrl: d.mediaUrl,
+    backgroundColor: d.couleur,
     criteria: d.criteres,
     estimate: d.estimation,
     clientId: d.clientId,
@@ -208,7 +219,9 @@ export function presenterDiffusion(d: LigneDiffusion, nomExpediteur: string | nu
 
 const creationSchema = z.object({
   content: z.string().optional(),
-  translations: z.record(z.string()).optional(),
+  contentEn: z.string().nullish(),
+  translations: z.record(z.unknown()).optional(),
+  backgroundColor: z.string().nullish(),
   type: z.coerce.number().int().optional(),
   kind: z.coerce.number().int().optional(),
   isStatus: z.union([z.boolean(), z.number(), z.string()]).optional(),
@@ -224,18 +237,36 @@ export async function creerDiffusion(brut: unknown, session: SessionAdmin) {
   if (!corps.success) throw new ErreurAdmin(400, "Demande invalide", "VALIDATION");
   const c = corps.data;
 
-  // Décisions du user (15/10) : texte seul, en français, jamais en statut.
-  if ((c.type ?? 0) !== 0 || c.mediaUrl) {
-    throw new ErreurAdmin(400, "Seuls les messages texte sont diffusés pour l'instant", "MEDIA_NOT_SUPPORTED");
+  const kind = c.kind === 1 || c.isStatus === true || c.isStatus === 1 || c.isStatus === "true" ? 1 : 0;
+  const typeMedia = Number(c.type ?? 0);
+  if (![0, 1, 2].includes(typeMedia)) throw new ErreurAdmin(400, "type 0, 1 ou 2", "INVALID_TYPE");
+  // Un statut porte au plus 700 caractères (notre colonne `statut.text`).
+  const max = kind === 1 ? 700 : CONTENU_MAX;
+  const traductions = nettoyerTraductions({ fr: c.content, en: c.contentEn ?? undefined, ...(c.translations ?? {}) }, max + 1);
+  if (LANGUES_CONTENU.some((l) => (traductions[l]?.length ?? 0) > max)) {
+    throw new ErreurAdmin(400, `Le texte dépasse ${max} caractères`, "CONTENT_TOO_LONG");
   }
-  if ((c.kind ?? 0) !== 0 || c.isStatus === true || c.isStatus === 1 || c.isStatus === "true") {
-    throw new ErreurAdmin(400, "Une diffusion ne se publie pas en statut", "STATUS_NOT_SUPPORTED");
+  const mediaUrl = c.mediaUrl?.trim() || null;
+  if (typeMedia !== 0) {
+    if (!mediaUrl) throw new ErreurAdmin(400, "Une diffusion image ou vidéo exige un média", "MEDIA_REQUIRED");
+    if (!(await mediaDeConsole(mediaUrl))) {
+      throw new ErreurAdmin(400, "Le média doit être envoyé depuis la console", "MEDIA_NOT_FOUND");
+    }
   }
-  const contenu = (c.translations?.fr ?? c.content ?? "").trim();
-  if (!contenu) throw new ErreurAdmin(400, "Le texte de la diffusion est requis", "CONTENT_REQUIRED");
-  if (contenu.length > CONTENU_MAX) {
-    throw new ErreurAdmin(400, `Le texte dépasse ${CONTENU_MAX} caractères`, "CONTENT_TOO_LONG");
+  const aDuTexte = Object.keys(traductions).length > 0;
+  if (typeMedia === 0 && !aDuTexte) throw new ErreurAdmin(400, "Le texte de la diffusion est requis", "CONTENT_REQUIRED");
+  // Leur règle : français et anglais requis là où il y a du texte.
+  if (aDuTexte && languesManquantes(traductions).length > 0) {
+    throw new ErreurAdmin(400, "Traduction manquante : le français et l'anglais sont requis", "TRANSLATION_MISSING");
   }
+  let couleur: string | null = null;
+  if (kind === 1 && typeMedia === 0 && c.backgroundColor?.trim()) {
+    if (!/^#[0-9a-f]{6}$/i.test(c.backgroundColor.trim())) {
+      throw new ErreurAdmin(400, "Couleur attendue au format #RRGGBB", "INVALID_COLOR");
+    }
+    couleur = c.backgroundColor.trim().toUpperCase();
+  }
+  const contenu = traductions.fr ?? "";
 
   let planifieeA = new Date();
   if (c.scheduledAt) {
@@ -264,6 +295,11 @@ export async function creerDiffusion(brut: unknown, session: SessionAdmin) {
         criteres: criteria as Prisma.InputJsonValue,
         estimation: count,
         planifieeA,
+        kind,
+        typeMedia,
+        mediaUrl: typeMedia === 0 ? null : mediaUrl,
+        couleur,
+        traductions: traductions as Prisma.InputJsonValue,
       },
     });
   } catch (e) {
@@ -322,8 +358,54 @@ async function recompter(id: bigint) {
   return { envoyes: n("envoye"), refuses: n("refuse"), echecs: n("echec") };
 }
 
+/** Le message d'une diffusion, dans la langue du destinataire. */
+async function messageDeDiffusion(d: LigneDiffusion, langue: string | null, convId: string) {
+  const texte = texteDans((d.traductions as Traductions) ?? { fr: d.contenu }, langue);
+  if (d.typeMedia === 1 || d.typeMedia === 2) {
+    const source = await mediaDeConsole(d.mediaUrl);
+    if (!source) return { ok: false as const, motif: "MEDIA_ETRANGER" as const };
+    const media = await copieDuMedia(source, d.expediteurId);
+    return creerMessage({ convId, expediteurId: d.expediteurId, type: d.typeMedia === 1 ? "IMAGE" : "VIDEO", content: texte, mediaId: media.id });
+  }
+  return creerMessage({ convId, expediteurId: d.expediteurId, type: "TEXT", content: texte ?? d.contenu });
+}
+
+/**
+ * Diffusion en statut : un statut de 24 h du compte officiel PAR LANGUE
+ * rédigée (`statut.text` n'a qu'une langue), créé au début de l'envoi. Rend
+ * la table langue → statut, enregistrée sur la diffusion pour la reprise.
+ */
+async function statutsDeDiffusion(d: LigneDiffusion): Promise<Record<string, string>> {
+  if (d.statuts && typeof d.statuts === "object") return d.statuts as Record<string, string>;
+  const traductions = (d.traductions as Traductions) ?? {};
+  const langues = Object.keys(traductions).length ? (Object.keys(traductions) as (keyof Traductions)[]) : ["fr" as const];
+  const maintenant = new Date();
+  const statuts: Record<string, string> = {};
+  for (const l of langues) {
+    const st = await prisma.status.create({
+      data: {
+        userId: d.expediteurId,
+        type: d.typeMedia === 1 ? "IMAGE" : d.typeMedia === 2 ? "VIDEO" : "TEXT",
+        text: traductions[l] ?? null,
+        mediaUrl: d.typeMedia === 0 ? null : d.mediaUrl,
+        bgColor: d.typeMedia === 0 ? d.couleur ?? "#3F51B5" : null,
+        createdAt: maintenant,
+        expiresAt: new Date(maintenant.getTime() + 24 * 3600 * 1000),
+      },
+    });
+    statuts[l] = st.id;
+  }
+  await prisma.diffusion.update({ where: { id: d.id }, data: { statuts } });
+  return statuts;
+}
+
+/** Le statut de la bonne langue : la sienne, sinon l'anglais, sinon le français. */
+function statutPour(statuts: Record<string, string>, langue: string | null): string | null {
+  return texteDans(statuts as Traductions, langue) ?? Object.values(statuts)[0] ?? null;
+}
+
 /** Écrit à UN destinataire, après avoir réservé sa ligne. Rend l'id du message, ou null. */
-async function ecrireA(d: { id: bigint; expediteurId: string; contenu: string }, userId: string) {
+async function ecrireA(d: LigneDiffusion, userId: string, langue: string | null, statuts: Record<string, string> | null) {
   try {
     // La réservation : si la ligne existe déjà, ce compte est servi (ou en cours).
     await prisma.diffusionEnvoi.create({
@@ -333,8 +415,18 @@ async function ecrireA(d: { id: bigint; expediteurId: string; contenu: string },
     return null;
   }
   try {
+    if (statuts) {
+      // En statut : la ligne de visibilité vers celui de sa langue, pas de message.
+      const statutId = statutPour(statuts, langue);
+      if (statutId) await prisma.gestionStatutDestinataire.create({ data: { statutId, userId } });
+      await prisma.diffusionEnvoi.update({
+        where: { diffusionId_userId: { diffusionId: d.id, userId } },
+        data: statutId ? { statut: "envoye", motif: null } : { statut: "refuse", motif: "STATUT_ABSENT" },
+      });
+      return null;
+    }
     const conv = await findOrCreateDirectConversation(d.expediteurId, userId);
-    const r = await creerMessage({ convId: conv.id, expediteurId: d.expediteurId, type: "TEXT", content: d.contenu });
+    const r = await messageDeDiffusion(d, langue, conv.id);
     await prisma.diffusionEnvoi.update({
       where: { diffusionId_userId: { diffusionId: d.id, userId } },
       data: r.ok
@@ -359,7 +451,7 @@ async function traiterDiffusion(id: bigint) {
 
   const cibles = await prisma.user.findMany({
     where: filtreDepuisCriteres(d.criteres as Criteres),
-    select: { id: true },
+    select: { id: true, langue: true },
     orderBy: { createdAt: "asc" },
   });
   const deja = new Set(
@@ -376,9 +468,10 @@ async function traiterDiffusion(id: bigint) {
     await prolongerVerrou(id);
   };
 
-  for (const { id: userId } of cibles) {
+  const statuts = d.kind === 1 ? await statutsDeDiffusion(d) : null;
+  for (const { id: userId, langue } of cibles) {
     if (deja.has(userId)) continue;
-    const messageId = await ecrireA(d, userId);
+    const messageId = await ecrireA(d, userId, langue, statuts);
     if (messageId) aLivrer.push(messageId);
     if (++depuisPoint >= 25) {
       depuisPoint = 0;

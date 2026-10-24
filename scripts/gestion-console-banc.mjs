@@ -162,7 +162,10 @@ try {
   await pause(3000);
   const recusA2 = await prisma.message.count({ where: { senderId: off.alanyaID, conv: { participants: { some: { userId: a.id } } } } });
   verifie("un second rattrapage ne la renvoie pas", recusA2 === 2, recusA2);
-  verifie("statut de bienvenue : désactivé", (await appel("GET", "/api/admin/welcome/status")).json?.enabled === false);
+  // Réglable depuis le 24/10/2026 (banc dédié : gestion-bienvenue-banc.mjs et
+  // l'essai du fil de statuts) ; ici, seule la forme rendue à la console compte.
+  const statutBienvenue = (await appel("GET", "/api/admin/welcome/status")).json;
+  verifie("statut de bienvenue : forme de la console", typeof statutBienvenue?.enabled === "boolean" && Array.isArray(statutBienvenue?.blocks) && statutBienvenue?.supportsMultiple === true, statutBienvenue);
 
   /* ─────────────── Groupes, médias, réunions ─────────────── */
   titre("Groupes, médias, réunions");

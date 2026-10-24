@@ -3597,6 +3597,16 @@ model Diffusion {
   creeLe       DateTime         @default(now()) @map("cree_le") @db.Timestamptz
   commenceeLe  DateTime?        @map("commencee_le") @db.Timestamptz
   termineeLe   DateTime?        @map("terminee_le") @db.Timestamptz
+  /// 0 message, 1 statut de 24 h (24/10/2026, comme chez Alanya2026).
+  kind         Int              @default(0) @db.SmallInt
+  /// 0 texte, 1 image, 2 vidéo.
+  typeMedia    Int              @default(0) @map("type_media") @db.SmallInt
+  mediaUrl     String?          @map("media_url")
+  couleur      String?          @db.VarChar(9)
+  /// Le texte par langue (fr, en, zh). `contenu` garde le français.
+  traductions  Json             @default("{}") @db.JsonB
+  /// Diffusion en statut : langue → id du statut créé pour elle.
+  statuts      Json?            @db.JsonB
   envois       DiffusionEnvoi[]
 
   @@map("diffusion")
@@ -3647,6 +3657,18 @@ model GestionStatutBienvenueLivraison {
   @@id([userId, elementId])
   @@index([statutId])
   @@map("gestion_statut_bienvenue_livraison")
+}
+
+/// Destinataire d'un statut officiel diffusé : seul lui le voit dans son fil.
+/// Voir `prisma/manual/2026-10_gestion_diffusions_riches.sql`.
+model GestionStatutDestinataire {
+  statutId String   @map("statut_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  creeLe   DateTime @default(now()) @map("cree_le") @db.Timestamptz
+
+  @@id([statutId, userId])
+  @@index([userId])
+  @@map("gestion_statut_destinataire")
 }
 
 model GestionAudit {
