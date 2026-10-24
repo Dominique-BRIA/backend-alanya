@@ -4,6 +4,7 @@ import { ok, fail, handleError } from "@/lib/http";
 import { requireUser, UnauthorizedError } from "@/lib/auth-context";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { memoriserLangue } from "@/lib/langue-compte";
 import {
   INTERVALLE_RELEVE_MIN,
   SEUIL_DEPLACEMENT_METRES,
@@ -17,6 +18,9 @@ export async function GET(req: NextRequest) {
     const { sub } = requireUser(req);
     const user = await prisma.user.findUnique({ where: { id: sub } });
     if (!user) return fail("Utilisateur introuvable", 404);
+    // L'application lit son profil à chaque ouverture : c'est là qu'un compte
+    // déjà connecté fait connaître sa langue (bienvenue, diffusions).
+    await memoriserLangue(user.id, req);
     return ok({
       id: user.id,
       email: user.email,

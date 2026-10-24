@@ -83,6 +83,9 @@ model User {
   /// le « socle » d'Alanya2026). L'officiel garde aussi `typeCompte = 5`.
   /// Voir `prisma/manual/2026-10_gestion_socle.sql`.
   accountType Int    @default(0) @map("account_type") @db.SmallInt
+  /// La langue choisie dans l'application (`Accept-Language`), pour envoyer la
+  /// bienvenue et les diffusions dans la bonne langue. Voir `src/lib/langue-compte.ts`.
+  langue      String? @db.VarChar(10)
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
   pseudo    String?   @map("pseudo") @db.VarChar(50)

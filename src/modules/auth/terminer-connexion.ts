@@ -14,6 +14,7 @@ import {
 } from "@/lib/telephone-lie";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { recordAccess } from "@/lib/user-access";
+import { memoriserLangue } from "@/lib/langue-compte";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 
@@ -65,6 +66,8 @@ export async function terminerConnexion(
 
   // Journal des connexions : trace horodatee, jamais bloquante.
   await recordAccess(prisma, { userId: user.id, req });
+  // La langue de l'application, pour la bienvenue et les diffusions de la console.
+  await memoriserLangue(user.id, req);
 
   /*
    * Session unique par famille d'appareil : au plus un mobile et un poste.

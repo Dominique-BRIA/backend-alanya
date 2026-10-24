@@ -9,6 +9,7 @@ import { hashPassword } from "@/lib/password";
 import { verifyAccessToken } from "@/lib/jwt";
 import { issueTokenPair } from "@/modules/auth/tokens";
 import { recordAccess } from "@/lib/user-access";
+import { memoriserLangue } from "@/lib/langue-compte";
 import { normaliserTelephone } from "@/lib/telephone.mjs";
 import { estUnTelephone, lieOuVerifie } from "@/lib/telephone-lie";
 
@@ -129,6 +130,8 @@ export async function POST(req: NextRequest) {
 
     // Premiere connexion du compte : elle merite sa ligne au journal.
     await recordAccess(prisma, { userId: user.id, req });
+    // La langue de l'application : la bienvenue, envoyée juste après, la lit.
+    await memoriserLangue(user.id, req);
 
     /*
      * L'inscription ouvre une session sans passer par `login` : elle doit donc
