@@ -206,6 +206,8 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
         // Meme classe de defaut que l'URL de l'accueil : la donnee est ecrite,
         // et le chemin qui la rend l'oublie.
         callId: m.callId ?? null,
+        // Jumeau de `serialiserMessage` : les boutons d'un message officiel.
+        ...(m.boutons ? { boutons: m.boutons } : {}),
         replyToId: m.replyToId,
         replyTo,
         statutCite: (() => {

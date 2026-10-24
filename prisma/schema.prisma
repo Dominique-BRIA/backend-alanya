@@ -1202,6 +1202,11 @@ model Message {
   /// pas effacer le message qu'il a laissé. Le vocal appartient à son
   /// destinataire ; l'appel n'est que le contexte où il est né.
   callId String? @map("callID") @db.Uuid
+  /// Boutons d'action sous le message (24/10/2026) : `[{ label, action:
+  /// "url" | "route", target }]`, déjà dans la langue du destinataire. Posés
+  /// par le serveur seul (bienvenue de la console). Le texte du message reste
+  /// lisible sans eux : un client qui ignore le champ affiche « Libellé : lien ».
+  boutons Json? @db.JsonB
   call   Call?   @relation("MessagerieVocale", fields: [callId], references: [id], onDelete: SetNull)
 
   /// Le message mentionne TOUT le groupe (« @all », « @tous »…).

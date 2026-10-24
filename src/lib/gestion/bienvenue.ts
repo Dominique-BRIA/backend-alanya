@@ -31,11 +31,10 @@ import { type SessionAdmin } from "./session";
  * bloc part comme un message, dans la langue de l'application du destinataire
  * (repli anglais, puis français : `langues-contenu.ts`).
  *
- * ⚠️ LES BOUTONS PARTENT EN TEXTE pour l'instant : nos clients affichent un
- * type de message inconnu comme du texte brut, et un message « boutons »
- * montrerait du JSON. Un bloc `cta` est donc envoyé en texte lisible
- * (« Libellé : lien »), jusqu'à ce que l'application et le web sachent le
- * dessiner.
+ * LES BOUTONS : un bloc `cta` part en message TEXTE lisible (« Libellé :
+ * lien », ce qu'affiche un client ancien), qui porte aussi `boutons` — les
+ * clients à jour les dessinent en vrais boutons. Un nouveau type de message
+ * aurait montré du JSON aux applications pas encore mises à jour.
  */
 
 const BLOCS_MAX = 10;
@@ -312,14 +311,12 @@ async function messageDuBloc(b: Bloc, langue: string | null, convId: string, off
     return creerMessage({ convId, expediteurId: officielId, type: b.type === "image" ? "IMAGE" : "VIDEO", content: texte, mediaId: media.id });
   }
   if (b.type === "cta") {
-    const lignes = (b.boutons ?? [])
-      .map((bt, j) => {
-        const libelle = texteDans(b.libellesBoutons?.[j] ?? {}, langue);
-        return libelle && bt.target ? `${libelle} : ${bt.target}` : null;
-      })
-      .filter((x): x is string => !!x);
-    if (!lignes.length) return null;
-    return creerMessage({ convId, expediteurId: officielId, type: "TEXT", content: lignes.join("\n") });
+    const boutons = (b.boutons ?? [])
+      .map((bt, j) => ({ label: texteDans(b.libellesBoutons?.[j] ?? {}, langue), action: bt.action, target: bt.target }))
+      .filter((x): x is { label: string; action: "url" | "route"; target: string } => !!x.label && !!x.target);
+    if (!boutons.length) return null;
+    const texte = boutons.map((x) => (x.action === "url" ? `${x.label} : ${x.target}` : x.label)).join("\n");
+    return creerMessage({ convId, expediteurId: officielId, type: "TEXT", content: texte, boutons });
   }
   if (!texte) return null;
   return creerMessage({ convId, expediteurId: officielId, type: "TEXT", content: texte });

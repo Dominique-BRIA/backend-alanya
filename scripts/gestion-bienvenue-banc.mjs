@@ -96,6 +96,14 @@ for (const [langue, attendu, legende] of [["fr", "Bienvenue !", "Notre équipe"]
   verifier(`${langue} : texte dans sa langue (ou le repli)`, lignes[0]?.startsWith(`TEXT|${attendu}|`), lignes[0]);
   verifier(`${langue} : image avec légende et média`, lignes[1] === `IMAGE|${legende}|1`, JSON.stringify(lignes[1]));
   verifier(`${langue} : bouton en texte lisible`, (lignes[2] ?? "").startsWith("TEXT|") && lignes[2].includes("https://alanyavox.com"), lignes[2]);
+  const boutons = sql(`
+    select m.boutons::text from message m join users u on true
+     where u.email = 'langue-${langue}@banc-gestion.test' and m.boutons is not null
+       and m."conversationID" in (select "conversID" from conv_participants where "alanyaID" = u."alanyaID")`)
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const libelle = { fr: "Découvrir", zh: "发现", es: "Discover" }[langue];
+  verifier(`${langue} : boutons structurés dans sa langue`, boutons.length === 1 && JSON.parse(boutons[0])[0]?.label === libelle && JSON.parse(boutons[0])[0]?.action === "url", boutons[0]);
 }
 
 console.log(`\n${ok} ✓, ${ko} ✗`);

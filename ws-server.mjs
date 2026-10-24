@@ -887,6 +887,8 @@ async function serializeMessage(m, media) {
     // DIRECT doit se reconnaitre tout de suite, et non au prochain
     // rechargement de la conversation.
     callId: m.callId ?? null,
+    // Jumeau de `serialiserMessage` : les boutons d'un message officiel.
+    ...(m.boutons ? { boutons: m.boutons } : {}),
     replyToId: m.replyToId,
     media: (media ?? []).map((f) => ({
       id: f.id,

@@ -162,6 +162,8 @@ export async function creerMessage(params: {
   /// décroché, que le déposant en est bien l'appelant et qu'aucun message ne
   /// l'a déjà prolongé. Cette fonction ne fait qu'écrire ce qu'on lui donne.
   callId?: string;
+  /// Boutons d'action, posés par le serveur seul (bienvenue de la console).
+  boutons?: { label: string; action: "url" | "route"; target: string }[];
   /// Ce message est-il l'enveloppe VIDE d'un contenu chiffré ?
   ///
   /// 🔴 SEUL LE CHEMIN CHIFFRÉ A LE DROIT D'ÉCRIRE DANS UNE CONVERSATION
@@ -434,6 +436,7 @@ export async function creerMessage(params: {
     status: "SENT",
     expiresAt,
     ...(params.callId ? { callId: params.callId } : {}),
+    ...(params.boutons?.length ? { boutons: params.boutons } : {}),
     ...(idsMedias.length > 0 ? { media: { connect: idsMedias.map((id) => ({ id })) } } : {}),
     ...(mentions.length > 0 ? { mentions: { create: mentions } } : {}),
     /*
@@ -542,6 +545,8 @@ export function serialiserMessage(message: Awaited<ReturnType<typeof creerLigneM
     // Une messagerie vocale se reconnait a son appel, pas a son nom de
     // fichier : sans ce champ elle arrive comme une piece jointe audio.
     callId: message.callId ?? null,
+    // Les boutons d'un message officiel ; absent des messages ordinaires.
+    ...(message.boutons ? { boutons: message.boutons } : {}),
     status: message.status,
     replyToId: message.replyToId,
     media: message.media.map((f) => ({
