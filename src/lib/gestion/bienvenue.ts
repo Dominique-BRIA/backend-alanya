@@ -373,11 +373,3 @@ export async function poursuivreRattrapage(): Promise<number> {
   return envoyes;
 }
 
-/** Le statut de bienvenue est exclu (décision du 15/10) : la console le lit désactivé. */
-export const STATUT_BIENVENUE_DESACTIVE = {
-  enabled: false,
-  blocks: [],
-  updatedAt: null,
-  updatedBy: null,
-  supportsMultiple: true,
-};

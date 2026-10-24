@@ -5,6 +5,7 @@ import { withAuth } from "@/lib/auth-context";
 import { createStatusSchema } from "@/lib/validation";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { statutsLivresA } from "@/lib/gestion/statut-bienvenue";
 import {
   auteursCandidatsPour,
   auteursVisiblesPour,
@@ -46,8 +47,14 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   const contactIds = [...visibles].filter((id) => id !== userId);
 
   const now = new Date();
+  // Les statuts de bienvenue livrés à ce lecteur : leur auteur, le compte
+  // officiel, n'est le contact de personne (voir `statut-bienvenue.ts`).
+  const livres = await statutsLivresA(userId);
   const statuses = (await prisma.status.findMany({
-    where: { userId: { in: [...visibles] }, expiresAt: { gt: now } },
+    where: {
+      expiresAt: { gt: now },
+      OR: [{ userId: { in: [...visibles] } }, ...(livres.length ? [{ id: { in: livres } }] : [])],
+    },
     orderBy: { createdAt: "asc" },
     include: {
       user: true,
@@ -96,7 +103,10 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       new Date(0),
     );
 
-  const others = contactIds
+  // Les contacts, plus tout autre auteur dont un statut a été livré à ce
+  // lecteur (le compte officiel et son statut de bienvenue).
+  const auteurs = [...new Set([...contactIds, ...[...byUser.keys()].filter((id) => id !== userId)])];
+  const others = auteurs
     .map(buildGroup)
     .filter((g): g is NonNullable<typeof g> => g !== null)
     // Non-vus en tête, PUIS par récence. Le tri par récence manquait, alors

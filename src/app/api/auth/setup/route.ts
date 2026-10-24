@@ -1,6 +1,7 @@
 import { after, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { envoyerBienvenue } from "@/lib/gestion/bienvenue";
+import { livrerStatutBienvenue } from "@/lib/gestion/statut-bienvenue";
 import { invaliderProfil } from "@/lib/cache-redis.mjs";
 import { ok, fail, handleError, estViolationUnicite } from "@/lib/http";
 import { setupSchema } from "@/lib/validation";
@@ -152,6 +153,9 @@ export async function POST(req: NextRequest) {
     // réponse (console de gestion). Sans version publiée, il ne se passe rien ;
     // un échec ne remonte jamais jusqu'à l'inscription.
     after(() => envoyerBienvenue(user.id).then(() => undefined));
+    // Le statut de bienvenue, à la première inscription seulement (pas au
+    // rattrapage), comme chez Alanya2026.
+    after(() => livrerStatutBienvenue(user.id).then(() => undefined));
 
     return ok(
       {

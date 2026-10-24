@@ -1,10 +1,14 @@
 import { routeAdmin } from "@/lib/gestion/session";
-import { ErreurAdmin, okAdmin } from "@/lib/gestion/reponses";
-import { STATUT_BIENVENUE_DESACTIVE } from "@/lib/gestion/bienvenue";
+import { okAdmin } from "@/lib/gestion/reponses";
+import { ecrireStatutBienvenue, lireStatutBienvenue } from "@/lib/gestion/statut-bienvenue";
 
-/** Le statut de bienvenue est exclu (décision du 15/10/2026) : lu désactivé, jamais écrit. */
-export const GET = routeAdmin("welcome.read", async () => okAdmin(STATUT_BIENVENUE_DESACTIVE));
+/** GET /api/admin/welcome/status — interrupteur et éléments du statut de bienvenue. */
+export const GET = routeAdmin("welcome.read", async () => okAdmin(await lireStatutBienvenue()));
 
-export const PUT = routeAdmin("welcome.status", async () => {
-  throw new ErreurAdmin(400, "Le statut de bienvenue n'est pas pris en charge", "NOT_SUPPORTED");
-});
+/**
+ * PUT /api/admin/welcome/status — `{ enabled, blocks }`. Prend effet
+ * immédiatement, sans « Publier » : c'est un réglage, pas une version.
+ */
+export const PUT = routeAdmin("welcome.status", async (req, session) =>
+  okAdmin(await ecrireStatutBienvenue(await req.json().catch(() => null), session)),
+);

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
+import { statutLivreA } from "@/lib/gestion/statut-bienvenue";
 
 // POST /api/statuses/:id/view — marque un statut comme vu (sauf le sien).
 export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
@@ -18,7 +19,8 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     // ⚠️ MÊME RÈGLE QUE LE FIL. Sans ce contrôle, quelqu'un hors audience qui
     // devine un identifiant se compte comme lecteur dans le « Vu par » de
     // l'auteur — un statut qu'il n'a jamais eu le droit d'ouvrir.
-    if (!(await peutVoirStatutsDe(userId, status.userId))) {
+    // Un statut de bienvenue est visible de celui qui l'a reçu, et de lui seul.
+    if (!(await peutVoirStatutsDe(userId, status.userId)) && !(await statutLivreA(userId, status.id))) {
       return fail("Statut introuvable ou expiré", 404, "NOT_FOUND");
     }
     await prisma.statusView.upsert({

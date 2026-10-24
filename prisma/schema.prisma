@@ -3635,6 +3635,20 @@ model GestionMedia {
   @@map("gestion_media")
 }
 
+/// Statut de bienvenue livré à un compte : garde anti-doublon ET clé de
+/// visibilité (le compte officiel n'est le contact de personne).
+/// Voir `prisma/manual/2026-10_gestion_statut_bienvenue.sql`.
+model GestionStatutBienvenueLivraison {
+  userId    String   @map("user_id") @db.Uuid
+  elementId Int      @map("element_id")
+  statutId  String   @map("statut_id") @db.Uuid
+  livreLe   DateTime @default(now()) @map("livre_le") @db.Timestamptz
+
+  @@id([userId, elementId])
+  @@index([statutId])
+  @@map("gestion_statut_bienvenue_livraison")
+}
+
 model GestionAudit {
   id         BigInt   @id @default(autoincrement())
   admin      String   @db.VarChar(64)
