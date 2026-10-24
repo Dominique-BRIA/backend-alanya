@@ -3624,6 +3624,17 @@ model DiffusionEnvoi {
 // modèles ne servent qu'à lire et écrire.
 
 /// Une écriture d'un superroot dans la console.
+/// Média déposé par la console de gestion (bienvenue, statuts, diffusions) :
+/// lui seul est servi sans jeton par `GET /api/upload/media/:id`.
+/// Voir `prisma/manual/2026-10_gestion_medias.sql`.
+model GestionMedia {
+  mediaId String   @id @map("media_id") @db.Uuid
+  creePar String   @map("cree_par") @db.VarChar(64)
+  creeLe  DateTime @default(now()) @map("cree_le") @db.Timestamptz
+
+  @@map("gestion_media")
+}
+
 model GestionAudit {
   id         BigInt   @id @default(autoincrement())
   admin      String   @db.VarChar(64)
