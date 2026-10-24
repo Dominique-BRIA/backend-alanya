@@ -80,9 +80,17 @@ async function nombreEnAttente(): Promise<number> {
   return Number(r?.n ?? 0);
 }
 
+/*
+ * 🐛 LE MESSAGE PUBLIÉ DISPARAISSAIT DE LA CONSOLE (signalé le 24/10/2026) :
+ * publier transforme le brouillon en version publiée, il n'en reste donc
+ * plus, et la console — qui remplit son éditeur avec `draft` — s'ouvrait
+ * vide. Comme le serveur d'Alanya2026 (`draft: draft ?? active`), sans
+ * brouillon en cours on rend la version publiée : l'éditeur la montre, et la
+ * modifier crée un nouveau brouillon.
+ */
 export async function etatBienvenue() {
   const [actif, brou, pendingBackfill] = await Promise.all([versionPubliee(), brouillon(), nombreEnAttente()]);
-  return { active: presenterVersion(actif), draft: presenterVersion(brou), pendingBackfill };
+  return { active: presenterVersion(actif), draft: presenterVersion(brou ?? actif), pendingBackfill };
 }
 
 const blocsSchema = z
@@ -125,7 +133,9 @@ export async function enregistrerBrouillon(brut: unknown) {
 export async function publier(session: SessionAdmin) {
   const v = await prisma.$transaction(async (tx) => {
     const b = await tx.gestionBienvenue.findFirst({ where: { etat: "brouillon" } });
-    if (!b) throw new ErreurAdmin(409, "Aucun brouillon à publier", "NO_DRAFT");
+    // L'éditeur montre la version publiée quand il n'y a pas de brouillon :
+    // « Publier » sans rien modifier ne doit pas parler de brouillon absent.
+    if (!b) throw new ErreurAdmin(409, "Aucune modification à publier : cette version est déjà en ligne", "NO_DRAFT");
     await tx.gestionBienvenue.updateMany({ where: { etat: "publie" }, data: { etat: "archive" } });
     return tx.gestionBienvenue.update({
       where: { id: b.id },
