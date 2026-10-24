@@ -1,6 +1,7 @@
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { prisma } from "@/lib/prisma";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
+import { nomAffichage } from "@/lib/display-name.mjs";
 
 /**
  * ANNONCER UN MESSAGE CHIFFRÉ : la sonnette temps réel, puis la notification.
@@ -58,14 +59,26 @@ export async function annoncerMessageChiffre(params: {
 
     const [{ pushNewMessage }, expediteur, conv] = await Promise.all([
       import("@/../push.mjs"),
-      prisma.user.findUnique({ where: { id: expediteurId }, select: { nom: true } }),
+      prisma.user.findUnique({
+        where: { id: expediteurId },
+        select: { nom: true, pseudo: true, publicNumber: true },
+      }),
       prisma.conversation.findUnique({ where: { id: convId }, select: { isGroup: true, name: true } }),
     ]);
     await Promise.all(
       aNotifier.map((destinataireId) =>
         pushNewMessage(prisma, {
           recipientId: destinataireId,
-          senderName: expediteur?.nom ?? "",
+          /*
+           * 🐛 « NOUVEAU MESSAGE », SANS NOM (signalé par le user, 24/10/2026).
+           * Seul le `nom` était lu : vide chez 54 comptes sur 108, qui n'ont
+           * qu'un pseudo. Le titre retombait alors sur « Nouveau message ».
+           * `nomAffichage` — nom, puis pseudo, puis Alanya ID — est la règle
+           * des messages en clair, de la messagerie vocale et des diffusions.
+           * Le nom donné par le destinataire passe encore devant
+           * (`pushNewMessage`).
+           */
+          senderName: (expediteur ? nomAffichage(expediteur) : null) ?? "",
           senderId: expediteurId,
           convId,
           // Le NOM d'un groupe, que le serveur connaît de toute façon : sans
