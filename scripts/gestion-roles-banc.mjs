@@ -122,6 +122,24 @@ verifier("se bannir soi-même → 400 CANNOT_TARGET_SELF", banSoi.statut === 400
 const banSuper = await appel("POST", `/users/${idSup2}/ban`, { jeton: jSup, corps: { reason: "banc" } });
 verifier("bannir un super-admin → 403 CANNOT_TARGET_SUPERADMIN", banSuper.statut === 403 && banSuper.donnees?.code === "CANNOT_TARGET_SUPERADMIN");
 
+// ── Socle (genre public du compte) ───────────────────────────────────────
+const business = await appel("PUT", `/users/${idSimple}/socle`, { jeton: jSup, corps: { account_type: 1 } });
+verifier("socle : un compte devient business", business.statut === 200, JSON.stringify(business.donnees));
+const listeBusiness = await appel("GET", "/users?account_type=1&search=banc", { jeton: jSup });
+verifier("filtre account_type=1", (listeBusiness.donnees?.items ?? []).some((u) => u.alanyaPhone === "99000003" && u.accountType === 1));
+const promoOfficiel = await appel("PUT", `/users/${idSimple}/socle`, { jeton: jSup, corps: { account_type: 2 } });
+verifier("socle : l'officiel ne se promeut pas → 409", promoOfficiel.statut === 409 && promoOfficiel.donnees?.code === "OFFICIAL_NOT_PROMOTABLE");
+const socleAdmin = await appel("PUT", `/users/${idAdm}/socle`, { jeton: jSup, corps: { account_type: 1 } });
+verifier("socle : pas pour un administrateur → 409", socleAdmin.statut === 409 && socleAdmin.donnees?.code === "INVALID_ACCOUNT");
+const socleParAdmin = await appel("PUT", `/users/${idSimple}/socle`, { jeton: jAdm, corps: { account_type: 0 } });
+verifier("socle : réservé au super-admin → 403", socleParAdmin.statut === 403 && socleParAdmin.donnees?.permission === "users.socle");
+await appel("PUT", `/users/${idSimple}/socle`, { jeton: jSup, corps: { account_type: 0 } });
+
+const creeOfficiel = await appel("POST", "/users", { jeton: jSup, corps: { nom: "Off", pseudo: "off", password: "motdepasse", account_type: 2 } });
+verifier("création : l'officiel a son propre écran → 400", creeOfficiel.statut === 400 && creeOfficiel.donnees?.code === "OFFICIAL_WRONG_ENDPOINT");
+const creeBusinessAdmin = await appel("POST", "/users", { jeton: jSup, corps: { nom: "Biz", pseudo: "biz", password: "motdepasse", account_type: 1, type_compte: 1 } });
+verifier("création : un business ne peut pas être admin → 409", creeBusinessAdmin.statut === 409 && creeBusinessAdmin.donnees?.code === "INVALID_ACCOUNT");
+
 // ── Sessions qui tombent ─────────────────────────────────────────────────
 const avant = await appel("GET", "/me", { jeton: jAdm });
 await appel("PUT", `/users/${idAdm}/role`, { jeton: jSup, corps: { type_compte: 0 } });

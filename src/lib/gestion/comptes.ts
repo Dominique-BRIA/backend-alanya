@@ -21,8 +21,8 @@ import { ROLE_ADMIN, ROLE_SUPER_ADMIN, ROLE_UTILISATEUR } from "./permissions";
  * (0 utilisateur, 1 admin, 2 super-admin), comme chez Alanya2026 — il vient de
  * `users.role_admin` depuis le 24/10/2026. Ce qu'EST le compte chez nous (notre
  * `type_compte` : personne, agent, centre, officiel…) passe en `natureCompte`.
- * `accountType` n'existe pas chez nous : 0, sauf l'officiel (2, la valeur qui
- * allume le badge « officiel » de la console).
+ * `accountType` est le « socle » d'Alanya2026 (0 personnel, 1 business,
+ * 2 officiel), dans `users.account_type` depuis le 24/10/2026.
  *
  * ⚠️ CE QUE LA CONSOLE NE FAIT PAS ICI, PAR CONSTRUCTION : rattacher un agent
  * à une entreprise ou créer un centre d'appels. C'est le métier d'alanyaCenter,
@@ -44,7 +44,7 @@ export function presenterCompte(u: CompteAvecPays) {
     avatarUrl: u.avatarUrl ?? "",
     typeCompte: u.roleAdmin,
     natureCompte: u.typeCompte,
-    accountType: u.typeCompte === TYPE_COMPTE_OFFICIEL ? 2 : 0,
+    accountType: u.accountType,
     verificationStatus: u.verificationStatut,
     verifiedUntil: u.verifieJusqua,
     isOnline: u.isOnline === 1,
@@ -100,11 +100,8 @@ export function filtreComptes(p: URLSearchParams): Prisma.UserWhereInput {
   // `type_compte` est le RÔLE dans la console d'origine (leur `usersQuery`).
   const role = p.get("type_compte");
   if (role !== null && role !== "" && Number.isInteger(Number(role))) et.push({ roleAdmin: Number(role) });
-  // `account_type` : 2 = l'officiel ; 0 = tous les autres (pas de « business » chez nous).
   const genre = p.get("account_type");
-  if (genre === "2") et.push({ typeCompte: TYPE_COMPTE_OFFICIEL });
-  else if (genre === "0") et.push({ typeCompte: { not: TYPE_COMPTE_OFFICIEL } });
-  else if (genre === "1") et.push({ id: { in: [] } });
+  if (genre !== null && genre !== "" && Number.isInteger(Number(genre))) et.push({ accountType: Number(genre) });
   const from = p.get("from");
   const to = p.get("to");
   if (from || to) {
@@ -246,6 +243,48 @@ export async function changerRole(id: string, brut: unknown, session: SessionAdm
   return { message: "Rôle mis à jour", type_compte: t };
 }
 
+/** Le genre public d'un compte, `users.account_type` (leur `ACCOUNT_TYPE`). */
+export const GENRE_PERSONNEL = 0;
+export const GENRE_BUSINESS = 1;
+export const GENRE_OFFICIEL = 2;
+
+/**
+ * Change le « socle » d'un compte (`PUT /users/:id/socle`, `{ accountType }`),
+ * avec les règles de leur `setUserSocle` :
+ *   - l'officiel se CRÉE, il ne se promeut pas (un compte personnel, dont le
+ *     propriétaire connaît le mot de passe, deviendrait la voix d'Alanya) ;
+ *   - le genre d'un administrateur ne change pas ;
+ *   - révoquer l'officiel lui retire le logo d'Alanya, et chez nous aussi
+ *     `type_compte = 5`, que lisent les portes du refus de réponse.
+ */
+export async function changerSocle(id: string, brut: unknown) {
+  const corps = (brut ?? {}) as { accountType?: unknown; account_type?: unknown };
+  const valeur = corps.accountType ?? corps.account_type;
+  if (valeur === undefined) throw new ErreurAdmin(400, "Aucune modification", "NO_FIELDS_TO_UPDATE");
+  const genre = Number(valeur);
+  if (![GENRE_PERSONNEL, GENRE_BUSINESS, GENRE_OFFICIEL].includes(genre)) {
+    throw new ErreurAdmin(400, "accountType doit être 0, 1 ou 2", "INVALID_ACCOUNT_TYPE");
+  }
+  const u = await compteRequis(id);
+  const etaitOfficiel = u.accountType === GENRE_OFFICIEL || u.typeCompte === TYPE_COMPTE_OFFICIEL;
+  if (genre === GENRE_OFFICIEL && !etaitOfficiel) {
+    throw new ErreurAdmin(409, "Le compte officiel se crée depuis son écran, il ne se promeut pas", "OFFICIAL_NOT_PROMOTABLE");
+  }
+  if (u.roleAdmin >= ROLE_ADMIN && genre !== u.accountType) {
+    throw new ErreurAdmin(409, "Impossible de modifier le genre de compte d'un administrateur via account_type", "INVALID_ACCOUNT");
+  }
+  const revocation = etaitOfficiel && genre !== GENRE_OFFICIEL;
+  await prisma.user.update({
+    where: { id },
+    data: {
+      accountType: genre,
+      ...(revocation ? { typeCompte: 0, avatarUrl: null } : {}),
+    },
+  });
+  await invaliderProfil(id);
+  return { message: "Socle de compte mis à jour" };
+}
+
 /* ══════════════ Numéros Alanya ══════════════ */
 
 export function numeroCanonique(brut: string) {
@@ -340,6 +379,7 @@ const creationSchema = z.object({
   generateLength: z.coerce.number().optional(),
   idPays: z.coerce.number().int().positive().optional(),
   type_compte: z.coerce.number().int().optional(),
+  account_type: z.coerce.number().int().optional(),
 });
 
 /**
@@ -353,12 +393,24 @@ export async function creerCompte(brut: unknown, session: SessionAdmin) {
   const r = creationSchema.safeParse(brut);
   if (!r.success) throw new ErreurAdmin(400, "Nom, pseudo et mot de passe (8 caractères au moins) requis", "VALIDATION");
   const c = r.data;
+  // Le genre : personnel ou business. L'officiel a son propre point d'entrée
+  // (`POST /api/admin/official-account`), comme chez Alanya2026.
+  const genre = c.account_type ?? GENRE_PERSONNEL;
+  if (genre !== GENRE_PERSONNEL && genre !== GENRE_BUSINESS) {
+    throw genre === GENRE_OFFICIEL
+      ? new ErreurAdmin(400, "Le compte officiel se crée via POST /admin/official-account", "OFFICIAL_WRONG_ENDPOINT")
+      : new ErreurAdmin(400, "account_type invalide", "INVALID_ACCOUNT_TYPE");
+  }
   let role = ROLE_UTILISATEUR;
   if (session.role >= ROLE_SUPER_ADMIN && c.type_compte != null) {
     if (![ROLE_UTILISATEUR, ROLE_ADMIN, ROLE_SUPER_ADMIN].includes(c.type_compte)) {
       throw new ErreurAdmin(400, "type_compte doit être 0, 1 ou 2", "INVALID_ACCOUNT_TYPE");
     }
     role = c.type_compte;
+  }
+  // Un compte public est une cible d'usurpation : il n'ouvre jamais la console.
+  if (genre !== GENRE_PERSONNEL && role >= ROLE_ADMIN) {
+    throw new ErreurAdmin(409, "Un compte business ou officiel ne peut pas être administrateur (type_compte >= 1)", "INVALID_ACCOUNT");
   }
   if (c.generateLength && c.generateLength !== 8 && !c.alanyaPhone) {
     throw new ErreurAdmin(400, "Les numéros générés font 8 chiffres", "INVALID_LENGTH");
@@ -388,6 +440,7 @@ export async function creerCompte(brut: unknown, session: SessionAdmin) {
         idPays: c.idPays ?? null,
         typeCompte: 0,
         roleAdmin: role,
+        accountType: genre,
       },
       include: AVEC_PAYS,
     });

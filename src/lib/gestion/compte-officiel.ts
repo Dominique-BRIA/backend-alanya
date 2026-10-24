@@ -3,6 +3,7 @@ import { env } from "@/lib/env";
 import { generateUniquePublicNumber } from "@/lib/publicNumber";
 import { NOM_COMPTE_OFFICIEL, TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 import { ErreurAdmin } from "./reponses";
+import { GENRE_OFFICIEL } from "./comptes";
 
 /**
  * Le compte officiel côté console : le trouver, le créer, le présenter.
@@ -90,6 +91,7 @@ export async function creerCompteOfficiel() {
         pseudo: "alanyawork",
         publicNumber: await generateUniquePublicNumber(),
         typeCompte: TYPE_COMPTE_OFFICIEL,
+        accountType: GENRE_OFFICIEL,
         avatarUrl: `${env.publicBaseUrl}/logo-alanya-officiel.png`,
       },
       select: CHAMPS,

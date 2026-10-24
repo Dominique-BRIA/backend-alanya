@@ -79,6 +79,10 @@ model User {
   /// (24/10/2026, à l'identique d'Alanya2026 mais hors de `type_compte`).
   /// Voir `prisma/manual/2026-10_gestion_roles.sql` et `src/lib/gestion/permissions.ts`.
   roleAdmin  Int     @default(0) @map("role_admin") @db.SmallInt
+  /// Genre public du compte : 0 personnel, 1 business, 2 officiel (24/10/2026,
+  /// le « socle » d'Alanya2026). L'officiel garde aussi `typeCompte = 5`.
+  /// Voir `prisma/manual/2026-10_gestion_socle.sql`.
+  accountType Int    @default(0) @map("account_type") @db.SmallInt
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
   pseudo    String?   @map("pseudo") @db.VarChar(50)
