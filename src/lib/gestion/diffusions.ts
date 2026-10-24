@@ -7,7 +7,7 @@ import { livrerMessagesOfficiels } from "@/lib/salle-temps-reel";
 import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 import { idCompteOfficielRequis } from "./compte-officiel";
 import { ErreurAdmin } from "./reponses";
-import { type SessionAdmin } from "./session";
+import { auteurId, type SessionAdmin } from "./session";
 
 /**
  * LES DIFFUSIONS DU COMPTE OFFICIEL (console de gestion, lot 1b, 16/10/2026).
@@ -259,7 +259,7 @@ export async function creerDiffusion(brut: unknown, session: SessionAdmin) {
       data: {
         clientId: c.clientId,
         expediteurId,
-        creePar: session.isMaster ? "master" : `root:${session.idRoot}`,
+        creePar: auteurId(session),
         contenu,
         criteres: criteria as Prisma.InputJsonValue,
         estimation: count,

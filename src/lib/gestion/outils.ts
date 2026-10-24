@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { type SessionAdmin } from "./session";
+import { auteurId, type SessionAdmin } from "./session";
 import { ErreurAdmin } from "./reponses";
 
 /** Les petits outils partagés par les routes de la console de gestion. */
@@ -34,12 +34,12 @@ export function periode(p: URLSearchParams) {
   };
 }
 
-/** Identifiant de l'auteur dans les tables de la console : `master` ou `root:<id>`. */
+/** Identifiant de l'auteur dans les tables de la console : `user:<id du compte admin>`. */
 export function auteur(session: SessionAdmin): string {
-  return session.isMaster ? "master" : `root:${session.idRoot}`;
+  return auteurId(session);
 }
 export function nomAuteur(session: SessionAdmin): string {
-  return session.isMaster ? "Master Super Root" : session.username;
+  return session.nom;
 }
 
 /** Lit un réglage de la console, complété par ses valeurs par défaut. */

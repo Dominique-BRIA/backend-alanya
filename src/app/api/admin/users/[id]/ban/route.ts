@@ -11,7 +11,7 @@ export const POST = routeAdmin("users.ban", async (req, session, ctx: Ctx) => {
   const corps = (await req.json().catch(() => ({}))) as { reason?: unknown };
   const motif = typeof corps?.reason === "string" && corps.reason.trim() ? corps.reason.trim() : null;
   session.audit = { motif };
-  await bannir(id, motif);
+  await bannir(id, motif, session);
   return okAdmin({ ok: true });
 });
 

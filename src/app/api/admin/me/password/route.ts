@@ -1,22 +1,18 @@
-import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { motDePasseValide, routeAdmin } from "@/lib/gestion/session";
+import { hashPassword, verifyPassword } from "@/lib/password";
+import { routeAdmin } from "@/lib/gestion/session";
 import { ErreurAdmin, okAdmin } from "@/lib/gestion/reponses";
 
 /**
  * PUT /api/admin/me/password — `{ currentPassword, newPassword }`.
  *
- * Seul un compte de la table `Root` peut changer son mot de passe ici. Celui
- * du compte maître vit dans l'environnement du serveur (`SUPER_ROOT_PASSWORD`) :
- * aucune route ne doit pouvoir l'écrire.
+ * C'est le mot de passe du COMPTE ALANYA de l'administrateur : il change aussi
+ * pour l'application, et il est donc haché par la même fonction qu'elle.
  *
- * ⚠️ HACHAGE À 10 TOURS, COMME alanyaCenter (`rootController`, `bcrypt.hash(…, 10)`).
- * La table est partagée : le même mot de passe doit s'ouvrir des deux côtés.
- * bcryptjs produit des `$2a$`/`$2b$` que leur `bcrypt` relit sans peine.
- *
- * Toutes les sessions de ce compte tombent ensuite, celle-ci comprise : leurs
- * jetons portent l'empreinte de l'ancien mot de passe (voir `session.ts`).
+ * Toutes les sessions de console de ce compte tombent ensuite, celle-ci
+ * comprise : leurs jetons portent l'empreinte de l'ancien mot de passe (voir
+ * `session.ts`).
  */
 const corpsSchema = z.object({
   currentPassword: z.string().min(1),
@@ -24,27 +20,23 @@ const corpsSchema = z.object({
 });
 
 export const PUT = routeAdmin("profile.password", async (req, session) => {
-  if (session.isMaster) {
-    throw new ErreurAdmin(
-      400,
-      "Le mot de passe du compte maître se change dans la configuration du serveur",
-      "MASTER_PASSWORD_IN_ENV",
-    );
-  }
   const corps = corpsSchema.safeParse(await req.json().catch(() => null));
   if (!corps.success) {
     throw new ErreurAdmin(400, "Mot de passe actuel et nouveau mot de passe (8 caractères au moins) requis", "INVALID_PASSWORD");
   }
 
-  const root = await prisma.root.findUnique({ where: { idRoot: session.idRoot as number } });
-  if (!root) throw new ErreurAdmin(404, "Compte introuvable", "USER_NOT_FOUND");
-  if (!(await motDePasseValide(corps.data.currentPassword, root.password))) {
+  const compte = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { passwordHash: true },
+  });
+  if (!compte) throw new ErreurAdmin(404, "Compte introuvable", "USER_NOT_FOUND");
+  if (!compte.passwordHash || !(await verifyPassword(corps.data.currentPassword, compte.passwordHash))) {
     throw new ErreurAdmin(401, "Mot de passe actuel incorrect", "PASSWORD_INCORRECT");
   }
 
-  await prisma.root.update({
-    where: { idRoot: root.idRoot },
-    data: { password: await bcrypt.hash(corps.data.newPassword, 10) },
+  await prisma.user.update({
+    where: { id: session.userId },
+    data: { passwordHash: await hashPassword(corps.data.newPassword) },
   });
   return okAdmin({ message: "Mot de passe modifié avec succès" });
 });

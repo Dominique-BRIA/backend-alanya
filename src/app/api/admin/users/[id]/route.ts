@@ -11,7 +11,7 @@ export const GET = routeAdmin("users.read", async (_req, _s, ctx: Ctx) => {
 });
 
 /** DELETE /api/admin/users/:id — effacement logique, sessions coupées. */
-export const DELETE = routeAdmin("users.delete", async (_req, _s, ctx: Ctx) => {
-  await supprimer(idUuid((await ctx.params).id, "USER_NOT_FOUND"));
+export const DELETE = routeAdmin("users.delete", async (_req, session, ctx: Ctx) => {
+  await supprimer(idUuid((await ctx.params).id, "USER_NOT_FOUND"), session);
   return okAdmin({ ok: true });
 });

@@ -75,6 +75,10 @@ model User {
   /// refuse (« cannot drop index users_mobile_key because constraint ...
   /// requires it »), ce qui a stoppe la casse. Ne pas retirer.
   mobile     String? @unique @db.VarChar(20)
+  /// Rôle dans la console de gestion : 0 utilisateur, 1 admin, 2 super-admin
+  /// (24/10/2026, à l'identique d'Alanya2026 mais hors de `type_compte`).
+  /// Voir `prisma/manual/2026-10_gestion_roles.sql` et `src/lib/gestion/permissions.ts`.
+  roleAdmin  Int     @default(0) @map("role_admin") @db.SmallInt
 
   // --- F4 : Profil fusionné (anciennement dans Profile) ---
   pseudo    String?   @map("pseudo") @db.VarChar(50)

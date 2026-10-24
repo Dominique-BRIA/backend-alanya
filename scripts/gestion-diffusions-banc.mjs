@@ -13,8 +13,7 @@
  *
  * Durée : ~1 min 30 (la boucle de fond tourne toutes les 30 s).
  *
- * Usage (Next sur :3020 avec SUPER_ROOT_*, ws-server sur :3010) :
- *   SUPER_ROOT_USERNAME=superroot SUPER_ROOT_PASSWORD=superroot \
+ * Usage (Next sur :3020, super-admin de banc de gestion-roles-banc.mjs, ws-server sur :3010) :
  *   API_URL=http://localhost:3020 WS_URL=ws://localhost:3010 \
  *     node --env-file=.env scripts/gestion-diffusions-banc.mjs
  *
@@ -75,7 +74,7 @@ let rootLecture = null;
 try {
   const admin = (
     await appel("POST", "/api/admin/auth/login", {
-      corps: { username: process.env.SUPER_ROOT_USERNAME, password: process.env.SUPER_ROOT_PASSWORD },
+      corps: { email: process.env.ADMIN_IDENTIFIANT ?? "super@banc-gestion.test", password: process.env.ADMIN_MDP ?? "Banc-gestion-2026" },
     })
   ).json?.accessToken;
   let off = (await appel("GET", "/api/admin/official-account", { jeton: admin })).json;

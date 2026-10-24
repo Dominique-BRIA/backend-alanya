@@ -13,7 +13,7 @@ export const GET = routeAdmin("users.read", async (req) => {
 
 /** POST /api/admin/users — crée un compte ordinaire ou un modérateur, qui reçoit la bienvenue. */
 export const POST = routeAdmin("users.create", async (req, session) => {
-  const u = await creerCompte(await req.json().catch(() => null));
+  const u = await creerCompte(await req.json().catch(() => null), session);
   session.audit = { cibleType: "users", cibleId: u.id };
   after(() => envoyerBienvenue(u.id).then(() => undefined));
   return okAdmin(presenterCompteDetail(u), 201);

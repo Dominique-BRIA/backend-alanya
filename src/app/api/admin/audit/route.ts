@@ -5,7 +5,7 @@ import { okAdmin } from "@/lib/gestion/reponses";
 
 /**
  * GET /api/admin/audit?action&targetType&targetId&before&limit — le journal
- * des écritures des superroots, du plus récent au plus ancien. `before` est
+ * des écritures des administrateurs, du plus récent au plus ancien. `before` est
  * l'id de la dernière ligne vue (pagination par curseur).
  */
 export const GET = routeAdmin("audit.read", async (req) => {
@@ -30,7 +30,8 @@ export const GET = routeAdmin("audit.read", async (req) => {
       ip: l.ip,
       statusCode: l.statutHttp,
       createdAt: l.creeLe,
-      adminId: null,
+      // `user:<id>` depuis le 24/10/2026 ; `root:<id>` ou `master` avant.
+      adminId: l.admin.startsWith("user:") ? l.admin.slice(5) : null,
       admin: l.admin,
       adminNom: l.adminNom,
       adminEmail: null,

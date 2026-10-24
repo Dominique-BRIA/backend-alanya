@@ -1,48 +1,37 @@
-import { createHash, createHmac, timingSafeEqual } from "crypto";
-import bcrypt from "bcryptjs";
+import { createHash, createHmac } from "crypto";
 import jwt, { TokenExpiredError } from "jsonwebtoken";
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
+import { verifyPassword } from "@/lib/password";
+import { nomAffichage } from "@/lib/display-name.mjs";
 import { ErreurAdmin, reponseErreurAdmin } from "./reponses";
-import { PERMISES_EN_LECTURE_SEULE, type Permission } from "./permissions";
+import { peut, ROLE_UTILISATEUR, type Permission } from "./permissions";
 
 /**
  * La session d'administration de la console de gestion.
  *
- * ── QUI SE CONNECTE ─────────────────────────────────────────────────────
+ * ── QUI SE CONNECTE (depuis le 24/10/2026) ──────────────────────────────
  *
- * Le SUPERROOT d'alanyaCenter, à l'identique, sans compte nouveau (décision du
- * 15/10/2026). alanyaCenter en connaît deux sortes, et ce fichier reproduit sa
- * `loginSuperRoot` (`src/controllers/authController.js`) règle pour règle :
+ * Comme chez Alanya2026 (`src/controllers/admin/auth.js`) : un COMPTE ALANYA
+ * promu Admin ou Super Admin (`users.role_admin` > 0), avec le mot de passe de
+ * ce compte — le même que dans l'application. Le user a ajouté une chose :
+ * l'identifiant peut être l'adresse e-mail OU le numéro Alanya, puisque nos
+ * comptes n'ont pas tous une adresse.
  *
- *   1. le COMPTE MAÎTRE, hors base : `SUPER_ROOT_USERNAME` et
- *      `SUPER_ROOT_PASSWORD` dans l'environnement. Mêmes noms de variables que
- *      chez eux, pour qu'on puisse recopier leurs valeurs telles quelles ;
- *   2. toute ligne de la table `Root`, partagée avec eux. Identifiant
- *      insensible à la casse, mot de passe haché par bcrypt OU EN CLAIR (leur
- *      `comparePasswords` accepte les deux), `actif` vérifié APRÈS le mot de
- *      passe, et le type 0 en lecture seule (leur `checkReadOnlyRoot`).
- *
- * ⚠️ UNE DIFFÉRENCE, VOULUE. Sans les deux variables, alanyaCenter retombe sur
- * `superroot` / `superroot`. Ici, sans elles, le compte maître N'EXISTE PAS :
- * un mot de passe connu de tous ne doit jamais naître d'un oubli de
- * configuration. Le jour du déploiement, elles sont posées explicitement.
+ * Le superroot d'alanyaCenter, qui se connectait jusque-là, n'entre plus
+ * (décision du 24/10/2026).
  *
  * ── LES JETONS ──────────────────────────────────────────────────────────
  *
  * 🔴 ILS NE SONT PAS SIGNÉS AVEC LES CLÉS DE L'APPLICATION. Les clés sont
  * DÉRIVÉES de `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` par HMAC : un jeton
- * de gestion ne passe donc aucune vérification de l'application mobile, et un
- * jeton mobile n'ouvre aucune route de gestion — même si les deux portaient le
- * même `scope` par erreur. Dériver plutôt qu'ajouter deux secrets au `.env` :
- * rien à configurer, et rien à oublier.
+ * de gestion ne passe aucune vérification de l'application mobile, et un
+ * jeton mobile n'ouvre aucune route de gestion.
  *
- * 🔴 CHAQUE JETON PORTE UNE EMPREINTE DU MOT DE PASSE (`v`). Elle est
- * recalculée à chaque requête : changer le mot de passe — dans l'environnement
- * pour le maître, en base pour un `Root` — fait tomber toutes les sessions
- * ouvertes, sans liste de révocation. Désactiver un `Root` (`actif = 0`) aussi,
- * puisque la ligne est relue à chaque fois.
+ * 🔴 CHAQUE JETON PORTE UNE EMPREINTE (`v`) du mot de passe ET du rôle,
+ * recalculée à chaque requête : changer le mot de passe, retirer le rôle ou
+ * bannir le compte fait tomber toutes ses sessions, sans liste de révocation.
  */
 
 const AUDIENCE = "alanya-gestion";
@@ -52,18 +41,16 @@ const DUREE_RENOUVELLEMENT = "7d";
 type Portee = "gestion" | "gestion-refresh";
 
 interface ChargeJeton {
-  sub: string; // "master" ou l'idRoot
+  sub: string; // l'identifiant du compte
   scope: Portee;
   v: string;
 }
 
 export interface SessionAdmin {
-  idRoot: number | "master";
-  username: string;
-  /** Le type de la ligne `Root` ; 1 pour le maître, comme chez alanyaCenter. */
-  type: number;
-  isMaster: boolean;
-  lectureSeule: boolean;
+  userId: string;
+  /** Le nom affiché, pour le journal d'audit et les auteurs. */
+  nom: string;
+  role: number;
   /// Ce que la route veut voir au journal d'audit, en plus de ce que
   /// `routeAdmin` déduit seul (cible du chemin) : un motif, une cible précise.
   audit?: { cibleType?: string; cibleId?: string; motif?: string | null };
@@ -80,76 +67,80 @@ function empreinte(...parts: string[]): string {
   return createHash("sha256").update(parts.join("\u0000")).digest("hex").slice(0, 16);
 }
 
-function egalConstant(a: string, b: string): boolean {
-  const ha = createHash("sha256").update(a).digest();
-  const hb = createHash("sha256").update(b).digest();
-  return timingSafeEqual(ha, hb);
+const CHAMPS_COMPTE = {
+  id: true,
+  nom: true,
+  pseudo: true,
+  publicNumber: true,
+  passwordHash: true,
+  roleAdmin: true,
+  exclus: true,
+  actif: true,
+  isDelete: true,
+} as const;
+
+type CompteAdmin = {
+  id: string;
+  nom: string | null;
+  pseudo: string | null;
+  publicNumber: string;
+  passwordHash: string | null;
+  roleAdmin: number;
+  exclus: number;
+  actif: number;
+  isDelete: boolean;
+};
+
+function sessionDe(c: CompteAdmin): SessionAdmin {
+  return { userId: c.id, nom: nomAffichage(c), role: c.roleAdmin };
 }
 
-function compteMaitre(): { username: string; password: string } | null {
-  const username = process.env.SUPER_ROOT_USERNAME?.trim();
-  const password = process.env.SUPER_ROOT_PASSWORD;
-  if (!username || !password) return null;
-  return { username, password };
-}
+const versionDe = (c: CompteAdmin) => empreinte("user", c.id, c.passwordHash ?? "", String(c.roleAdmin));
 
-/** bcrypt, ou le texte en clair : ce qu'accepte alanyaCenter. */
-async function motDePasseValide(saisi: string, enBase: string | null): Promise<boolean> {
-  if (!enBase) return false;
-  if (/^\$2[aby]\$/.test(enBase)) return bcrypt.compare(saisi, enBase);
-  return egalConstant(saisi, enBase);
-}
-
-function sessionMaitre(m: { username: string }): SessionAdmin {
-  return { idRoot: "master", username: m.username, type: 1, isMaster: true, lectureSeule: false };
-}
-
-function sessionRoot(r: { idRoot: number; username: string; type: number }): SessionAdmin {
-  return {
-    idRoot: r.idRoot,
-    username: r.username,
-    type: r.type,
-    isMaster: false,
-    lectureSeule: r.type === 0,
-  };
+/**
+ * Le compte désigné par l'identifiant saisi : une adresse e-mail (insensible à
+ * la casse) ou un numéro Alanya (espaces, tirets et points ignorés).
+ */
+async function compteDe(identifiant: string): Promise<CompteAdmin | null> {
+  const saisie = identifiant.trim();
+  if (saisie.includes("@")) {
+    return prisma.user.findFirst({
+      where: { email: { equals: saisie.toLowerCase(), mode: "insensitive" } },
+      select: CHAMPS_COMPTE,
+    });
+  }
+  const numero = saisie.replace(/[\s.\-]/g, "");
+  if (!/^\d{6,20}$/.test(numero)) return null;
+  return prisma.user.findUnique({ where: { publicNumber: numero }, select: CHAMPS_COMPTE });
 }
 
 /** Vérifie les identifiants. Lève une `ErreurAdmin` si l'accès est refusé. */
 export async function connecter(identifiant: string, motDePasse: string): Promise<SessionAdmin> {
-  const saisie = identifiant.trim().toLowerCase();
-
-  const maitre = compteMaitre();
-  if (maitre && saisie === maitre.username.toLowerCase() && egalConstant(motDePasse, maitre.password)) {
-    return sessionMaitre(maitre);
-  }
-
-  const root = await prisma.root.findFirst({
-    where: { username: { equals: saisie, mode: "insensitive" } },
-  });
-  // Même message pour un identifiant inconnu et un mot de passe faux : la
-  // réponse ne doit pas dire quels identifiants existent.
-  if (!root || !(await motDePasseValide(motDePasse, root.password))) {
+  const compte = await compteDe(identifiant);
+  // Le mot de passe est vérifié AVANT de dire quoi que ce soit du compte : un
+  // inconnu ne doit apprendre ni qu'il existe, ni qu'il est banni, ni son rôle.
+  if (
+    !compte ||
+    compte.isDelete ||
+    !compte.passwordHash ||
+    !(await verifyPassword(motDePasse, compte.passwordHash))
+  ) {
     throw new ErreurAdmin(401, "Identifiants invalides", "INVALID_CREDENTIALS");
   }
-  if (root.actif === 0) {
-    throw new ErreurAdmin(403, "Ce compte a été désactivé", "ACCOUNT_INACTIVE");
+  if (compte.exclus === 1 || compte.actif === 0) {
+    throw new ErreurAdmin(403, "Compte banni", "ACCOUNT_BANNED");
   }
-  return sessionRoot(root);
-}
-
-async function versionDe(session: SessionAdmin): Promise<string | null> {
-  if (session.isMaster) {
-    const m = compteMaitre();
-    return m ? empreinte("master", m.username.toLowerCase(), m.password) : null;
+  if (compte.roleAdmin <= ROLE_UTILISATEUR) {
+    throw new ErreurAdmin(403, "Accès admin requis", "INSUFFICIENT_ROLE");
   }
-  const root = await prisma.root.findUnique({ where: { idRoot: session.idRoot as number } });
-  return root ? empreinte("root", String(root.idRoot), root.password) : null;
+  return sessionDe(compte);
 }
 
 export async function emettreJetons(session: SessionAdmin) {
-  const v = await versionDe(session);
-  if (!v) throw new ErreurAdmin(401, "Session refusée", "SESSION_REJECTED");
-  const sub = String(session.idRoot);
+  const compte = await prisma.user.findUnique({ where: { id: session.userId }, select: CHAMPS_COMPTE });
+  if (!compte) throw new ErreurAdmin(401, "Session refusée", "SESSION_REJECTED");
+  const v = versionDe(compte);
+  const sub = compte.id;
   const options = { audience: AUDIENCE } as const;
   return {
     accessToken: jwt.sign({ sub, scope: "gestion", v } satisfies ChargeJeton, cleAcces(), {
@@ -166,20 +157,12 @@ export async function emettreJetons(session: SessionAdmin) {
 /** Relit le compte désigné par un jeton, et vérifie qu'il vaut toujours. */
 async function rechargerSession(charge: ChargeJeton): Promise<SessionAdmin> {
   const rejet = new ErreurAdmin(401, "Session refusée", "SESSION_REJECTED");
-  let session: SessionAdmin;
-  if (charge.sub === "master") {
-    const m = compteMaitre();
-    if (!m) throw rejet;
-    session = sessionMaitre(m);
-  } else {
-    const idRoot = Number(charge.sub);
-    if (!Number.isInteger(idRoot)) throw rejet;
-    const root = await prisma.root.findUnique({ where: { idRoot } });
-    if (!root || root.actif === 0) throw rejet;
-    session = sessionRoot(root);
-  }
-  if ((await versionDe(session)) !== charge.v) throw rejet;
-  return session;
+  if (!/^[0-9a-f-]{36}$/i.test(charge.sub)) throw rejet;
+  const compte = await prisma.user.findUnique({ where: { id: charge.sub }, select: CHAMPS_COMPTE });
+  if (!compte || compte.isDelete || compte.exclus === 1 || compte.actif === 0) throw rejet;
+  if (compte.roleAdmin <= ROLE_UTILISATEUR) throw rejet;
+  if (versionDe(compte) !== charge.v) throw rejet;
+  return sessionDe(compte);
 }
 
 function verifier(jeton: string, cleSignature: string, portee: Portee): ChargeJeton {
@@ -205,23 +188,20 @@ export async function renouveler(jetonRenouvellement: string) {
   return { session, ...(await emettreJetons(session)) };
 }
 
-export { motDePasseValide };
-
 const ECRITURES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * L'enveloppe de toute route de gestion : identifie, applique la lecture
- * seule, convertit les erreurs au format de la console.
+ * L'enveloppe de toute route de gestion : identifie, vérifie la permission du
+ * rôle, convertit les erreurs au format de la console.
  *
- * ⚠️ LA PERMISSION EST OBLIGATOIRE MÊME SI TOUT LE MONDE LES A TOUTES : c'est
- * elle qui dit si une écriture reste permise en lecture seule, et c'est le
- * point unique à modifier le jour où un rôle limité arrivera.
+ * Le refus de permission a la forme de leur `requirePermission` :
+ * 403 `{ error: "Permission requise", permission, code: "INSUFFICIENT_ROLE" }`.
  */
 export function routeAdmin<C>(
   permission: Permission,
   gestionnaire: (req: NextRequest, session: SessionAdmin, ctx: C) => Promise<Response>,
   /// `lecture: true` : un POST qui n'écrit rien (une estimation, un calcul).
-  /// Il reste alors permis à un compte en lecture seule.
+  /// Il ne va pas au journal d'audit.
   options: { lecture?: boolean } = {},
 ) {
   return async (req: NextRequest, ctx: C): Promise<Response> => {
@@ -229,15 +209,14 @@ export function routeAdmin<C>(
     let reponse: Response;
     try {
       session = await identifier(req);
-      if (
-        session.lectureSeule &&
-        !options.lecture &&
-        ECRITURES.has(req.method) &&
-        !PERMISES_EN_LECTURE_SEULE.has(permission)
-      ) {
-        throw new ErreurAdmin(403, "Accès refusé : vous ne disposez que des droits de lecture", "READ_ONLY");
+      if (!peut(session.role, permission)) {
+        reponse = Response.json(
+          { error: "Permission requise", permission, code: "INSUFFICIENT_ROLE" },
+          { status: 403 },
+        );
+      } else {
+        reponse = await gestionnaire(req, session, ctx);
       }
-      reponse = await gestionnaire(req, session, ctx);
     } catch (err) {
       reponse = reponseErreurAdmin(err);
     }
@@ -249,6 +228,9 @@ export function routeAdmin<C>(
     return reponse;
   };
 }
+
+/** L'auteur d'une action, tel que l'écrivent le journal et les tables de gestion. */
+export const auteurId = (session: SessionAdmin) => `user:${session.userId}`;
 
 /**
  * Inscrit une écriture au journal d'audit (`gestion_audit`).
@@ -264,8 +246,8 @@ async function journaliser(req: NextRequest, session: SessionAdmin, action: stri
   try {
     await prisma.gestionAudit.create({
       data: {
-        admin: session.isMaster ? "master" : `root:${session.idRoot}`,
-        adminNom: session.isMaster ? "Master Super Root" : session.username,
+        admin: auteurId(session),
+        adminNom: session.nom.slice(0, 100),
         action,
         route: `${req.method} ${req.nextUrl.pathname}`.slice(0, 200),
         cibleType: (session.audit?.cibleType ?? morceaux[0] ?? null)?.slice(0, 40) ?? null,

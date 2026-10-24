@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { readStored } from "@/modules/media/storage";
-import { routeAdmin } from "@/lib/gestion/session";
+import { auteurId, routeAdmin } from "@/lib/gestion/session";
 import { ErreurAdmin } from "@/lib/gestion/reponses";
 import { idNumerique } from "@/lib/gestion/outils";
 
@@ -21,8 +21,8 @@ export const GET = routeAdmin("verifications.read", async (_req, session, ctx: {
   await prisma.gestionVerificationDocument.update({ where: { id }, data: { vues: { increment: 1 } } });
   await prisma.gestionAudit.create({
     data: {
-      admin: session.isMaster ? "master" : `root:${session.idRoot}`,
-      adminNom: session.isMaster ? "Master Super Root" : session.username,
+      admin: auteurId(session),
+      adminNom: session.nom.slice(0, 100),
       action: "verifications.document",
       route: `GET /api/admin/verifications/documents/${id}`,
       cibleType: "verifications",

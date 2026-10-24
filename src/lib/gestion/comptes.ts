@@ -11,15 +11,18 @@ import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 import { ErreurAdmin } from "./reponses";
 import { auteur, type pagination } from "./outils";
 import { type SessionAdmin } from "./session";
+import { ROLE_ADMIN, ROLE_SUPER_ADMIN, ROLE_UTILISATEUR } from "./permissions";
 
 /**
  * LES COMPTES vus de la console de gestion (16/10/2026).
  *
- * La forme rendue est celle de la console d'origine (`User` d'Alanya-admin),
- * avec NOS valeurs : `alanyaID` est l'UUID du compte, `typeCompte` notre type
- * (0 personne, 2 agent, 3 centre d'appels, 4 centre vocal, 5 officiel,
- * 9 modérateur). `accountType` n'existe pas chez nous : 0, sauf l'officiel (2,
- * la valeur qui allume le badge « officiel » de la console).
+ * La forme rendue est celle de la console d'origine (`User` d'Alanya-admin) :
+ * `alanyaID` est l'UUID du compte, et `typeCompte` le RÔLE d'administration
+ * (0 utilisateur, 1 admin, 2 super-admin), comme chez Alanya2026 — il vient de
+ * `users.role_admin` depuis le 24/10/2026. Ce qu'EST le compte chez nous (notre
+ * `type_compte` : personne, agent, centre, officiel…) passe en `natureCompte`.
+ * `accountType` n'existe pas chez nous : 0, sauf l'officiel (2, la valeur qui
+ * allume le badge « officiel » de la console).
  *
  * ⚠️ CE QUE LA CONSOLE NE FAIT PAS ICI, PAR CONSTRUCTION : rattacher un agent
  * à une entreprise ou créer un centre d'appels. C'est le métier d'alanyaCenter,
@@ -39,7 +42,8 @@ export function presenterCompte(u: CompteAvecPays) {
     email: u.email ?? "",
     idPays: u.idPays,
     avatarUrl: u.avatarUrl ?? "",
-    typeCompte: u.typeCompte,
+    typeCompte: u.roleAdmin,
+    natureCompte: u.typeCompte,
     accountType: u.typeCompte === TYPE_COMPTE_OFFICIEL ? 2 : 0,
     verificationStatus: u.verificationStatut,
     verifiedUntil: u.verifieJusqua,
@@ -90,11 +94,17 @@ export function filtreComptes(p: URLSearchParams): Prisma.UserWhereInput {
   const statut = p.get("status");
   if (statut === "online") et.push({ isOnline: 1 });
   else if (statut === "banned") et.push({ exclus: 1 });
-  else if (statut === "admin") et.push({ typeCompte: 9 });
+  else if (statut === "admin") et.push({ roleAdmin: { gte: ROLE_ADMIN } });
   const idPays = Number(p.get("idPays"));
   if (Number.isInteger(idPays) && idPays > 0) et.push({ idPays });
-  const type = p.get("type_compte");
-  if (type !== null && type !== "" && Number.isInteger(Number(type))) et.push({ typeCompte: Number(type) });
+  // `type_compte` est le RÔLE dans la console d'origine (leur `usersQuery`).
+  const role = p.get("type_compte");
+  if (role !== null && role !== "" && Number.isInteger(Number(role))) et.push({ roleAdmin: Number(role) });
+  // `account_type` : 2 = l'officiel ; 0 = tous les autres (pas de « business » chez nous).
+  const genre = p.get("account_type");
+  if (genre === "2") et.push({ typeCompte: TYPE_COMPTE_OFFICIEL });
+  else if (genre === "0") et.push({ typeCompte: { not: TYPE_COMPTE_OFFICIEL } });
+  else if (genre === "1") et.push({ id: { in: [] } });
   const from = p.get("from");
   const to = p.get("to");
   if (from || to) {
@@ -162,8 +172,19 @@ function compteModifiable(u: { typeCompte: number }) {
   }
 }
 
-export async function bannir(id: string, motif: string | null) {
+/** Leurs garde-fous : jamais soi-même, jamais un super-admin. */
+function cibleAutorisee(u: { id: string; roleAdmin: number }, session: SessionAdmin, verbe: string) {
+  if (u.id === session.userId) {
+    throw new ErreurAdmin(400, `Impossible de ${verbe} soi-même`, "CANNOT_TARGET_SELF");
+  }
+  if (u.roleAdmin >= ROLE_SUPER_ADMIN) {
+    throw new ErreurAdmin(403, `Impossible de ${verbe} un super-admin`, "CANNOT_TARGET_SUPERADMIN");
+  }
+}
+
+export async function bannir(id: string, motif: string | null, session: SessionAdmin) {
   const u = await compteRequis(id);
+  cibleAutorisee(u, session, "bannir");
   compteModifiable(u);
   await prisma.user.update({
     where: { id },
@@ -186,12 +207,43 @@ export async function rehabiliter(id: string) {
  * connexion refusée. Rien n'est détruit — les conversations des autres
  * gardent leurs messages, alanyaCenter garde ses références.
  */
-export async function supprimer(id: string) {
+export async function supprimer(id: string, session: SessionAdmin) {
   const u = await compteRequis(id);
+  if (u.id === session.userId) {
+    throw new ErreurAdmin(400, "Impossible de se supprimer soi-même", "CANNOT_TARGET_SELF");
+  }
   compteModifiable(u);
   await prisma.user.update({ where: { id }, data: { isDelete: true, exclus: 1, excludeAt: new Date() } });
   await couperSessions(id);
   await invaliderProfil(id);
+}
+
+/**
+ * Change le rôle d'administration d'un compte (`PUT /users/:id/role`), avec
+ * les règles de leur `setAccountType` : 0, 1 ou 2 ; pas de rétrogradation de
+ * soi-même, ni d'un super-admin. Le rôle vit dans `role_admin` (voir
+ * `permissions.ts`) : `type_compte` n'est pas touché.
+ *
+ * Ses sessions de console tombent d'elles-mêmes : leurs jetons portent
+ * l'empreinte de l'ancien rôle (voir `session.ts`).
+ */
+export async function changerRole(id: string, brut: unknown, session: SessionAdmin) {
+  const t = Number(brut);
+  if (![ROLE_UTILISATEUR, ROLE_ADMIN, ROLE_SUPER_ADMIN].includes(t)) {
+    throw new ErreurAdmin(400, "type_compte doit être 0, 1 ou 2", "INVALID_ACCOUNT_TYPE");
+  }
+  if (id === session.userId && t < ROLE_SUPER_ADMIN) {
+    throw new ErreurAdmin(400, "Impossible de se rétrograder soi-même", "CANNOT_TARGET_SELF");
+  }
+  const u = await compteRequis(id);
+  if (u.roleAdmin >= ROLE_SUPER_ADMIN && t < ROLE_SUPER_ADMIN) {
+    throw new ErreurAdmin(403, "Impossible de rétrograder un super-admin", "CANNOT_TARGET_SUPERADMIN");
+  }
+  if (t > ROLE_UTILISATEUR && u.typeCompte === TYPE_COMPTE_OFFICIEL) {
+    throw new ErreurAdmin(400, "Le compte officiel ne peut pas être administrateur", "INVALID_ACCOUNT");
+  }
+  await prisma.user.update({ where: { id }, data: { roleAdmin: t } });
+  return { message: "Rôle mis à jour", type_compte: t };
 }
 
 /* ══════════════ Numéros Alanya ══════════════ */
@@ -252,6 +304,15 @@ export async function changerNumero(id: string, brut: string, session: SessionAd
 
 export async function historiqueNumero(id: string) {
   const lignes = await prisma.gestionNumeroHistorique.findMany({ where: { userId: id }, orderBy: { changeLe: "desc" } });
+  // L'auteur est `user:<id>` depuis le 24/10/2026 (`root:<id>` ou `master`
+  // avant) : on affiche le nom du compte administrateur quand on le retrouve.
+  const ids = [...new Set(lignes.map((l) => l.changePar.match(/^user:(.+)$/)?.[1]).filter((x): x is string => !!x))];
+  const auteurs = new Map(
+    (await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, nom: true, pseudo: true, publicNumber: true } }))
+      .map((u) => [u.id, u.nom || u.pseudo || u.publicNumber]),
+  );
+  const nomDe = (par: string) =>
+    par === "master" ? "Master Super Root" : (auteurs.get(par.replace(/^user:/, "")) ?? par);
   return {
     quarantineDays: 0,
     pendingCredit: null,
@@ -261,7 +322,7 @@ export async function historiqueNumero(id: string) {
       newPhone: l.nouveau,
       source: "admin",
       changedAt: l.changeLe,
-      changedByName: l.changePar === "master" ? "Master Super Root" : l.changePar,
+      changedByName: nomDe(l.changePar),
       amount: null,
       currency: null,
     })),
@@ -269,10 +330,6 @@ export async function historiqueNumero(id: string) {
 }
 
 /* ══════════════ Création ══════════════ */
-
-/// Types qu'on peut créer d'ici : un compte ordinaire, un modérateur. Les
-/// agents et les centres naissent dans alanyaCenter, rattachés à une entreprise.
-const TYPES_CREABLES = [0, 9];
 
 const creationSchema = z.object({
   nom: z.string().trim().min(1).max(100),
@@ -285,13 +342,23 @@ const creationSchema = z.object({
   type_compte: z.coerce.number().int().optional(),
 });
 
-export async function creerCompte(brut: unknown) {
+/**
+ * Crée un compte depuis la console. Comme chez Alanya2026 (`userCreate.js`),
+ * `type_compte` y est le RÔLE d'administration, et seul un super-admin peut le
+ * donner : sinon il est ignoré et le compte naît simple utilisateur. Le compte
+ * créé est une personne (notre `type_compte` 0) : les agents et les centres
+ * naissent dans alanyaCenter, rattachés à une entreprise.
+ */
+export async function creerCompte(brut: unknown, session: SessionAdmin) {
   const r = creationSchema.safeParse(brut);
   if (!r.success) throw new ErreurAdmin(400, "Nom, pseudo et mot de passe (8 caractères au moins) requis", "VALIDATION");
   const c = r.data;
-  const type = c.type_compte ?? 0;
-  if (!TYPES_CREABLES.includes(type)) {
-    throw new ErreurAdmin(400, "Les agents et les centres se créent dans alanyaCenter", "TYPE_NOT_ALLOWED");
+  let role = ROLE_UTILISATEUR;
+  if (session.role >= ROLE_SUPER_ADMIN && c.type_compte != null) {
+    if (![ROLE_UTILISATEUR, ROLE_ADMIN, ROLE_SUPER_ADMIN].includes(c.type_compte)) {
+      throw new ErreurAdmin(400, "type_compte doit être 0, 1 ou 2", "INVALID_ACCOUNT_TYPE");
+    }
+    role = c.type_compte;
   }
   if (c.generateLength && c.generateLength !== 8 && !c.alanyaPhone) {
     throw new ErreurAdmin(400, "Les numéros générés font 8 chiffres", "INVALID_LENGTH");
@@ -319,7 +386,8 @@ export async function creerCompte(brut: unknown) {
         publicNumber: numero,
         idRecuperation: c.email ? null : await genererIdRecuperationUnique(),
         idPays: c.idPays ?? null,
-        typeCompte: type,
+        typeCompte: 0,
+        roleAdmin: role,
       },
       include: AVEC_PAYS,
     });

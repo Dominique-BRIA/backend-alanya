@@ -7,8 +7,7 @@
  * vérification, stickers, trajets. Pour chacun : la forme attendue par la
  * console, et les règles qui comptent (refus, unicité, effets en base).
  *
- * Usage (Next sur :3020 avec SUPER_ROOT_*, ws-server sur :3010) :
- *   SUPER_ROOT_USERNAME=superroot SUPER_ROOT_PASSWORD=superroot \
+ * Usage (Next sur :3020, super-admin de banc de gestion-roles-banc.mjs, ws-server sur :3010) :
  *   API_URL=http://localhost:3020 node --env-file=.env scripts/gestion-console-banc.mjs
  *
  * ⚠️ BASE DE DÉVELOPPEMENT SEULEMENT. Tout ce que le banc crée est effacé à
@@ -63,10 +62,10 @@ try {
   ADMIN = (
     await appel("POST", "/api/admin/auth/login", {
       jeton: null,
-      corps: { username: process.env.SUPER_ROOT_USERNAME, password: process.env.SUPER_ROOT_PASSWORD },
+      corps: { email: process.env.ADMIN_IDENTIFIANT ?? "super@banc-gestion.test", password: process.env.ADMIN_MDP ?? "Banc-gestion-2026" },
     })
   ).json?.accessToken;
-  if (!ADMIN) throw new Error("connexion superroot impossible");
+  if (!ADMIN) throw new Error("connexion du super-admin de banc impossible");
   let off = (await appel("GET", "/api/admin/official-account")).json;
   if (!off) off = (await appel("POST", "/api/admin/official-account")).json;
   const pays = await prisma.pays.findFirst({ orderBy: { idPays: "asc" } });
@@ -117,8 +116,9 @@ try {
   const csv = await appel("GET", `/api/admin/users/export?search=${encodeURIComponent("Banc Console")}`);
   verifie("export CSV : 2 lignes + en-tête", csv.type.includes("text/csv") && csv.texte.toString("utf8").trim().split("\r\n").length === 3, csv.status);
 
-  const agent = await appel("POST", "/api/admin/users", { corps: { nom: "X", pseudo: "x", password: "motdepasse", type_compte: 2 } });
-  verifie("créer un agent ici → 400 (c'est alanyaCenter)", agent.status === 400 && agent.json?.code === "TYPE_NOT_ALLOWED", agent.json);
+  // `type_compte` est le RÔLE depuis le 24/10/2026 (0/1/2), comme chez Alanya2026.
+  const horsRole = await appel("POST", "/api/admin/users", { corps: { nom: "X", pseudo: "x", password: "motdepasse", type_compte: 7 } });
+  verifie("rôle hors 0/1/2 à la création → 400", horsRole.status === 400 && horsRole.json?.code === "INVALID_ACCOUNT_TYPE", horsRole.json);
 
   /* ─────────────── Bienvenue (avant la création, qui doit la recevoir) ─────────────── */
   titre("Bienvenue");

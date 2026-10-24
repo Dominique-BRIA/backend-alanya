@@ -8,8 +8,7 @@
  *   ⑤ son fil ne peut pas être chiffré (HORS_PERIMETRE) ;
  *   ⑥ témoin : un fil ordinaire reçoit toujours les messages.
  *
- * Usage (Next sur :3020 avec SUPER_ROOT_*, ws-server sur :3010) :
- *   SUPER_ROOT_USERNAME=superroot SUPER_ROOT_PASSWORD=superroot \
+ * Usage (Next sur :3020, super-admin de banc de gestion-roles-banc.mjs, ws-server sur :3010) :
  *   API_URL=http://localhost:3020 WS_URL=ws://localhost:3010 \
  *     node --env-file=.env scripts/gestion-officiel-banc.mjs
  *
@@ -79,10 +78,10 @@ const crees = [];
 try {
   titre("① Le compte officiel, créé par la console");
   const login = await appel("POST", "/api/admin/auth/login", {
-    corps: { username: process.env.SUPER_ROOT_USERNAME, password: process.env.SUPER_ROOT_PASSWORD },
+    corps: { email: process.env.ADMIN_IDENTIFIANT ?? "super@banc-gestion.test", password: process.env.ADMIN_MDP ?? "Banc-gestion-2026" },
   });
   const admin = login.json?.accessToken;
-  verifie("connexion superroot", !!admin, login);
+  verifie("connexion du super-admin de banc", !!admin, login);
   let off = (await appel("GET", "/api/admin/official-account", { jeton: admin })).json;
   if (!off) {
     const c = await appel("POST", "/api/admin/official-account", { jeton: admin });
