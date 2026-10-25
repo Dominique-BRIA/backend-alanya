@@ -3831,6 +3831,10 @@ model StickerPack {
   publieLe     DateTime? @map("publie_le") @db.Timestamptz
   creeLe       DateTime  @default(now()) @map("cree_le") @db.Timestamptz
   modifieLe    DateTime  @default(now()) @map("modifie_le") @db.Timestamptz
+  /// Pack PERSONNEL « Mes créations » (25/10/2026) : son propriétaire. NULL =
+  /// pack officiel de la console. Un seul par compte (index unique partiel,
+  /// SQL manuel `2026-10_stickers_perso.sql`). Voir `src/lib/stickers-perso.ts`.
+  proprietaireId String?  @map("proprietaire_id") @db.Uuid
   stickers     Sticker[]
   installations StickerInstallation[]
 

@@ -1129,7 +1129,7 @@ async function handleSend(ws, msg) {
   // Sticker (24/10/2026) : relu en base et réécrit, comme par la route HTTP.
   // Ce chemin n'écrit qu'en clair : un fil chiffré passe par la route.
   if (type === "STICKER") {
-    const s = await stickerPourEnvoi(prisma, content ?? null);
+    const s = await stickerPourEnvoi(prisma, content ?? null, ws.userId);
     if (!s.ok) {
       ws.send(JSON.stringify({ type: "error", message: "Sticker indisponible", code: s.code, tempId }));
       return;

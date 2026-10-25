@@ -28,11 +28,16 @@ import { chargeSticker, litSticker } from "./message-payload.mjs";
 const CLE_REGLAGES = "stickers";
 
 /**
+ * Une CRÉATION (pack « Mes créations », 25/10/2026) ne part que de son
+ * propriétaire : un destinataire qui veut la renvoyer en garde d'abord une
+ * copie (`/api/stickers/stickers/:id/copy`), et envoie la sienne.
+ *
  * @param {import("@prisma/client").PrismaClient} prisma
  * @param {string|null|undefined} content
+ * @param {string} expediteurId
  * @returns {Promise<{ok: true, contenu: string} | {ok: false, code: string}>}
  */
-export async function stickerPourEnvoi(prisma, content) {
+export async function stickerPourEnvoi(prisma, content, expediteurId) {
   const lu = litSticker(content);
   if (!lu) return { ok: false, code: "STICKER_INVALID_PAYLOAD" };
 
@@ -47,6 +52,9 @@ export async function stickerPourEnvoi(prisma, content) {
   if (!s || s.asset.statut !== 0) return { ok: false, code: "STICKER_NOT_FOUND" };
   if (s.asset.anime && !r.animatedEnabled) return { ok: false, code: "STICKER_NOT_FOUND" };
   if (s.pack.statut !== 1) return { ok: false, code: "STICKER_PACK_UNAVAILABLE" };
+  if (s.pack.proprietaireId && s.pack.proprietaireId !== expediteurId) {
+    return { ok: false, code: "STICKER_NOT_FOUND" };
+  }
 
   return {
     ok: true,

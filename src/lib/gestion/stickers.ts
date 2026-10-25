@@ -72,6 +72,8 @@ export async function listerPacks(p: URLSearchParams) {
   const q = p.get("q")?.trim();
   const packs = await prisma.stickerPack.findMany({
     where: {
+      // Les packs « Mes créations » des utilisateurs ne sont pas ceux de la console.
+      proprietaireId: null,
       ...(statut !== null && statut !== "" ? { statut: Number(statut) } : {}),
       ...(q ? { code: { contains: q.toLowerCase() } } : {}),
     },
@@ -313,7 +315,7 @@ export async function packsPublies() {
   const r = await lireReglage(CLE, DEFAUT);
   if (!r.valeur.enabled) return { enabled: false, packs: [] };
   const packs = await prisma.stickerPack.findMany({
-    where: { statut: 1 },
+    where: { statut: 1, proprietaireId: null },
     orderBy: [{ ordre: "asc" }, { publieLe: "desc" }],
     include: { stickers: { where: { asset: { statut: 0 } }, orderBy: { position: "asc" }, include: { asset: true } } },
   });

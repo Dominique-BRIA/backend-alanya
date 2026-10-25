@@ -312,7 +312,7 @@ export async function creerMessage(params: {
    * contrôle rien — c'est le contrat d'Alanya2026 (`stickerMessage.js`).
    */
   if (type === "STICKER" && params.chiffre !== true) {
-    const s = await stickerPourEnvoi(prisma, content);
+    const s = await stickerPourEnvoi(prisma, content, expediteurId);
     if (!s.ok) return { ok: false, motif: "STICKER_REFUSE", codeSticker: s.code };
     content = s.contenu;
   }

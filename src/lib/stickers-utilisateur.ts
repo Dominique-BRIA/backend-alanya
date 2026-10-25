@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { lireReglage } from "@/lib/gestion/outils";
+import { creationOuverte, mesCreations } from "@/lib/stickers-perso";
 
 /**
  * LES STICKERS DE CHACUN (24/10/2026, demande du user : « comme WhatsApp »).
@@ -50,7 +51,7 @@ export async function mesStickers(userId: string) {
   const aDesLignes = await prisma.stickerInstallation.count({ where: { userId } });
   if (aDesLignes === 0) {
     const publies = await prisma.stickerPack.findMany({
-      where: { statut: 1 },
+      where: { statut: 1, proprietaireId: null },
       orderBy: [{ ordre: "asc" }, { publieLe: "desc" }],
       select: { id: true },
     });
@@ -64,22 +65,30 @@ export async function mesStickers(userId: string) {
 
   const [installes, favoris] = await Promise.all([
     prisma.stickerInstallation.findMany({
-      where: { userId, installe: true, pack: { statut: 1 } },
+      where: { userId, installe: true, pack: { statut: 1, proprietaireId: null } },
       orderBy: [{ position: "asc" }, { modifieLe: "asc" }],
       include: { pack: { select: { code: true } } },
     }),
     prisma.stickerFavori.findMany({
       where: {
         userId,
-        sticker: { pack: { statut: 1 }, asset: { statut: 0, ...(animes ? {} : { anime: false }) } },
+        sticker: {
+          pack: { statut: 1, OR: [{ proprietaireId: null }, { proprietaireId: userId }] },
+          asset: { statut: 0, ...(animes ? {} : { anime: false }) },
+        },
       },
       orderBy: { ajouteLe: "desc" },
       select: { stickerId: true },
     }),
   ]);
+  // Création (25/10/2026) : ouverte ou non, et mes créations, dans le même
+  // appel — le panneau s'ouvre sans second aller-retour.
+  const creation = await creationOuverte();
   return {
     packs: installes.map((i, n) => ({ id: Number(i.packId), code: i.pack.code, position: n })),
     favorites: favoris.map((f) => Number(f.stickerId)),
+    features: { creation },
+    created: creation ? await mesCreations(userId) : null,
   };
 }
 
@@ -89,8 +98,9 @@ const idPositif = (brut: string): bigint | null => (/^\d{1,18}$/.test(brut) && b
 export async function installerPack(userId: string, brut: string) {
   await exigerOuverts();
   const id = idPositif(brut);
-  const pack = id && (await prisma.stickerPack.findUnique({ where: { id }, select: { id: true, statut: true } }));
-  if (!pack || pack.statut !== 1) {
+  const pack = id && (await prisma.stickerPack.findUnique({ where: { id }, select: { id: true, statut: true, proprietaireId: true } }));
+  // Un pack « Mes créations » ne s'installe pas : il a sa propre place.
+  if (!pack || pack.statut !== 1 || pack.proprietaireId !== null) {
     throw new ErreurStickers(404, "STICKER_PACK_UNAVAILABLE", "Pack de stickers indisponible");
   }
   const existant = await prisma.stickerInstallation.findUnique({ where: { userId_packId: { userId, packId: pack.id } } });
@@ -150,9 +160,15 @@ export async function ajouterFavori(userId: string, brut: string) {
     id &&
     (await prisma.sticker.findUnique({
       where: { id },
-      select: { id: true, pack: { select: { statut: true } }, asset: { select: { statut: true, anime: true } } },
+      select: {
+        id: true,
+        pack: { select: { statut: true, proprietaireId: true } },
+        asset: { select: { statut: true, anime: true } },
+      },
     }));
-  if (!s || s.pack.statut !== 1 || s.asset.statut !== 0 || (s.asset.anime && !animes)) {
+  // Un sticker officiel publié, ou l'une de MES créations — pas celle d'un autre.
+  const accessible = s && (s.pack.proprietaireId === null || s.pack.proprietaireId === userId);
+  if (!s || !accessible || s.pack.statut !== 1 || s.asset.statut !== 0 || (s.asset.anime && !animes)) {
     throw new ErreurStickers(404, "STICKER_NOT_FOUND", "Sticker introuvable");
   }
   const deja = await prisma.stickerFavori.findUnique({ where: { userId_stickerId: { userId, stickerId: s.id } } });

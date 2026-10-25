@@ -8,7 +8,11 @@
 //      de la conversation dit « 👋 Sticker » ;
 //   ④ envoi chiffré : la ligne STICKER part sans contenu (le serveur ne voit pas
 //      la charge) ;
-//   ⑤ réglages remis comme avant.
+//   ⑤ CRÉER SES STICKERS (25/10/2026) : fermé → 404 ; une image PNG devient
+//      un sticker de « Mes créations » ; refus (pas une image, trop grande) ;
+//      seul le propriétaire l'envoie, un destinataire en garde une copie et
+//      envoie la sienne ; suppression (l'image reste servie aux messages) ;
+//   ⑥ réglages remis comme avant.
 //
 // Prérequis : Next sur API_URL (défaut :3020), ws-server sur WS_URL (défaut
 // :3010), base de DÉVELOPPEMENT avec les comptes `*@banc-gestion.test` et au
@@ -16,6 +20,42 @@
 //
 // Usage : node --env-file=.env scripts/stickers-banc.mjs
 import { execFileSync } from "node:child_process";
+import { deflateSync } from "node:zlib";
+
+/** Un PNG carré d'une couleur, fabriqué sans bibliothèque (signature, IHDR, IDAT, IEND). */
+function png(cote, [r, v, b]) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf) => {
+    let c = 0xffffffff;
+    for (const o of buf) c = crcTable[(c ^ o) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const bloc = (type, donnees) => {
+    const t = Buffer.concat([Buffer.from(type, "latin1"), donnees]);
+    const l = Buffer.alloc(4);
+    l.writeUInt32BE(donnees.length);
+    const c = Buffer.alloc(4);
+    c.writeUInt32BE(crc(t));
+    return Buffer.concat([l, t, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(cote, 0);
+  ihdr.writeUInt32BE(cote, 4);
+  ihdr[8] = 8; // 8 bits
+  ihdr[9] = 2; // RVB
+  const ligne = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: cote }, () => [r, v, b]).flat())]);
+  const brut = Buffer.concat(Array.from({ length: cote }, () => ligne));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    bloc("IHDR", ihdr),
+    bloc("IDAT", deflateSync(brut)),
+    bloc("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 const API = process.env.API_URL ?? "http://localhost:3020";
 const WS = process.env.WS_URL ?? "ws://localhost:3010";
@@ -150,7 +190,70 @@ const clairRefuse = await appel("POST", `/conversations/${convId}/messages`, { j
 verifier("chiffré : le clair est refusé", clairRefuse.statut >= 400, JSON.stringify(clairRefuse.donnees));
 sql(`update conversation set e2ee_actif = false where "conversID" = '${convId}'`);
 
-// ⑤ Comme avant.
-await reglages(avant?.enabled === 1 || avant?.enabled === true);
+// ⑤ Créer ses stickers.
+const deposer = async (jeton, octets, type = "image/png") => {
+  const f = new FormData();
+  f.append("file", new Blob([octets], { type }), "sticker.png");
+  f.append("emoji", "🎨");
+  const r = await fetch(`${API}/api/stickers/assets`, { method: "POST", headers: { Authorization: `Bearer ${jeton}` }, body: f });
+  const t = await r.text();
+  let d;
+  try { d = JSON.parse(t); } catch { d = t; }
+  return { statut: r.status, donnees: d };
+};
+const code = (r) => r.donnees?.error?.code ?? r.donnees?.code;
+sql(`delete from sticker_pack where proprietaire_id in ('${idA}', '${idB}')`);
+const teinte = [Math.floor(Math.random() * 255), 120, 200];
+const image = png(512, teinte);
+
+await appel("PUT", "/admin/sticker-settings", { jeton: admin, corps: { enabled: true, creation_enabled: false } });
+verifier("création fermée → 404", (await deposer(a, image)).statut === 404);
+verifier("création fermée : /me le dit", (await appel("GET", "/stickers/me", { jeton: a })).donnees.features?.creation === false);
+await appel("PUT", "/admin/sticker-settings", { jeton: admin, corps: { enabled: true, creation_enabled: true } });
+
+const cree = await deposer(a, image);
+verifier("une image PNG devient un sticker → 201", cree.statut === 201 && Number.isInteger(cree.donnees.stickerId), JSON.stringify(cree.donnees));
+const maCreation = cree.donnees.stickerId;
+moi = (await appel("GET", "/stickers/me", { jeton: a })).donnees;
+verifier("/me : création ouverte, et ma création en tête", moi.features?.creation === true && moi.created?.stickers?.[0]?.id === maCreation, JSON.stringify(moi.created).slice(0, 200));
+const encore = await deposer(a, image);
+verifier("la même image → le même sticker (reutilise)", encore.donnees.stickerId === maCreation && encore.donnees.reutilise === true, JSON.stringify(encore.donnees));
+const seconde = await deposer(a, png(256, [10, 200, 30]));
+moi = (await appel("GET", "/stickers/me", { jeton: a })).donnees;
+verifier("la plus récente passe devant", moi.created.stickers[0].id === seconde.donnees.stickerId && moi.created.stickers[1].id === maCreation);
+verifier("pas une image → 422 STICKER_ASSET_INVALID", code(await deposer(a, Buffer.from("bonjour"), "image/png")) === "STICKER_ASSET_INVALID");
+verifier("plus de 1024 px → 422", (await deposer(a, png(1100, [1, 2, 3]))).statut === 422);
+const cat2 = (await appel("GET", "/stickers", { jeton: b })).donnees;
+verifier("« Mes créations » n'est pas au catalogue", !cat2.packs.some((p) => String(p.code).startsWith("perso-")));
+const console2 = (await appel("GET", "/admin/sticker-packs", { jeton: admin })).donnees;
+verifier("ni dans la console", !(console2.packs ?? console2.data?.packs ?? []).some((p) => String(p.code).startsWith("perso-")));
+const packA = moi.created.id;
+verifier("un autre ne peut pas l'installer → 404", (await appel("PUT", `/stickers/me/packs/${packA}`, { jeton: b })).statut === 404);
+
+const assetCree = cree.donnees.assetId;
+const chargeCree = JSON.stringify({ v: 1, pack: `perso-${idA}`, sid: maCreation, asset: assetCree, emoji: "🎨" });
+const envoiCree = await appel("POST", `/conversations/${convId}/messages`, { jeton: a, corps: { type: "STICKER", content: chargeCree } });
+verifier("le propriétaire envoie sa création → 201", envoiCree.statut === 201 || envoiCree.statut === 200, JSON.stringify(envoiCree.donnees).slice(0, 200));
+const volEnvoi = await appel("POST", `/conversations/${convId}/messages`, { jeton: b, corps: { type: "STICKER", content: chargeCree } });
+verifier("un autre ne peut pas l'envoyer tel quel → 404 STICKER_NOT_FOUND", volEnvoi.statut === 404 && code(volEnvoi) === "STICKER_NOT_FOUND", JSON.stringify(volEnvoi.donnees));
+verifier("ni la mettre en favori → 404", (await appel("PUT", `/stickers/me/favorites/${maCreation}`, { jeton: b })).statut === 404);
+verifier("le propriétaire, lui, peut → 204", (await appel("PUT", `/stickers/me/favorites/${maCreation}`, { jeton: a })).statut === 204);
+const copie = await appel("POST", `/stickers/stickers/${maCreation}/copy`, { jeton: b });
+verifier("le destinataire en garde une copie → 201", copie.statut === 201 && copie.donnees.stickerId !== maCreation && copie.donnees.assetId === assetCree, JSON.stringify(copie.donnees));
+const chargeCopie = JSON.stringify({ v: 1, pack: `perso-${idB}`, sid: copie.donnees.stickerId, asset: assetCree, emoji: "🎨" });
+const envoiCopie = await appel("POST", `/conversations/${convId}/messages`, { jeton: b, corps: { type: "STICKER", content: chargeCopie } });
+verifier("… et l'envoie → 201", envoiCopie.statut === 201 || envoiCopie.statut === 200, JSON.stringify(envoiCopie.donnees).slice(0, 200));
+verifier("copier deux fois → la même copie", (await appel("POST", `/stickers/stickers/${maCreation}/copy`, { jeton: b })).donnees.stickerId === copie.donnees.stickerId);
+
+verifier("supprimer ma création → 204", (await appel("DELETE", `/stickers/stickers/${maCreation}`, { jeton: a })).statut === 204);
+moi = (await appel("GET", "/stickers/me", { jeton: a })).donnees;
+verifier("elle a quitté « Mes créations » et mes favoris", !moi.created.stickers.some((s) => s.id === maCreation) && !moi.favorites.includes(maCreation));
+const image200 = await fetch(`${API}/api/stickers/fichier/${assetCree}`);
+verifier("son image reste servie aux messages déjà envoyés", image200.status === 200);
+verifier("supprimer la création d'un autre : sans effet", (await appel("DELETE", `/stickers/stickers/${copie.donnees.stickerId}`, { jeton: a })).statut === 204
+  && (await appel("GET", "/stickers/me", { jeton: b })).donnees.created.stickers.some((s) => s.id === copie.donnees.stickerId));
+
+// ⑥ Comme avant.
+await appel("PUT", "/admin/sticker-settings", { jeton: admin, corps: { enabled: avant?.enabled === 1 || avant?.enabled === true, creation_enabled: avant?.creationEnabled === 1 || avant?.creationEnabled === true } });
 console.log(`\n${ok} ✓, ${ko} ✗`);
 process.exit(ko ? 1 : 0);
