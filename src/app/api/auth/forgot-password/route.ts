@@ -8,7 +8,7 @@ import { MOTIF, sendOtpEmail } from "@/lib/mailer";
 import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 // POST /api/auth/forgot-password
-// Déclenche l'envoi d'un code OTP si l'email existe.
+// Envoie un code OTP à l'adresse d'un compte existant.
 export async function POST(req: NextRequest) {
   try {
     await refuserSiMaintenance();
@@ -16,47 +16,53 @@ export async function POST(req: NextRequest) {
     if (!rl.allowed) return fail("Trop de tentatives, réessayez plus tard", 429, "RATE_LIMITED");
 
     const email = emailSchema.parse((await req.json()).email);
-    
+
     const user = await prisma.user.findUnique({ where: { email } });
 
-    // Pour des raisons de sécurité, on renvoie toujours un succès, même si l'email n'existe pas.
-    // Cela empêche les attaquants de deviner quels emails sont enregistrés.
-    if (user) {
-      const code = generateOtpCode();
-      const codeHash = await hashOtp(code);
-      const dureeMinutes = 10;
-      const expiresAt = new Date(Date.now() + dureeMinutes * 60 * 1000);
-
-      await prisma.emailVerification.create({
-        data: { email, codeHash, expiresAt },
-      });
-
-      // ATTEND que l'email soit parti (sinon Vercel tue la fonction serverless trop tôt)
-      /*
-       * ⚠️ LA DURÉE ANNONCÉE EST CELLE DU CODE. Le courriel affichait la durée
-       * générale (`OTP_TTL_MINUTES`) alors que ce code-ci expire en 10 minutes :
-       * dès que les deux différaient, le message promettait un délai faux.
-       */
-      const envoi = await sendOtpEmail(email, code, dureeMinutes, {
-        motif: MOTIF.MOT_DE_PASSE,
-        langue: req.headers.get("accept-language"),
-      });
-      /*
-       * 🔴 ICI, ON NE REMONTE PAS L'ÉCHEC — à la différence de l'inscription.
-       *
-       * Cette route répond volontairement « si ce compte existe… » pour ne pas
-       * révéler quels courriels sont inscrits. Or un envoi n'est TENTÉ que si le
-       * compte existe : répondre 502 sur un échec d'envoi dirait donc « ce
-       * compte existe », et rendrait l'énumération possible par une simple
-       * panne de SMTP. L'échec est journalisé par le mailer, et l'utilisateur
-       * reprend le parcours — c'est le prix assumé de la non-divulgation.
-       */
-      if (!envoi.remis) {
-        console.error("[forgot-password] code non remis, réponse neutre maintenue");
-      }
+    /*
+     * 🔴 UN COMPTE INCONNU EST SIGNALÉ (26/10/2026, demande du user).
+     *
+     * La route répondait toujours « si ce compte existe, un email lui a été
+     * envoyé », pour ne pas révéler quels courriels sont inscrits. Mais depuis
+     * que l'adresse est facultative (25/08/2026), beaucoup de comptes n'en ont
+     * pas : leurs titulaires tapaient une adresse, lisaient « code envoyé » et
+     * n'attendaient rien. On le dit désormais ; la limite de 5 demandes par
+     * minute et par IP freine qui voudrait sonder les adresses.
+     */
+    if (!user) {
+      return fail("Aucun compte n'est associé à cet email.", 404, "EMAIL_INCONNU");
     }
 
-    return ok({ message: "Si ce compte existe, un email lui a été envoyé." });
+    const code = generateOtpCode();
+    const codeHash = await hashOtp(code);
+    const dureeMinutes = 10;
+    const expiresAt = new Date(Date.now() + dureeMinutes * 60 * 1000);
+
+    await prisma.emailVerification.create({
+      data: { email, codeHash, expiresAt },
+    });
+
+    // ATTEND que l'email soit parti (sinon Vercel tue la fonction serverless trop tôt)
+    /*
+     * ⚠️ LA DURÉE ANNONCÉE EST CELLE DU CODE. Le courriel affichait la durée
+     * générale (`OTP_TTL_MINUTES`) alors que ce code-ci expire en 10 minutes :
+     * dès que les deux différaient, le message promettait un délai faux.
+     */
+    const envoi = await sendOtpEmail(email, code, dureeMinutes, {
+      motif: MOTIF.MOT_DE_PASSE,
+      langue: req.headers.get("accept-language"),
+    });
+    // L'existence du compte n'étant plus tue, l'échec d'envoi remonte aussi,
+    // comme à l'inscription.
+    if (!envoi.remis) {
+      return fail(
+        "Impossible d'envoyer le code. Réessayez dans un instant.",
+        502,
+        "MAIL_NON_REMIS",
+      );
+    }
+
+    return ok({ message: "Un code a été envoyé à cet email." });
   } catch (err) {
     return handleError(err);
   }
