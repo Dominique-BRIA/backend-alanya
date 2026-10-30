@@ -21,7 +21,10 @@ export type CodeSysteme =
   // Groupes chiffrés (lot 7, 10/10/2026). Un client plus ancien ne connaît
   // pas ces codes : il n'affiche rien (pas de JSON brut).
   | "e2ee_active"
-  | "e2ee_cle_changee";
+  | "e2ee_cle_changee"
+  // « X a fait une capture d'écran » (29/10/2026). Même règle : un client plus
+  // ancien n'affiche rien.
+  | "capture_ecran";
 
 /**
  * Dépose un message système dans une conversation.
