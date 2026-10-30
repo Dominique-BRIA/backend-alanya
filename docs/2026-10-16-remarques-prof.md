@@ -194,7 +194,10 @@ activation ; il signale que **cet appareil** n'a pas réussi à préparer ses cl
 La cause reste à trouver (`e2ee_fournisseur.dart:256`) — le message a déménagé avec l'activation,
 le défaut qu'il révèle n'est pas réglé.
 
-#### B1 — Second facteur à la connexion web (OTP) ⬜
+#### B1 — Second facteur à la connexion web (OTP) ✅ 18/10, PAR DOMINIQUE (web `3c1d8c3`)
+« Connexion en deux étapes : saisir le code reçu dans l'application ». ⚠️ **Ne pas le refaire.**
+Reste à vérifier à l'usage, s'il n'y a pas déjà été : optionnel pour un particulier, automatique
+pour un compte entreprise.
 Identifiant + mot de passe est jugé insuffisant. Code à usage unique délivré **dans
 l'application Android**, saisi sur le web. Optionnel pour un particulier (réglage de compte),
 automatique pour un compte entreprise.
@@ -215,7 +218,11 @@ ni aux conversations, ni aux appels, ni aux notifications, et **rien n'existe c�
 n'est pas tenable. On peut refuser de stocker l'alias sur le serveur, on ne peut pas empêcher
 un client d'afficher un nom qu'il garde en local.
 
-#### B3 — Documents sensibles : marquage à la descente ⬜
+#### B3 — Documents sensibles : marquage à la descente ✅ 18 au 26/10, PAR DOMINIQUE
+Huit commits côté web (`d47a9df` → `3a47772`) : le navigateur ne les ouvre ni ne les transfère,
+puis les ouvre en signant ce qui sort ; filigrane lisible après un passage par WhatsApp ;
+empreinte dans les PDF et l'audio ; signature incrustée aux quatre bords des vidéos ; partage
+bloqué et recherche par empreinte ; PDF sensible protégé côté web. ⚠️ **Ne pas le refaire.**
 Au téléchargement, estamper le fichier avec le numéro Alanya de celui qui télécharge, la
 marque de l'appareil, la date et l'heure. Le document ne doit pas pouvoir être repartagé.
 **À préciser avec le professeur** : quels formats (PDF seulement, ou images aussi).
@@ -242,6 +249,39 @@ répondeur conservés à part.
 **Ce qui existe déjà** : trois seaux R2 séparés — privé, public, profil — documentés dans
 `docs/2026-10-11-cloudflare-r2.md`.
 **Ce qui manque** : la règle de cycle de vie à 30 jours, et la séparation entreprise.
+
+**LE SEAU ENTREPRISE, PRÉCISÉ PAR LE PROFESSEUR (27/10)** — un grand espace entreprise, et
+dedans DEUX groupes seulement :
+1. `call-center/` — tous les audios des centres d'appels des entreprises créées depuis l'espace
+   administrateur (celui de Choufouane, **pas** la console de Dominique). L'espace admin écrit,
+   l'application lit.
+2. `archives/` — le suivi des réclamations : résumés, rapports, pièces jointes.
+Tout le reste ne bouge pas : discussions, appels entre employés, photos de profil → stockage
+général de l'application.
+
+🔴 **R2 N'A PAS DE DOSSIERS, ET CELA CHANGE TOUTE LA PROCÉDURE.** Comme chez S3, un « dossier »
+n'est qu'un PRÉFIXE dans le nom de l'objet : `call-center/x.mp3` est un fichier dont le nom
+contient une barre oblique. Il n'y a donc RIEN à créer — le dossier paraît au premier fichier
+déposé et disparaît avec le dernier. Ce qui se décide vraiment, c'est la convention de nommage
+(que le code écrira) et les règles de cycle de vie, qui elles existent pour de bon et
+s'appliquent PAR PRÉFIXE.
+
+**Convention proposée** (en attente du nom exact du seau) :
+```
+<seau entreprise>/call-center/<idEntreprise>/<fichier.mp3>
+<seau entreprise>/archives/<idEntreprise>/<année>/<idDossier>/<fichier>
+```
+L'identifiant d'entreprise juste après le préfixe : deux entreprises ne peuvent pas se
+télescoper sur un même nom, et on peut effacer ou archiver UNE seule entreprise d'un geste.
+Minuscules, sans accent ni espace — ces noms finissent dans des adresses web.
+
+⚠️ **AUCUNE RÈGLE 30 JOURS SUR CE SEAU.** Les audios de call center sont de la CONFIGURATION,
+pas du trafic : une règle de 30 jours rendrait les standards muets au bout d'un mois. La règle
+des 30 jours appartient au seau des médias de discussion.
+
+**Bloqué sur deux réponses du user** : le nom exact du seau tel qu'il s'affiche dans Cloudflare
+(et s'il est public ou privé), et OÙ VIT LE CODE de l'espace administrateur de Choufouane —
+aucun de nos trois dépôts n'en contient, et c'est lui qui devra écrire sous ces préfixes.
 
 #### D2 — Coffre-fort documentaire ⬜
 Un espace où l'utilisateur dépose ses documents. Recouvre le « Drive 2.0 » déjà prévu à la
@@ -318,6 +358,19 @@ faisabilité, pas de réalisation immédiate.
 ---
 
 ## Journal
+
+- **27/10/2026** — Mise à jour sur les dépôts : Dominique a livré **B1** (connexion en deux
+  étapes) et **B3** (documents sensibles signés et non repartageables), plus des chantiers hors
+  liste (stickers, mode maintenance, console de gestion, diffusions, bienvenue). Les deux items
+  passent à ✅ : ne pas les refaire.
+  🐛 Défaut signalé par le user et corrigé : **la photo de profil ne pouvait pas changer sur le
+  web** (« impossible de joindre le serveur »). Rien à voir avec la migration R2 —
+  `src/lib/avatar.ts` faisait `fetch()` sur une adresse `data:`, que notre propre `connect-src`
+  refuse. Le message venait de notre traduction d'une panne réseau, alors que le serveur n'avait
+  jamais été appelé. La data-URL est maintenant décodée en mémoire, sans élargir la CSP.
+  ⚠️ **Troisième défaut de cette famille** : `blob:` manquait pour l'aperçu des PDF (06/10), un
+  hôte d'images manquait pour les avatars de l'équipe (02/10). Toute ressource lue par `fetch`
+  doit être déclarée dans `connect-src`, ou ne pas passer par `fetch`.
 
 - **17/10/2026** — Plafond vidéo ramené à 720p des deux côtés (A3), ce qui a supprimé la
   divergence de A1 ; plafond des fichiers porté à 300 Mo dans les trois dépôts (D4) ; envoi web
