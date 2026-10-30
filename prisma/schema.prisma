@@ -156,6 +156,11 @@ model User {
   /// partout et un nouveau est refusé. SQL : prisma/manual/2026-10_nom_verrouille.sql.
   nomVerrouille Boolean @default(false) @map("nom_verrouille")
 
+  /// « Contacts préférés uniquement » (29/10/2026, user) : vrai, seuls les
+  /// comptes que j'ai enregistrés (`preferredContact`, non bloqués) peuvent
+  /// m'appeler en direct. SQL : prisma/manual/2026-10_appels_contacts.sql.
+  appelsContactsSeulement Boolean @default(false) @map("appels_contacts_seulement")
+
   /// Connexion WEB en deux étapes : un code envoyé dans l'application
   /// (18/10/2026). Imposée aux agents d'entreprise quel que soit ce champ.
   /// SQL : prisma/manual/2026-10_deux_etapes.sql.

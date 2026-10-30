@@ -9,6 +9,7 @@ const REGLAGES = {
   lastSeenVisibility: true,
   chiffrementActif: true,
   nomVerrouille: true,
+  appelsContactsSeulement: true,
   deuxEtapes: true,
   typeCompte: true,
 } as const;
@@ -30,6 +31,8 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     chiffrementActif: u?.chiffrementActif ?? true,
     // « Personne ne peut me renommer » (18/10/2026) — voir `User.nomVerrouille`.
     nomVerrouille: u?.nomVerrouille ?? false,
+    // « Contacts préférés uniquement » (29/10/2026) — voir `User.appelsContactsSeulement`.
+    appelsContactsSeulement: u?.appelsContactsSeulement ?? false,
     // Connexion web en deux étapes (18/10/2026) — voir `deux-etapes.ts`.
     // `deuxEtapesImposee` : agent d'entreprise, l'interrupteur est grisé.
     deuxEtapes: u ? u.deuxEtapes || deuxEtapesImposee(u) : false,
@@ -47,6 +50,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     lastSeenVisibility?: number;
     chiffrementActif?: boolean;
     nomVerrouille?: boolean;
+    appelsContactsSeulement?: boolean;
     deuxEtapes?: boolean;
   } = {};
 
@@ -73,6 +77,11 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     data.nomVerrouille = body.nomVerrouille;
   }
 
+  // « Contacts préférés uniquement » : seuls mes contacts peuvent m'appeler.
+  if (typeof body?.appelsContactsSeulement === "boolean") {
+    data.appelsContactsSeulement = body.appelsContactsSeulement;
+  }
+
   if (body?.readReceipts === 0 || body?.readReceipts === 1) {
     data.readReceipts = body.readReceipts;
   }
@@ -93,6 +102,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     readReceipts: u.readReceipts,
     lastSeenVisibility: u.lastSeenVisibility,
     nomVerrouille: u.nomVerrouille,
+    appelsContactsSeulement: u.appelsContactsSeulement,
     deuxEtapes: u.deuxEtapes || deuxEtapesImposee(u),
     deuxEtapesImposee: deuxEtapesImposee(u),
   });

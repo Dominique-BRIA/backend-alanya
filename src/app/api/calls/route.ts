@@ -139,8 +139,29 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
      */
     const cible = await prisma.user.findUnique({
       where: { id: calleeId },
-      select: { typeCompte: true },
+      select: { typeCompte: true, appelsContactsSeulement: true },
     });
+
+    /*
+     * 🔴 « CONTACTS PRÉFÉRÉS UNIQUEMENT » (29/10/2026, user) : l'appelé n'accepte
+     * que les appels des comptes qu'il a enregistrés. Refusé AVANT de sonner :
+     * l'appelant reçoit le motif, l'appelé n'est pas dérangé. Un standard
+     * (centre d'appels, centre vocal) n'est pas concerné : il est fait pour
+     * recevoir n'importe qui.
+     */
+    if (cible?.appelsContactsSeulement && !ouvreUnStandard(cible)) {
+      const connu = await prisma.contact.findFirst({
+        where: { userId: calleeId, contactId: userId, isBlocked: false },
+        select: { id: true },
+      });
+      if (!connu) {
+        return fail(
+          "Ce correspondant n'accepte que les appels de ses contacts",
+          403,
+          "APPEL_CONTACTS_SEULEMENT",
+        );
+      }
+    }
     /*
      * ⚠️ `ouvreUnStandard` ET NON `estCompteCentre` (corrigé le 18/08/2026).
      *
