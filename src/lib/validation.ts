@@ -315,12 +315,14 @@ export const sendMessageSchema = z.object({
 });
 
 export const createStatusSchema = z.object({
-  type: z.enum(["TEXT", "IMAGE", "VIDEO"]).default("TEXT"),
+  type: z.enum(["TEXT", "IMAGE", "VIDEO", "AUDIO"]).default("TEXT"),
   text: z.string().trim().min(1).max(700).optional(),
   bgColor: z.string().trim().regex(/^#?[0-9a-fA-F]{6,8}$/, "Couleur invalide").max(9).optional(),
   mediaId: z.string().uuid().optional(),
+  /** Durée d'un statut audio ou vidéo (01/11/2026) — 10 minutes au plus. */
+  mediaDurationMs: z.number().int().min(0).max(10 * 60 * 1000).optional(),
 }).refine((d) => (d.type === "TEXT" ? Boolean(d.text) : Boolean(d.mediaId)), {
-  message: "Un statut TEXT requiert text ; IMAGE/VIDEO requiert mediaId",
+  message: "Un statut TEXT requiert text ; IMAGE/VIDEO/AUDIO requiert mediaId",
 });
 
 /**

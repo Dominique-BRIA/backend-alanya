@@ -1472,6 +1472,8 @@ enum StatusType {
   TEXT
   IMAGE
   VIDEO
+  /// Statut audio (01/11/2026) : enregistré au micro ou choisi parmi ses fichiers.
+  AUDIO
 }
 
 model Status {
@@ -1481,6 +1483,10 @@ model Status {
   type      StatusType @default(TEXT)
   text      String?    @db.VarChar(700)
   mediaUrl  String?
+  /// Durée d'un statut AUDIO ou VIDÉO, en millisecondes (01/11/2026) : la
+  /// visionneuse cale sa barre de progression dessus avant même de charger le
+  /// média. SQL : prisma/manual/2026-11_statuts_audio_aimes.sql.
+  mediaDurationMs Int?   @map("media_duration_ms")
   bgColor   String?    @map("backgroundColor") @db.VarChar(9) // couleur de fond pour les statuts texte
   createdAt DateTime   @default(now()) @db.Timestamptz
   expiresAt DateTime   @map("expiredAt") @db.Timestamptz // createdAt + 24 h
@@ -1499,6 +1505,10 @@ model StatusView {
   status   Status   @relation(fields: [statusId], references: [id], onDelete: Cascade)
   viewer   User     @relation(fields: [viewerId], references: [id], onDelete: Cascade)
   viewedAt DateTime @default(now()) @map("seenAt") @db.Timestamptz
+  /// « J'aime » (01/11/2026) : porté par la vue, comme chez Alanya — on n'aime
+  /// que ce qu'on a vu, et l'auteur lit les deux dans la même liste.
+  liked    Boolean   @default(false)
+  likedAt  DateTime? @map("liked_at") @db.Timestamptz
 
   @@unique([statusId, viewerId])
   @@map("statut_views")

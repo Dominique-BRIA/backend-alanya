@@ -5212,7 +5212,9 @@ const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
 ///
 /// `connexion_web_*` (18/10/2026) : le code d'une connexion web en deux
 /// étapes, porté à l'application du titulaire — à lui seul (`deux-etapes.ts`).
-const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web)_[a-z0-9_]+$/;
+// `statut_*` (01/11/2026) : l'auteur d'un statut apprend en direct qu'on l'a
+// vu ou aimé (`statut_vu`, `statut_aime`).
+const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web|statut)_[a-z0-9_]+$/;
 
 /// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
 /// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines

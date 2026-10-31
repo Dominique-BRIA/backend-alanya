@@ -36,6 +36,9 @@ export const GET = withAuth(
         name: nomAffichage(v.viewer),
         avatarUrl: avatarPublicUrl(v.viewer.avatarUrl),
         viewedAt: v.viewedAt,
+        // « J'aime » (01/11/2026) : un cœur à côté du nom.
+        liked: v.liked,
+        likedAt: v.likedAt,
       })),
     });
   },

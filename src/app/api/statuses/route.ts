@@ -20,11 +20,12 @@ interface StatusWithMeta {
   type: string;
   text: string | null;
   mediaUrl: string | null;
+  mediaDurationMs: number | null;
   bgColor: string | null;
   createdAt: Date;
   expiresAt: Date;
   user: { id: string; publicNumber: string; pseudo: string | null; avatarUrl: string | null };
-  views: { id: string }[];
+  views: { id: string; liked: boolean }[];
   _count: { views: number };
 }
 
@@ -58,7 +59,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     orderBy: { createdAt: "asc" },
     include: {
       user: true,
-      views: { where: { viewerId: userId }, select: { id: true } },
+      views: { where: { viewerId: userId }, select: { id: true, liked: true } },
       _count: { select: { views: true } },
     },
   })) as unknown as StatusWithMeta[];
@@ -69,16 +70,34 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
     (byUser.get(s.userId) ?? byUser.set(s.userId, []).get(s.userId)!).push(s);
   }
 
+  /*
+   * « J'AIME » (01/11/2026) : chacun sait s'il a aimé (`likedByMe`) ; seul
+   * l'auteur reçoit le compte — comme le nombre de vues, c'est SON tableau de
+   * bord, pas une information publique.
+   */
+  const mesIds = (byUser.get(userId) ?? []).map((s) => s.id);
+  const aimes = mesIds.length
+    ? await prisma.statusView.groupBy({
+        by: ["statusId"],
+        where: { statusId: { in: mesIds }, liked: true },
+        _count: { _all: true },
+      })
+    : [];
+  const aimesPar = new Map(aimes.map((a) => [a.statusId, a._count._all]));
+
   const mapStatus = (s: StatusWithMeta) => ({
     id: s.id,
     type: s.type,
     text: s.text,
     mediaUrl: s.mediaUrl,
+    mediaDurationMs: s.mediaDurationMs,
     bgColor: s.bgColor,
     createdAt: s.createdAt,
     expiresAt: s.expiresAt,
     viewed: s.views.length > 0,
     viewsCount: s._count.views,
+    likedByMe: s.views[0]?.liked === true,
+    ...(s.userId === userId ? { likesCount: aimesPar.get(s.id) ?? 0 } : {}),
   });
 
   const buildGroup = (uid: string) => {
@@ -141,6 +160,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       text: data.text ?? null,
       bgColor: bg,
       mediaUrl,
+      mediaDurationMs: data.type === "AUDIO" || data.type === "VIDEO" ? data.mediaDurationMs ?? null : null,
       expiresAt: new Date(Date.now() + DAY_MS),
     },
   });
