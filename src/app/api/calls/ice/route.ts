@@ -13,6 +13,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   try {
     const coturnSecret = env.coturn.secret();
     const coturnDomains = env.coturn.domains();
+    const tlsDomains = new Set(env.coturn.tlsDomains());
 
     // Récupération optionnelle du pseudo / numéro pour les logs
     const user = await prisma.user.findUnique({
@@ -41,7 +42,11 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
         { urls: `stun:${domain}:3478` },
         { urls: `turn:${domain}:3478?transport=udp`, username, credential },
         { urls: `turn:${domain}:3478?transport=tcp`, username, credential },
-        { urls: `turns:${domain}:5349?transport=tcp`, username, credential },
+        // TLS seulement là où il répond (31/10/2026) : un `turns:` mort faisait
+        // perdre du temps à chaque négociation. Voir `env.coturn.tlsDomains`.
+        ...(tlsDomains.has(domain)
+          ? [{ urls: `turns:${domain}:5349?transport=tcp`, username, credential }]
+          : []),
       ]),
     ];
 

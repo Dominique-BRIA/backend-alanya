@@ -210,5 +210,11 @@ export const env = {
   coturn: {
     secret: () => optional("COTURN_SECRET", "alanya1960-Secure"),
     domains: () => optional("COTURN_DOMAINS", "alanya226.com,kemita.eu").split(",").map(d => d.trim()),
+    /**
+     * Les relais qui acceptent TURN sur TLS (port 5349). Sondé le 31/10/2026 :
+     * kemita.eu oui, alanya226.com NON (connexion refusée). Annoncer un
+     * `turns:` mort faisait perdre du temps à chaque négociation, pour rien.
+     */
+    tlsDomains: () => optional("COTURN_TLS_DOMAINS", "kemita.eu").split(",").map(d => d.trim()).filter(Boolean),
   },
 } as const;
