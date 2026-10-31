@@ -193,6 +193,8 @@ export const createConversationSchema = z.object({
   publicNumber: publicNumberSchema.optional(),
   name: z.string().trim().min(1).max(150).optional(),
   memberNumbers: z.array(publicNumberSchema).max(256).optional(),
+  /** La description du groupe (01/11/2026). */
+  description: z.string().trim().max(512).optional(),
 }).refine((d) => d.publicNumber || (d.name && d.memberNumbers && d.memberNumbers.length > 0), {
   message: "Fournir un publicNumber (direct) ou name + memberNumbers (groupe)",
 });

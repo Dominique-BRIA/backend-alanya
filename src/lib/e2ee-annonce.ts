@@ -1,6 +1,7 @@
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { prisma } from "@/lib/prisma";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
+import { enSourdinePour } from "@/lib/groupe-droits.mjs";
 import { nomAffichage } from "@/lib/display-name.mjs";
 
 /**
@@ -49,11 +50,34 @@ export async function annoncerMessageChiffre(params: {
   const autres = personnes.filter((id) => id !== expediteurId);
   if (autres.length === 0) return;
   try {
-    const sourdine = await prisma.participant.findMany({
-      where: { convId, userId: { in: autres }, sourdine: 1, ...MEMBRE_ACTIF },
-      select: { userId: true },
-    });
-    const enSourdine = new Set(sourdine.map((m) => m.userId));
+    /*
+     * LA SOURDINE COMPLÈTE (01/11/2026) : pour toujours, pour un temps, ou
+     * « mentions seulement ». Les mentions d'un message chiffré sont gardées
+     * en clair à côté (`message_mentions`) : elles sont lisibles ici.
+     */
+    const [membres, cite, message] = await Promise.all([
+      prisma.participant.findMany({
+        where: { convId, userId: { in: autres }, ...MEMBRE_ACTIF },
+        select: { userId: true, sourdine: true, sourdineJusqua: true, mentionsSeulement: true },
+      }),
+      prisma.messageMention.findMany({ where: { messageId }, select: { userId: true } }),
+      prisma.message.findUnique({ where: { id: messageId }, select: { mentionneTous: true } }),
+    ]);
+    const mentionnes = new Set(cite.map((m) => m.userId));
+    const enGroupe = (await prisma.conversation.findUnique({
+      where: { id: convId },
+      select: { isGroup: true },
+    }))?.isGroup === true;
+    const enSourdine = new Set(
+      membres
+        .filter((m) =>
+          enSourdinePour(m, {
+            mentionne: message?.mentionneTous === true || mentionnes.has(m.userId),
+            enGroupe,
+          }),
+        )
+        .map((m) => m.userId),
+    );
     const aNotifier = autres.filter((id) => !enSourdine.has(id));
     if (aNotifier.length === 0) return;
 

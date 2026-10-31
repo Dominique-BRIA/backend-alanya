@@ -5,6 +5,7 @@ import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 import { MEMBRE_ACTIF, donneesDepart } from "@/lib/appartenance.mjs";
+import { transmettrePropriete } from "@/lib/groupe-droits.mjs";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 
 // POST /api/conversations/:id/leave — quitter un groupe.
@@ -35,6 +36,8 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     // Ses boîtes permanentes aussi (chapitre 39).
     prisma.e2eeBoite.deleteMany({ where: { convId, userId } }),
   ]);
+  // Le propriétaire qui part transmet le groupe (01/11/2026).
+  await transmettrePropriete(prisma, convId, userId);
   // Même raison qu'au retrait : la liste des membres décide de qui reçoit quoi.
   await invaliderConversation(convId);
 

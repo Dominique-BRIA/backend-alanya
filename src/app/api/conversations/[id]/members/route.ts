@@ -5,6 +5,7 @@ import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
+import { proprietaireEffectif, transmettrePropriete } from "@/lib/groupe-droits.mjs";
 import { peutChiffrer } from "@/lib/e2ee-perimetre";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { nomAffichage } from "@/lib/display-name.mjs";
@@ -26,10 +27,25 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   });
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
 
-  const isMember = conv.participants.some((p) => p.userId === userId);
-  if (!isMember) return fail("Accès refusé", 403, "FORBIDDEN");
+  const moi = conv.participants.find((p) => p.userId === userId);
+  if (!moi) return fail("Accès refusé", 403, "FORBIDDEN");
+  const proprietaire = proprietaireEffectif(conv, conv.participants);
 
   return ok({
+    /*
+     * LE GROUPE LUI-MÊME (01/11/2026) : description, propriétaire, réglages,
+     * et ce qui me concerne — la bannière « Rester / Quitter ». Additif : un
+     * client qui l'ignore ne change pas de comportement.
+     */
+    groupe: {
+      description: conv.description,
+      proprietaireId: proprietaire,
+      adminsSeulsEcrivent: conv.adminsSeulsEcrivent,
+      adminsSeulsModifient: conv.adminsSeulsModifient,
+      adminsSeulsAjoutent: conv.adminsSeulsAjoutent,
+      historiqueCacheNouveaux: conv.historiqueCacheNouveaux,
+    },
+    moi: { arriveeAConfirmer: moi.arriveeAConfirmer },
     members: conv.participants.map((p) => ({
       id: p.userId,
       pseudo: nomAffichage(p.user),
@@ -41,6 +57,8 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
           ? 0
           : p.user.isOnline,
       role: p.role,
+      // Le propriétaire garde le rôle ADMIN ; ce drapeau le distingue.
+      estProprietaire: p.userId === proprietaire,
       joinedAt: p.joinedAt,
       /*
        * JUSQU'OÙ CE MEMBRE A LU. Même ajout que dans `GET /api/conversations`
@@ -78,10 +96,14 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   if (!conv) return fail("Conversation introuvable", 404, "NOT_FOUND");
   if (!conv.isGroup) return fail("Ce n'est pas un groupe", 400, "NOT_GROUP");
 
-  // Seul un admin peut ajouter des membres (symétrique du retrait).
+  /*
+   * QUI AJOUTE (01/11/2026) : les admins ; tout membre si le groupe a levé
+   * « seuls les admins ajoutent ».
+   */
   const me = conv.participants.find((p) => p.userId === userId);
   if (!me) return fail("Accès refusé", 403, "FORBIDDEN");
-  if (!isGroupAdmin(conv.participants, userId)) {
+  const ajouteurAdmin = isGroupAdmin(conv.participants, userId);
+  if (conv.adminsSeulsAjoutent && !ajouteurAdmin) {
     return fail("Seul un admin peut ajouter des membres", 403, "NOT_ADMIN");
   }
 
@@ -151,18 +173,36 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
    * ligne existe encore (`est_membre = false`) : la recréer violerait
    * l'unicité (conversation, compte). Les deux écritures vont ensemble.
    */
-  const anciens = new Set(
-    (
-      await prisma.participant.findMany({
-        where: { convId, userId: { in: toAdd.map((u) => u.id) }, estMembre: false },
-        select: { userId: true },
-      })
-    ).map((p) => p.userId),
-  );
+  const lignesAnciennes = await prisma.participant.findMany({
+    where: { convId, userId: { in: toAdd.map((u) => u.id) }, estMembre: false },
+    select: { userId: true, excluPar: true },
+  });
+  /*
+   * 🔴 UN SIMPLE MEMBRE NE RÉINTÈGRE PAS UN EXCLU (01/11/2026, la faille que le
+   * dépôt de référence a corrigée) : sans cela, un admin retirait quelqu'un et
+   * n'importe quel membre le faisait revenir aussitôt. Un départ VOLONTAIRE
+   * (exclu_par nul) peut, lui, être réparé par tout le monde.
+   */
+  if (!ajouteurAdmin) {
+    const exclus = lignesAnciennes.filter((l) => l.excluPar != null).map((l) => l.userId);
+    if (exclus.length > 0) {
+      return fail("Seul un admin peut faire revenir un membre retiré", 403, "NOT_ADMIN");
+    }
+  }
+  const anciens = new Set(lignesAnciennes.map((p) => p.userId));
+  /*
+   * L'ARRIVÉE À CONFIRMER ET L'HISTORIQUE (01/11/2026) : le nouveau venu voit
+   * la bannière « Rester / Quitter » ; si le groupe cache l'historique aux
+   * nouveaux, il ne lit que ce qui s'écrit à partir de maintenant.
+   */
+  const arrivee = {
+    arriveeAConfirmer: true,
+    historiqueDepuis: conv.historiqueCacheNouveaux ? new Date() : null,
+  };
   await prisma.$transaction([
     prisma.participant.updateMany({
       where: { convId, userId: { in: [...anciens] }, estMembre: false },
-      data: { ...donneesRetour(), role: "MEMBER" },
+      data: { ...donneesRetour(), role: "MEMBER", ...arrivee },
     }),
     prisma.participant.createMany({
       data: toAdd
@@ -171,6 +211,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
           convId,
           userId: u.id,
           role: "MEMBER" as const,
+          ...arrivee,
         })),
     }),
   ]);
@@ -230,6 +271,20 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
   const target = conv.participants.find((p) => p.userId === targetId);
   if (!target) return fail("Membre introuvable dans ce groupe", 404, "NOT_MEMBER");
 
+  /*
+   * 🔴 LE PROPRIÉTAIRE NE SE RETIRE PAS (01/11/2026), et seul lui retire un
+   * admin. Avant, n'importe quel admin pouvait exclure le créateur du groupe.
+   */
+  const proprietaire = proprietaireEffectif(conv, conv.participants);
+  if (targetId !== userId && proprietaire) {
+    if (targetId === proprietaire) {
+      return fail("Le propriétaire du groupe ne peut pas être retiré", 403, "CANNOT_REMOVE_OWNER");
+    }
+    if (target.role === "ADMIN" && userId !== proprietaire) {
+      return fail("Seul le propriétaire retire un admin", 403, "OWNER_REQUIRED");
+    }
+  }
+
   // Les noms sont lus AVANT la suppression : après, le participant n'est plus
   // là pour être nommé.
   const nomCible = await nomPourAvis(targetId);
@@ -270,6 +325,9 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
       donnees: { convId, exclu: targetId !== userId },
     });
   }
+
+  // Le propriétaire qui part transmet le groupe (01/11/2026).
+  if (targetId === userId) await transmettrePropriete(prisma, convId, userId);
 
   // Si c'est soi-même qui quitte, on peut aussi supprimer la conv si vide
   let convSupprimee = false;
@@ -320,6 +378,20 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
 
   const target = conv.participants.find((p) => p.userId === targetId);
   if (!target) return fail("Membre introuvable dans ce groupe", 404, "NOT_MEMBER");
+
+  /*
+   * 🔴 SEUL LE PROPRIÉTAIRE CHANGE LES RÔLES, et le sien ne change pas
+   * (01/11/2026). Un groupe sans propriétaire garde la règle d'avant.
+   */
+  const proprietaire = proprietaireEffectif(conv, conv.participants);
+  if (proprietaire) {
+    if (userId !== proprietaire) {
+      return fail("Seul le propriétaire du groupe change les rôles", 403, "OWNER_REQUIRED");
+    }
+    if (targetId === proprietaire) {
+      return fail("Le rôle du propriétaire ne change pas", 403, "CANNOT_CHANGE_OWNER");
+    }
+  }
 
   await prisma.participant.update({
     where: { convId_userId: { convId, userId: targetId } },

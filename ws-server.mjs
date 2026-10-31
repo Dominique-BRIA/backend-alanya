@@ -23,6 +23,7 @@ import {
 } from "./src/lib/call-labels.mjs";
 import { nomAffichage } from "./src/lib/display-name.mjs";
 import { MEMBRE_ACTIF } from "./src/lib/appartenance.mjs";
+import { ADMINS_SEULS, enSourdinePour, refusAnnonce } from "./src/lib/groupe-droits.mjs";
 import { ecritureVersOfficiel, MESSAGE_REFUS_OFFICIEL, TYPE_COMPTE_OFFICIEL } from "./src/lib/compte-officiel.mjs";
 // Le cache de lecture. Redis absent ou en panne : ces fonctions interrogent la
 // base exactement comme le faisait le code qu'elles remplacent — voir
@@ -1216,6 +1217,20 @@ async function handleSend(ws, msg) {
     return;
   }
 
+  // MODE ANNONCE (01/11/2026) : dans ce groupe, seuls les admins écrivent.
+  // Même règle que `creerMessage`, que ce chemin ne traverse pas.
+  if (await refusAnnonce(prisma, convId, ws.userId)) {
+    ws.send(
+      JSON.stringify({
+        type: "error",
+        code: ADMINS_SEULS,
+        message: "Seuls les admins peuvent écrire dans ce groupe",
+        tempId,
+      }),
+    );
+    return;
+  }
+
   const filChiffre = await prisma.conversation.findUnique({
     where: { id: convId },
     select: { e2eeActif: true, isGroup: true },
@@ -1680,7 +1695,9 @@ async function handleSend(ws, msg) {
       select: {
         name: true,
         isGroup: true,
-        participants: { select: { userId: true, sourdine: true } },
+        participants: {
+          select: { userId: true, sourdine: true, sourdineJusqua: true, mentionsSeulement: true },
+        },
       },
     });
     const convTitle = conv?.isGroup ? (conv.name ?? null) : senderName;
@@ -1701,9 +1718,9 @@ async function handleSend(ws, msg) {
      * Le drapeau se lit dans `conv.participants`, deja charge ci-dessus :
      * aucune requete supplementaire, aucun N+1.
      */
-    const enSourdine = new Set(
-      (conv?.participants ?? []).filter((p) => p.sourdine === 1).map((p) => p.userId),
-    );
+    // La sourdine complète (01/11/2026) : pour toujours, pour un temps, ou
+    // « mentions seulement » — calculée par destinataire plus bas.
+    const parMembre = new Map((conv?.participants ?? []).map((p) => [p.userId, p]));
 
     /*
      * QUI A ETE MENTIONNE. Sert a deux choses, et a une seule pour l'instant :
@@ -1720,8 +1737,17 @@ async function handleSend(ws, msg) {
 
     for (const uid of recipients) {
       if (uid === ws.userId || isUserOnline(uid)) continue;
-      if (enSourdine.has(uid)) continue;
       const mentionne = mentionnes.has(uid);
+      const membre = parMembre.get(uid);
+      if (
+        membre &&
+        enSourdinePour(membre, {
+          mentionne: mentionne || mentionneTous,
+          enGroupe: conv?.isGroup === true,
+        })
+      ) {
+        continue;
+      }
       await pushNewMessage(prisma, {
         recipientId: uid,
         senderName,
@@ -5347,13 +5373,17 @@ async function livrerMessageOfficiel(messageId) {
 
   if (isPushEnabled()) {
     const nom = nomAffichage(m.sender) ?? "Alanya Work";
+    // La sourdine complète (01/11/2026) ; un message officiel ne mentionne
+    // personne.
     const enSourdine = new Set(
       (
         await prisma.participant.findMany({
-          where: { convId: m.convId, sourdine: 1 },
-          select: { userId: true },
+          where: { convId: m.convId },
+          select: { userId: true, sourdine: true, sourdineJusqua: true, mentionsSeulement: true },
         })
-      ).map((p) => p.userId),
+      )
+        .filter((p) => enSourdinePour(p, { mentionne: false, enGroupe: false }))
+        .map((p) => p.userId),
     );
     for (const uid of destinataires) {
       if (isUserOnline(uid) || enSourdine.has(uid)) continue;

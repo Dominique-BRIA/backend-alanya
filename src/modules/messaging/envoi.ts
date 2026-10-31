@@ -5,6 +5,7 @@ import { stickerPourEnvoi } from "@/lib/sticker-message.mjs";
 import { peutVoirStatutsDe } from "@/lib/statut-visibilite";
 import { TYPES_VUE_UNIQUE } from "@/modules/messaging/vue-unique";
 import { refusMediaEnClair } from "@/lib/e2ee-clair.mjs";
+import { refusAnnonce } from "@/lib/groupe-droits.mjs";
 import { ecritureVersOfficiel } from "@/lib/compte-officiel.mjs";
 import type { ChargeGroupe } from "@/lib/e2ee-groupe-charge";
 
@@ -55,6 +56,8 @@ export type ResultatEnvoi =
         | "CONVERSATION_CHIFFREE"
         // Le chemin chiffre a presente du texte, ce qu il ne doit jamais faire.
         | "CONTENU_EN_CLAIR"
+        // Groupe en mode annonce : seuls les admins écrivent (01/11/2026).
+        | "ADMINS_SEULS"
         // Le message cité n'est pas dans cette conversation.
         | "CITATION_ETRANGERE"
         | "VUE_UNIQUE_INVALIDE"
@@ -199,6 +202,11 @@ export async function creerMessage(params: {
   // Personne ne répond au compte officiel ; lui seul écrit dans ses fils.
   if (await ecritureVersOfficiel(prisma, convId, expediteurId)) {
     return { ok: false, motif: "COMPTE_OFFICIEL" };
+  }
+
+  // MODE ANNONCE (01/11/2026) : dans un groupe où seuls les admins écrivent.
+  if (conversation?.isGroup && (await refusAnnonce(prisma, convId, expediteurId))) {
+    return { ok: false, motif: "ADMINS_SEULS" };
   }
 
   /*

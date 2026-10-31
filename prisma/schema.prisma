@@ -1040,6 +1040,25 @@ model Conversation {
   // 0 = désactivé. Les valeurs usuelles : 86400 (24h), 604800 (7j), 7776000 (90j).
   disappearingSeconds Int @default(0) @map("disappearing_seconds")
 
+  // --- GROUPES (01/11/2026, repris d'Alanya2026) ---
+
+  /// La description du groupe.
+  description String? @db.VarChar(512)
+
+  /// Le PROPRIÉTAIRE : le créateur, ou celui à qui la propriété est passée.
+  /// Il garde le rôle ADMIN (voir `groupe-droits.mjs`) ; personne ne peut le
+  /// retirer ni le rétrograder, et lui seul change les rôles.
+  proprietaireId String? @map("proprietaire_id") @db.Uuid
+
+  /// Mode annonce : seuls les admins écrivent.
+  adminsSeulsEcrivent Boolean @default(false) @map("admins_seuls_ecrivent")
+  /// Seuls les admins changent le nom, la photo, la description.
+  adminsSeulsModifient Boolean @default(true) @map("admins_seuls_modifient")
+  /// Seuls les admins ajoutent des membres.
+  adminsSeulsAjoutent Boolean @default(true) @map("admins_seuls_ajoutent")
+  /// Un membre ajouté ne voit pas les messages d'avant son arrivée.
+  historiqueCacheNouveaux Boolean @default(false) @map("historique_cache_nouveaux")
+
   @@map("conversation")
 }
 
@@ -1109,6 +1128,20 @@ model Participant {
   quitteLe  DateTime? @map("quitte_le") @db.Timestamptz
   /// L'administrateur qui l'a exclu ; nul pour un départ volontaire.
   excluPar  String?   @map("exclu_par") @db.Uuid
+
+  // --- GROUPES (01/11/2026) ---
+
+  /// Ajouté par quelqu'un, il n'a pas encore dit « Rester » : la bannière
+  /// « Rester / Quitter » s'affiche sur tous ses appareils.
+  arriveeAConfirmer Boolean @default(false) @map("arrivee_a_confirmer")
+  /// Ajouté alors que l'historique était caché aux nouveaux : il ne lit que
+  /// les messages écrits depuis.
+  historiqueDepuis DateTime? @map("historique_depuis") @db.Timestamptz
+  /// Sourdine pour un temps (8 h, une semaine). `sourdine = 1` reste « pour
+  /// toujours ».
+  sourdineJusqua DateTime? @map("sourdine_jusqu_a") @db.Timestamptz
+  /// En groupe : notifié seulement quand on le mentionne.
+  mentionsSeulement Boolean @default(false) @map("mentions_seulement")
 
   @@unique([convId, userId])
   @@index([userId])

@@ -283,7 +283,16 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
        * l'état du LECTEUR sur cette conversation, et non celui de la
        * conversation elle-même.
        */
-      sourdine: p.sourdine === 1,
+      sourdine:
+        p.sourdine === 1 || (p.sourdineJusqua != null && p.sourdineJusqua > new Date()),
+      // La sourdine pour un temps, et « mentions seulement » (01/11/2026).
+      sourdineJusqua:
+        p.sourdine !== 1 && p.sourdineJusqua != null && p.sourdineJusqua > new Date()
+          ? p.sourdineJusqua
+          : null,
+      mentionsSeulement: p.mentionsSeulement,
+      // Ajouté par quelqu'un, pas encore « Rester » : la bannière (01/11/2026).
+      arriveeAConfirmer: conv.isGroup && p.arriveeAConfirmer,
       isPinned: p.isPinned === 1,
       isArchived: p.isArchived === 1,
       /*
@@ -351,6 +360,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     data: {
       isGroup: true,
       name: body.name!,
+      // Le créateur est le PROPRIÉTAIRE (01/11/2026) : voir `groupe-droits.mjs`.
+      proprietaireId: userId,
+      ...(body.description ? { description: body.description } : {}),
       participants: {
         create: Array.from(memberIds).map((id) => ({
           userId: id,

@@ -8,6 +8,9 @@
 // désigner quelqu'un qui a quitté le groupe.
 type ParticipantLike = { userId: string; role: string; estMembre?: boolean };
 
+/** Voir `groupe-droits.mjs`, que ce helper garde pour ses appelants d'avant. */
+export { estAdminDuGroupe } from "./groupe-droits.mjs";
+
 export function isGroupAdmin(
   tous: ParticipantLike[],
   userId: string,

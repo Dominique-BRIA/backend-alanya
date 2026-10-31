@@ -27,9 +27,11 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
   await assertParticipant(convId, userId);
 
   // F10 : remet le compteur de non-lus à 0 quand l'utilisateur ouvre la conversation
-  await prisma.participant.update({
+  const lecteur = await prisma.participant.update({
     where: { convId_userId: { convId, userId } },
     data: { unreadCount: 0 },
+    // Ajouté alors que l'historique était caché aux nouveaux (01/11/2026).
+    select: { historiqueDepuis: true },
   });
 
   const cursor = req.nextUrl.searchParams.get("cursor");
@@ -64,6 +66,8 @@ export const GET = withAuth(async (req: NextRequest, userId: string, ctx) => {
       // définitive est faite périodiquement par le serveur WS).
       OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       ...(blockedIds.length > 0 ? { senderId: { notIn: blockedIds } } : {}),
+      // L'historique d'avant son arrivée, caché par le groupe (01/11/2026).
+      ...(lecteur.historiqueDepuis ? { createdAt: { gte: lecteur.historiqueDepuis } } : {}),
     },
     orderBy: { createdAt: "desc" },
     take: limit + 1,
@@ -480,6 +484,10 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     // reçoit simplement pas de réponses.
     if (envoi.motif === "COMPTE_OFFICIEL") {
       return fail(MESSAGE_REFUS_OFFICIEL, 403, "COMPTE_OFFICIEL");
+    }
+    // Mode annonce (01/11/2026) : seuls les admins écrivent dans ce groupe.
+    if (envoi.motif === "ADMINS_SEULS") {
+      return fail("Seuls les admins peuvent écrire dans ce groupe", 403, "ADMINS_SEULS");
     }
     // Les codes du contrat des stickers d'Alanya2026 (`stickerMessage.js`).
     if (envoi.motif === "STICKER_REFUSE") {
