@@ -1,87 +1,72 @@
 import { type NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { env } from "@/lib/env";
+import { serveursCloudflare, type ServeurIce } from "@/lib/turn-cloudflare";
 import crypto from "crypto";
 
-// Forcer Next.js à ne JAMAIS mettre en cache cette route (crucial pour les timestamps dynamiques)
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
-// GET /api/calls/ice — Distribution des serveurs Coturn sécurisés par utilisateur
+/*
+ * GET /api/calls/ice — les serveurs STUN/TURN d'un appel.
+ *
+ * 🔴 CLOUDFLARE D'ABORD, NOS RELAIS ENSUITE (03/11/2026, décision du user) :
+ *  1. le TURN de Cloudflare, s'il est configuré et répond (`turn-cloudflare.ts`) ;
+ *  2. nos relais coturn, toujours présents : `turn.kemita.eu` et
+ *     `turn.alanya226.com` — STUN et TURN sur 3478 (UDP et TCP), TURN chiffré
+ *     sur 443, qui passe les pare-feu les plus stricts ;
+ *  3. le STUN public de Google, en dernier secours.
+ *
+ * Le téléphone essaie tous ces serveurs EN MÊME TEMPS et garde le premier
+ * chemin qui marche : si Cloudflare ne passe pas depuis son réseau, l'appel
+ * bascule sur nos relais sans rien attendre.
+ *
+ * Identifiants de nos relais : le mécanisme standard de coturn — nom
+ * `<expiration>:<compte>` valable 24 h, mot de passe = HMAC-SHA1 du nom avec
+ * le secret partagé. Rien de permanent ne circule.
+ */
+function serveursCoturn(userId: string): ServeurIce[] {
+  const expiration = Math.floor(Date.now() / 1000) + 24 * 3600;
+  const username = `${expiration}:${userId}`;
+  const credential = crypto
+    .createHmac("sha1", env.coturn.secret())
+    .update(username)
+    .digest("base64");
+  const tls = new Set(env.coturn.tlsDomains());
+  const portTls = env.coturn.tlsPort();
+  return env.coturn.domains().flatMap((domaine) => [
+    { urls: [`stun:${domaine}:3478`] },
+    {
+      urls: [
+        `turn:${domaine}:3478?transport=udp`,
+        `turn:${domaine}:3478?transport=tcp`,
+        ...(tls.has(domaine) ? [`turns:${domaine}:${portTls}?transport=tcp`] : []),
+      ],
+      username,
+      credential,
+    },
+  ]);
+}
+
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
-  try {
-    const coturnSecret = env.coturn.secret();
-    const coturnDomains = env.coturn.domains();
-    const tlsDomains = new Set(env.coturn.tlsDomains());
+  // Borné par le délai de `serveursCloudflare` (3 s) ; un échec rend [] et
+  // l'appel part avec nos relais.
+  const cloudflare = await serveursCloudflare();
+  const iceServers: ServeurIce[] = [
+    ...cloudflare,
+    ...serveursCoturn(userId),
+    { urls: ["stun:stun.l.google.com:19302"] },
+  ];
 
-    // Récupération optionnelle du pseudo / numéro pour les logs
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { nom: true, pseudo: true, publicNumber: true },
-    });
-    const usernameLog = userId ?? "anonyme";
-
-    // Paramètres de validité (24 heures)
-    const duration = 24 * 3600; 
-    const timestamp = Math.floor(Date.now() / 1000) + duration;
-    const username = `${timestamp}:${userId}`;
-
-    // Calcul du mot de passe unique (HMAC-SHA1 en Base64)
-    const hmac = crypto.createHmac('sha1', coturnSecret);
-    hmac.update(username);
-    const credential = hmac.digest('base64');
-
-    // Génération de la liste des iceServers : UN SEUL url par entrée, et les
-    // identifiants UNIQUEMENT sur les entrées TURN/TURNS (jamais sur STUN).
-    // Mélanger stun/turn + credentials dans un même objet casse le TURN sur
-    // plusieurs implémentations WebRTC (dont flutter_webrtc).
-    const iceServers = [
-      { urls: "stun:stun.l.google.com:19302" },
-      ...coturnDomains.flatMap((domain) => [
-        { urls: `stun:${domain}:3478` },
-        { urls: `turn:${domain}:3478?transport=udp`, username, credential },
-        { urls: `turn:${domain}:3478?transport=tcp`, username, credential },
-        // TLS seulement là où il répond (31/10/2026) : un `turns:` mort faisait
-        // perdre du temps à chaque négociation. Voir `env.coturn.tlsDomains`.
-        ...(tlsDomains.has(domain)
-          ? [{ urls: `turns:${domain}:5349?transport=tcp`, username, credential }]
-          : []),
-      ]),
-    ];
-
-    // Log structuré pour le suivi
-    console.log(JSON.stringify({
+  console.log(
+    JSON.stringify({
       action: "ICE_SERVERS_GENERATED",
       timestamp: new Date().toISOString(),
       userId,
-      username: usernameLog,
-      duration: `${duration}s`,
-      domains: coturnDomains,
-    }));
+      cloudflare: cloudflare.length > 0,
+      domains: env.coturn.domains(),
+    }),
+  );
 
-    return ok({ iceServers });
-  } catch (err) {
-    console.error("[ICE] Erreur lors de la génération des serveurs ICE:", err);
-    
-    // Fallback minimal en cas d'erreur de base de données
-    const coturnSecret = env.coturn.secret();
-    const coturnDomains = env.coturn.domains();
-    const fallbackTimestamp = Math.floor(Date.now() / 1000) + 3600;
-    const fallbackUsername = `${fallbackTimestamp}:${userId}`;
-    const hmac = crypto.createHmac('sha1', coturnSecret);
-    hmac.update(fallbackUsername);
-    const fallbackCredential = hmac.digest('base64');
-
-    const fallbackIceServers = [
-      { urls: "stun:stun.l.google.com:19302" },
-      ...coturnDomains.flatMap((domain) => [
-        { urls: `stun:${domain}:3478` },
-        { urls: `turn:${domain}:3478?transport=udp`, username: fallbackUsername, credential: fallbackCredential },
-        { urls: `turn:${domain}:3478?transport=tcp`, username: fallbackUsername, credential: fallbackCredential },
-      ]),
-    ];
-
-    return ok({ iceServers: fallbackIceServers });
-  }
+  return ok({ iceServers });
 });

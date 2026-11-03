@@ -1,10 +1,9 @@
-// Sonde des relais TURN (31/10/2026) : STUN, allocation TURN authentifiée en
-// UDP, ports TCP 3478, TLS 5349 et 443. À lancer sur le serveur, avec l'env
-// de l'API chargé :  node scripts/sonde-turn.mjs
-// Le secret n'est jamais affiché.
-// Sonde TURN : STUN, allocation TURN authentifiée (UDP), ports TCP/TLS.
-// Lancée sur le VPS : lit COTURN_SECRET / COTURN_DOMAINS dans l'environnement,
-// n'affiche jamais le secret.
+// Sonde des relais TURN (31/10/2026, Cloudflare le 03/11/2026) : STUN,
+// allocation TURN authentifiée en UDP, ports TCP 3478 et TLS 443 — pour nos
+// relais coturn, et pour Cloudflare si CLOUDFLARE_TURN_ID et
+// CLOUDFLARE_TURN_API_TOKEN sont définis. À lancer sur le serveur, avec l'env
+// de l'API chargé :  node --env-file=.env scripts/sonde-turn.mjs
+// Ni le secret ni le jeton ne sont jamais affichés.
 import dgram from "node:dgram";
 import net from "node:net";
 import tls from "node:tls";
@@ -12,7 +11,7 @@ import crypto from "node:crypto";
 
 const secretDefini = !!process.env.COTURN_SECRET;
 const secret = process.env.COTURN_SECRET || "alanya1960-Secure";
-const domaines = (process.env.COTURN_DOMAINS || "alanya226.com,kemita.eu").split(",").map((d) => d.trim());
+const domaines = (process.env.COTURN_DOMAINS || "turn.kemita.eu,turn.alanya226.com").split(",").map((d) => d.trim());
 console.log(`COTURN_SECRET défini en production : ${secretDefini ? "oui" : "NON (valeur par défaut du dépôt)"}`);
 
 const COOKIE = 0x2112a442;
@@ -62,30 +61,59 @@ function tlsOk(hote, port, ms = 5000) {
     s.on("error", (e) => { clearTimeout(t); res(`échec : ${e.code || e.message}`); }); });
 }
 
+/** Allocation TURN en UDP avec un couple utilisateur / mot de passe. */
+async function allocation(d, user, mdp) {
+  const transport = Buffer.from([17, 0, 0, 0]);
+  const sock = dgram.createSocket("udp4");
+  try {
+    const r1 = await udp(d, 3478, message(0x0003, [[0x0019, transport]]), 4000, sock);
+    if (!r1) return "pas de réponse";
+    const realm = r1.attrs[0x0014]?.toString(); const nonce = r1.attrs[0x0015];
+    if (!realm || !nonce) return `réponse inattendue (type 0x${r1.type.toString(16)})`;
+    const cle = crypto.createHash("md5").update(`${user}:${realm}:${mdp}`).digest();
+    const r2 = await udp(d, 3478, message(0x0003, [[0x0006, Buffer.from(user)], [0x0014, Buffer.from(realm)], [0x0015, nonce], [0x0019, transport]], cle), 4000, sock);
+    if (r2?.type === 0x0103) return `ALLOCATION OK (realm ${realm})`;
+    if (r2?.type === 0x0113) { const e = r2.attrs[0x0009]; return `refus ${e ? e[2] * 100 + e[3] : "?"} ${e ? e.subarray(4).toString() : ""} (realm ${realm})`; }
+    return "pas de réponse à la requête authentifiée";
+  } finally {
+    sock.close();
+  }
+}
+
 for (const d of domaines) {
   console.log(`\n=== ${d}`);
   const stun = await udp(d, 3478, message(0x0001, []));
   console.log(`STUN UDP 3478 : ${stun && stun.type === 0x0101 ? "ok" : "pas de réponse"}`);
-
-  const transport = Buffer.from([17, 0, 0, 0]);
-  const sock = dgram.createSocket("udp4");
-  const r1 = await udp(d, 3478, message(0x0003, [[0x0019, transport]]), 4000, sock);
-  if (!r1) { console.log("TURN UDP : pas de réponse"); }
-  else {
-    const realm = r1.attrs[0x0014]?.toString(); const nonce = r1.attrs[0x0015];
-    if (!realm || !nonce) console.log(`TURN UDP : réponse inattendue (type 0x${r1.type.toString(16)})`);
-    else {
-      const user = `${Math.floor(Date.now() / 1000) + 600}:sonde`;
-      const mdp = crypto.createHmac("sha1", secret).update(user).digest("base64");
-      const cle = crypto.createHash("md5").update(`${user}:${realm}:${mdp}`).digest();
-      const r2 = await udp(d, 3478, message(0x0003, [[0x0006, Buffer.from(user)], [0x0014, Buffer.from(realm)], [0x0015, nonce], [0x0019, transport]], cle), 4000, sock);
-      if (r2?.type === 0x0103) console.log(`TURN UDP : ALLOCATION OK (realm ${realm})`);
-      else if (r2?.type === 0x0113) { const e = r2.attrs[0x0009]; console.log(`TURN UDP : refus ${e ? e[2] * 100 + e[3] : "?"} ${e ? e.subarray(4).toString() : ""} (realm ${realm})`); }
-      else console.log("TURN UDP : pas de réponse à la requête authentifiée");
-    }
-  }
-  sock.close();
+  const user = `${Math.floor(Date.now() / 1000) + 600}:sonde`;
+  const mdp = crypto.createHmac("sha1", secret).update(user).digest("base64");
+  console.log(`TURN UDP : ${await allocation(d, user, mdp)}`);
   console.log(`TCP 3478 : ${(await tcp(d, 3478)) ? "ouvert" : "fermé"}`);
-  console.log(`TLS 5349 : ${await tlsOk(d, 5349)}`);
   console.log(`TLS 443 : ${await tlsOk(d, 443)}`);
+}
+
+// ═══ Cloudflare, s'il est configuré
+const cfId = process.env.CLOUDFLARE_TURN_ID?.trim();
+const cfJeton = process.env.CLOUDFLARE_TURN_API_TOKEN?.trim();
+console.log("\n=== Cloudflare");
+if (!cfId || !cfJeton) {
+  console.log("non configuré (CLOUDFLARE_TURN_ID / CLOUDFLARE_TURN_API_TOKEN absents)");
+} else {
+  try {
+    const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(cfId)}/credentials/generate-ice-servers`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${cfJeton}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl: 600 }),
+    });
+    console.log(`API : HTTP ${r.status}`);
+    if (r.ok) {
+      const { iceServers = [] } = await r.json();
+      const turn = iceServers.find((s) => s.username && s.credential);
+      const urls = iceServers.flatMap((s) => (Array.isArray(s.urls) ? s.urls : [s.urls]));
+      console.log(`URL reçues : ${urls.length} (${urls.filter((u) => /:53(\?|$)/.test(u)).length} sur le port 53, écartées par l'API d'Alanya)`);
+      if (turn) console.log(`TURN UDP turn.cloudflare.com : ${await allocation("turn.cloudflare.com", turn.username, turn.credential)}`);
+      console.log(`TLS 443 turn.cloudflare.com : ${await tlsOk("turn.cloudflare.com", 443)}`);
+    }
+  } catch (e) {
+    console.log(`API : échec — ${e.message}`);
+  }
 }

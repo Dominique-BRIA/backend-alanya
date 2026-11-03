@@ -209,12 +209,23 @@ export const env = {
   // le helper env.webrtc.iceServers() (code mort) ont été retirés.
   coturn: {
     secret: () => optional("COTURN_SECRET", "alanya1960-Secure"),
-    domains: () => optional("COTURN_DOMAINS", "alanya226.com,kemita.eu").split(",").map(d => d.trim()),
     /**
-     * Les relais qui acceptent TURN sur TLS (port 5349). Sondé le 31/10/2026 :
-     * kemita.eu oui, alanya226.com NON (connexion refusée). Annoncer un
-     * `turns:` mort faisait perdre du temps à chaque négociation, pour rien.
+     * Nos relais, désormais sous leurs noms dédiés (02/11/2026) : STUN et TURN
+     * sur 3478, TURN chiffré (TLS) sur 443. Sondé le 03/11/2026 : les deux
+     * accordent l'allocation avec le même secret, et présentent un certificat
+     * valide sur 443 ; le 5349 ne répond plus.
      */
-    tlsDomains: () => optional("COTURN_TLS_DOMAINS", "kemita.eu").split(",").map(d => d.trim()).filter(Boolean),
+    domains: () => optional("COTURN_DOMAINS", "turn.kemita.eu,turn.alanya226.com").split(",").map(d => d.trim()).filter(Boolean),
+    /** Les relais qui acceptent TURN sur TLS, et leur port. */
+    tlsDomains: () => optional("COTURN_TLS_DOMAINS", "turn.kemita.eu,turn.alanya226.com").split(",").map(d => d.trim()).filter(Boolean),
+    tlsPort: () => Number(optional("COTURN_TLS_PORT", "443")) || 443,
+  },
+  /**
+   * Le TURN de Cloudflare, en premier choix (03/11/2026) — voir
+   * `turn-cloudflare.ts`. Absent = non utilisé.
+   */
+  cloudflareTurn: {
+    keyId: () => optional("CLOUDFLARE_TURN_ID").trim() || null,
+    apiToken: () => optional("CLOUDFLARE_TURN_API_TOKEN").trim() || null,
   },
 } as const;
