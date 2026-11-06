@@ -260,6 +260,7 @@ export async function pushIncomingCall(prisma, {
   callType,
   isGroup,
   groupName,
+  callerAvatarUrl,
 }) {
   if (!isPushEnabled()) return;
   callerName = (await nomDonnePar(prisma, recipientId, callerId)) ?? callerName;
@@ -282,6 +283,13 @@ export async function pushIncomingCall(prisma, {
       convId: convId ?? "",
       callerName,
       callType,
+      // Identité de l'appelant, comme dans la trame socket (06/11/2026) :
+      // application fermée, c'est ce push SEUL qui fait sonner. Sans
+      // `callerId`, le téléphone ne retrouvait ni la sonnerie de la liste de
+      // l'appelant ni sa conversation ; sans photo, l'écran d'appel natif
+      // n'affichait que l'initiale.
+      callerId: callerId ?? "",
+      callerAvatarUrl: callerAvatarUrl ?? "",
       isGroup: String(Boolean(isGroup)),
       title,
       body,
