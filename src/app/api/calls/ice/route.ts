@@ -3,6 +3,7 @@ import { ok } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { env } from "@/lib/env";
 import { serveursCloudflare, type ServeurIce } from "@/lib/turn-cloudflare";
+import { lireReglagesAppels } from "@/lib/reglages-appels";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,12 @@ export const dynamic = "force-dynamic";
 /*
  * GET /api/calls/ice — les serveurs STUN/TURN d'un appel.
  *
- * 🔴 CLOUDFLARE D'ABORD, NOS RELAIS ENSUITE (03/11/2026, décision du user) :
+ * 🔁 07/11/2026 : L'ORDRE SE CHOISIT DANS LA CONSOLE (Paramètres › Appels).
+ * « Cloudflare principal » donne l'ordre ci-dessous ; « nos relais
+ * principaux » place nos relais coturn avant Cloudflare. Voir
+ * `src/lib/reglages-appels.ts` pour ce que l'ordre change réellement.
+ *
+ * 🔴 PAR DÉFAUT, CLOUDFLARE D'ABORD, NOS RELAIS ENSUITE (03/11/2026, décision du user) :
  *  1. le TURN de Cloudflare, s'il est configuré et répond (`turn-cloudflare.ts`) ;
  *  2. nos relais coturn, toujours présents : `turn.kemita.eu` et
  *     `turn.alanya226.com` — STUN et TURN sur 3478 (UDP et TCP), TURN chiffré
@@ -51,10 +57,11 @@ function serveursCoturn(userId: string): ServeurIce[] {
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
   // Borné par le délai de `serveursCloudflare` (3 s) ; un échec rend [] et
   // l'appel part avec nos relais.
-  const cloudflare = await serveursCloudflare();
+  const [cloudflare, reglages] = await Promise.all([serveursCloudflare(), lireReglagesAppels()]);
+  const coturn = serveursCoturn(userId);
+  const nosRelaisDabord = reglages.relaisPrincipal === "nos_relais";
   const iceServers: ServeurIce[] = [
-    ...cloudflare,
-    ...serveursCoturn(userId),
+    ...(nosRelaisDabord ? [...coturn, ...cloudflare] : [...cloudflare, ...coturn]),
     { urls: ["stun:stun.l.google.com:19302"] },
   ];
 
@@ -64,6 +71,7 @@ export const GET = withAuth(async (_req: NextRequest, userId: string) => {
       timestamp: new Date().toISOString(),
       userId,
       cloudflare: cloudflare.length > 0,
+      principal: reglages.relaisPrincipal,
       domains: env.coturn.domains(),
     }),
   );
