@@ -1,6 +1,10 @@
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import type { StatutMessage } from "./api-contract";
+import { verifierUrlWebhook } from "./url-webhook";
+
+/** Au-delà, l'envoi est abandonné : nous n'attendons pas un récepteur muet. */
+const DELAI_ENVOI_MS = 5_000;
 
 /**
  * LES RAPPELS HTTP (webhooks) VERS L'ABONNÉ.
@@ -74,7 +78,7 @@ export async function notifierStatutMessage(
   numeroDestinataire: string,
 ): Promise<void> {
   try {
-    const webhook = await prisma.developerWebhook.findUnique({
+    const webhook = await prisma.developerWebhook.findFirst({
       where: { developerId, isActive: true },
     });
 
@@ -106,7 +110,23 @@ export async function notifierStatutMessage(
       entetes[ENTETE_SIGNATURE] = signerCorps(corps, webhook.secretKey);
     }
 
-    void fetch(webhook.url, { method: "POST", headers: entetes, body: corps }).catch(() => {});
+    /*
+     * 🔴 L'ADRESSE EST CONTRÔLÉE DE NOUVEAU À CHAQUE ENVOI (07/11/2026) : un nom
+     * qui pointait sur Internet à l'enregistrement peut viser notre réseau
+     * aujourd'hui. Et l'envoi a un délai maximal, sans suivre les
+     * redirections : une redirection vers une adresse interne contournerait le
+     * contrôle, et un récepteur muet ne doit pas retenir nos connexions.
+     */
+    const verdict = await verifierUrlWebhook(webhook.url);
+    if (!verdict.ok) return;
+
+    void fetch(verdict.url, {
+      method: "POST",
+      headers: entetes,
+      body: corps,
+      redirect: "manual",
+      signal: AbortSignal.timeout(DELAI_ENVOI_MS),
+    }).catch(() => {});
   } catch {
     // Silencieux : l'échec d'un rappel ne remonte pas jusqu'à l'expéditeur.
   }

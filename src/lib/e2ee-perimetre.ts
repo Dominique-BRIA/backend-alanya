@@ -32,21 +32,25 @@
  * (contrôlé par la route d'activation). Un centre vocal sans appareil
  * connecté n'en a pas — l'activation est alors refusée, rien ne casse.
  *
- * ── LE REFUS PROVISOIRE : LES COMPTES QUI ENVOIENT PAR L'API ─────────────
+ * ── LES MESSAGES DE L'API : LE COMPTE D'UNE ENSEIGNE (07/11/2026) ────────
  *
- * Les codes OTP, la double authentification et les envois groupés sont écrits
- * PAR LE SERVEUR, au nom d'un compte qui détient un compte développeur. Le
- * serveur ne peut pas écrire dans une conversation chiffrée : si l'on
- * chiffrait un tête-à-tête avec un tel compte, ses codes n'arriveraient plus.
- * Mesuré le 08/10/2026 : 4 comptes personnels et 1 agent envoient par l'API.
+ * Les messages de l'API sont écrits PAR LE SERVEUR, qui ne peut pas écrire
+ * dans une conversation chiffrée. Jusqu'au 07/11/2026, ils partaient au nom de
+ * la PERSONNE qui avait un compte développeur : on refusait donc de chiffrer
+ * tout tête-à-tête avec elle (motif `EMETTEUR_API`), et ouvrir la console
+ * suffisait à lui faire perdre le chiffrement avec tout le monde.
  *
- * On refuse donc de chiffrer un TÊTE-À-TÊTE dont un participant a un compte
- * développeur (`EMETTEUR_API`). À RETIRER quand le compte système « Alanya »
- * enverra ces messages (décision du 08/10/2026). Les groupes ne sont pas
- * concernés : l'API n'écrit que dans des conversations à deux.
+ * Depuis, l'API écrit au nom d'une ENSEIGNE, un compte à part de type 6
+ * (`TYPE_COMPTE_ENSEIGNE`). Le 6 n'est pas dans la liste blanche : une
+ * conversation avec une enseigne n'est jamais chiffrée (`HORS_PERIMETRE`), et
+ * le serveur peut toujours y écrire. Le refus `EMETTEUR_API` est retiré : le
+ * compte personnel d'un développeur chiffre comme tout le monde.
  */
 
-/** Les types de compte qui ouvrent droit au chiffrement (liste blanche). */
+/**
+ * Les types de compte qui ouvrent droit au chiffrement (liste blanche).
+ * ⚠️ Le 6 (enseigne) n'y entre JAMAIS : l'API écrit en son nom.
+ */
 export const TYPES_AUTORISES = [0, 2, 3, 4];
 
 type CompteJuge = { typeCompte?: number | null } | null | undefined;
@@ -56,7 +60,7 @@ export function peutChiffrer(user: CompteJuge): boolean {
   return TYPES_AUTORISES.includes(Number(user?.typeCompte ?? -1));
 }
 
-export type MotifRefus = "HORS_PERIMETRE" | "EMETTEUR_API";
+export type MotifRefus = "HORS_PERIMETRE";
 
 /**
  * Pourquoi cette conversation ne peut-elle pas être chiffrée ?
@@ -68,15 +72,10 @@ export type MotifRefus = "HORS_PERIMETRE" | "EMETTEUR_API";
  */
 export function motifRefus(conv: {
   isGroup: boolean;
-  participants: {
-    user: { typeCompte: number; developerAccount?: { id: string } | null } | null;
-  }[];
+  participants: { user: { typeCompte: number } | null }[];
 }): MotifRefus | null {
   if (conv.participants.some((p) => !peutChiffrer(p.user))) {
     return "HORS_PERIMETRE";
-  }
-  if (!conv.isGroup && conv.participants.some((p) => p.user?.developerAccount)) {
-    return "EMETTEUR_API";
   }
   return null;
 }

@@ -278,7 +278,10 @@ model User {
   invitationsQrUtilisees InvitationQr[]        @relation("InvitationQrUtilisateur")
 
   // --- Espace Développeur ---
-  developerAccount DeveloperAccount?
+  /// Rempli seulement sur le compte d'une ENSEIGNE (type 6).
+  developerAccount DeveloperAccount? @relation("CompteDeLEnseigne")
+  /// Les enseignes que cette personne a créées.
+  enseignes        DeveloperAccount[] @relation("EnseignesPossedees")
 
   // --- Relations vers les nouvelles tables du référentiel ---
   accessLogs      UserAccess[]
@@ -2836,61 +2839,46 @@ model JustificatifPaiement {
 }
 
 // ---------------------------------------------------------------------------
-// ESPACE DÉVELOPPEUR & API BILLING (MESSAGES X & MINUTES Y)
+// ESPACE DÉVELOPPEUR : ENSEIGNES, CLÉS, JOURNAL, WEBHOOKS
 // ---------------------------------------------------------------------------
 
-enum ApiKeyType {
-  SANDBOX
-  LIVE
-}
-
-enum TransactionType {
-  PURCHASE // Achat/Recharge de crédits
-  MESSAGE_SENT // Consommation message API
-  CALL_MINUTE // Consommation minute d'appel API
-  HOLD_RESERVE // Réservation d'appel WebRTC (5 min)
-  REFUND // Remboursement / Ajustement
-}
-
-enum TransactionStatus {
-  PENDING
-  SETTLED
-  CANCELLED
-}
-
-/// Compte Développeur Tiers
+/// Une ENSEIGNE de l'espace développeur (07/11/2026). La table garde son nom
+/// d'origine, `developer_accounts`, lue aussi par le second système.
+///
+/// 🔴 DEUX COMPTES, À NE PAS CONFONDRE :
+///  - `user` est le compte Alanya DE L'ENSEIGNE (type 6,
+///    `TYPE_COMPTE_ENSEIGNE`) : son nom, son numéro, et c'est lui qui envoie
+///    les messages de l'API. Il n'a ni mot de passe ni adresse : personne ne
+///    s'y connecte.
+///  - `proprietaire` est la personne qui a créé l'enseigne et la gère depuis
+///    la console. Son compte personnel n'envoie jamais rien par l'API, il garde
+///    donc tout son chiffrement de bout en bout.
+///
+/// Clés, journal, webhook et codes de vérification sont rangés par enseigne.
 model DeveloperAccount {
-  id             String   @id @default(uuid()) @map("developer_id") @db.Uuid
-  userId         String   @unique @map("user_id") @db.Uuid
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  companyName    String?  @map("company_name") @db.VarChar(100)
-  /// 🔴 PLUS UTILISÉES depuis le 21/08/2026 — la facturation a été supprimée
-  /// (l'API sert la plateforme de l'équipe, qui gère son propre paiement).
-  /// Aucune route ne les lit ni ne les écrit ; les valeurs en base sont figées
-  /// à ce qu'elles valaient. ⚠️ NON SUPPRIMÉES DE LA BASE À DESSEIN : elle est
-  /// partagée avec un second système, et un DROP COLUMN casserait ses lectures.
-  /// Ne pas les recâbler sans en reparler.
-  balanceCredits BigInt   @default(1000) @map("balance_credits")
-  holdCredits    BigInt   @default(0) @map("hold_credits")
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
+  id            String   @id @default(uuid()) @map("developer_id") @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  user          User     @relation("CompteDeLEnseigne", fields: [userId], references: [id], onDelete: Cascade)
+  proprietaireId String  @map("proprietaire_id") @db.Uuid
+  proprietaire  User     @relation("EnseignesPossedees", fields: [proprietaireId], references: [id], onDelete: Cascade)
+  /// Le nom de l'enseigne (colonne d'origine `company_name`).
+  nom           String?  @map("company_name") @db.VarChar(100)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   apiKeys       ApiKey[]
-  ledger        DevLedger[]
-  workspaces    DeveloperWorkspace[]
   logs          DeveloperApiLog[]
   webhooks      DeveloperWebhook?
-  otps          DeveloperOtp[]
-  medias        DeveloperMedia[]
-  /// Codes de vérification — remplace [otps], voir [Verification].
   verifications Verification[]
 
+  @@index([proprietaireId], map: "developer_accounts_proprietaire_idx")
   @@map("developer_accounts")
 }
 
 /// Un code de vérification : double authentification, création d'agent, etc.
 ///
-/// 🔴 REMPLACE [DeveloperOtp], qui ne pouvait pas garder un second facteur —
+/// 🔴 REMPLACE l'ancienne table `developer_otps` (supprimée le 07/11/2026), qui
+/// ne pouvait pas garder un second facteur —
 /// code stocké en clair, aucun compteur de tentatives, aucune finalité, aucun
 /// état de livraison. Les quatre manques sont comblés ici, et les bornes sont
 /// portées par des CHECK en base plutôt que par le code : deux systèmes
@@ -2933,8 +2921,9 @@ model Verification {
   livraison       String  @default("EN_ATTENTE") @db.VarChar(20)
   livraisonDetail String? @map("livraison_detail") @db.VarChar(255)
 
-  /// Source de la demande, pour le plafond par IP. Nullable : un appel
-  /// serveur à serveur derrière un relais peut ne pas en fournir.
+  /// Source de la demande, gardée pour les journaux. ⚠️ Plus aucun plafond ne
+  /// la lit (07/11/2026) : en serveur à serveur, c'est l'adresse du serveur de
+  /// l'enseigne, la même pour tous ses utilisateurs.
   ipDemande String?  @map("ip_demande") @db.Inet
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
@@ -2944,126 +2933,62 @@ model Verification {
   @@map("verification")
 }
 
-/// Workspace / Projet Développeur (Multi-Projets)
-model DeveloperWorkspace {
-  id          String           @id @default(uuid()) @map("workspace_id") @db.Uuid
+/// Une clé d'API, rattachée à une enseigne.
+///
+/// 🔴 PLUS DE TYPE SANDBOX / PRODUCTION (07/11/2026) : les deux produisaient
+/// des effets réels, le choix ne servait qu'à tromper. Toutes les clés
+/// commencent par `ak_live_` ; les anciennes `ak_test_` ont disparu avec les
+/// comptes d'avant les enseignes.
+///
+/// `prefix` garde les 12 premiers caractères de la clé (`ak_live_a1b2`), les
+/// mêmes que `DeveloperApiLog.keyPrefix` : c'est ce qui relie une ligne du
+/// journal à la clé qui l'a produite.
+model ApiKey {
+  id          String           @id @default(uuid()) @map("key_id") @db.Uuid
   developerId String           @map("developer_id") @db.Uuid
   developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  name        String           @db.VarChar(100) // ex: "App Mobile Production", "Bot Support"
-  description String?          @db.VarChar(255)
+  keyHash     String           @unique @map("key_hash") @db.VarChar(255)
+  prefix      String           @db.VarChar(15)
+  name        String           @db.VarChar(50)
+  isActive    Boolean          @default(true) @map("is_active")
+  lastUsedAt  DateTime?        @map("last_used_at") @db.Timestamptz
   createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
-
-  apiKeys ApiKey[]
-  logs    DeveloperApiLog[]
-
-  @@map("developer_workspaces")
-}
-
-/// Clés d'API Développeur
-model ApiKey {
-  id          String              @id @default(uuid()) @map("key_id") @db.Uuid
-  developerId String              @map("developer_id") @db.Uuid
-  developer   DeveloperAccount    @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  workspaceId String?             @map("workspace_id") @db.Uuid
-  workspace   DeveloperWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-  keyHash     String              @unique @map("key_hash") @db.VarChar(255)
-  prefix      String              @db.VarChar(15) // ak_test_... ou ak_live_...
-  name        String              @db.VarChar(50) // ex: "Application Mobile Prod"
-  type        ApiKeyType          @default(SANDBOX)
-  isActive    Boolean             @default(true) @map("is_active")
-  lastUsedAt  DateTime?           @map("last_used_at") @db.Timestamptz
-  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
 
   @@map("developer_api_keys")
 }
 
-/// Journal de Consommation & Télémétrie API Développeur
+/// Journal des appels à `/api/v1/*`, par enseigne.
 model DeveloperApiLog {
-  id          String              @id @default(uuid()) @map("log_id") @db.Uuid
-  developerId String              @map("developer_id") @db.Uuid
-  developer   DeveloperAccount    @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  workspaceId String?             @map("workspace_id") @db.Uuid
-  workspace   DeveloperWorkspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
-  keyPrefix   String?             @map("key_prefix") @db.VarChar(15)
-  endpoint    String              @db.VarChar(255)
-  method      String              @default("POST") @db.VarChar(10)
-  statusCode  Int                 @map("status_code")
-  latencyMs   Int                 @map("latency_ms")
-  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  id          String           @id @default(uuid()) @map("log_id") @db.Uuid
+  developerId String           @map("developer_id") @db.Uuid
+  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
+  keyPrefix   String?          @map("key_prefix") @db.VarChar(15)
+  endpoint    String           @db.VarChar(255)
+  method      String           @default("POST") @db.VarChar(10)
+  statusCode  Int              @map("status_code")
+  latencyMs   Int              @map("latency_ms")
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([developerId, createdAt(sort: Desc)])
   @@map("developer_api_logs")
 }
 
-/// Webhooks Développeur pour Callbacks de Statut et Messages Entrants (Standard WhatsApp)
+/// Le webhook d'une enseigne : une URL, et le secret qui signe chaque envoi.
+///
+/// ⚠️ Le secret est réaffichable dans la console (décision du user, 07/11/2026),
+/// comme chez Stripe : il est de toute façon gardé lisible, il faut bien
+/// signer avec.
 model DeveloperWebhook {
   id          String           @id @default(uuid()) @map("webhook_id") @db.Uuid
   developerId String           @unique @map("developer_id") @db.Uuid
   developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
   url         String           @db.VarChar(500)
-  verifyToken String?          @map("verify_token") @db.VarChar(100)
   secretKey   String?          @map("secret_key") @db.VarChar(100)
   isActive    Boolean          @default(true) @map("is_active")
   createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("developer_webhooks")
-}
-
-/// Codes OTP d'Authentification 2FA Développeur.
-/// 🔴 TABLE MORTE — remplacée par [Verification], qui sale et hache le code
-/// (celle-ci le stockait EN CLAIR dans `code`), compte les tentatives et
-/// constate la livraison. Aucun code ne l'écrit plus.
-/// ⚠️ NON SUPPRIMÉE : base partagée. Ne pas la réutiliser.
-model DeveloperOtp {
-  id              String           @id @default(uuid()) @map("otp_id") @db.Uuid
-  developerId     String           @map("developer_id") @db.Uuid
-  developer       DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  recipientNumber String           @map("recipient_number") @db.VarChar(30)
-  code            String           @db.VarChar(10)
-  expiresAt       DateTime         @map("expires_at") @db.Timestamptz
-  isVerified      Boolean          @default(false) @map("is_verified")
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
-
-  @@index([recipientNumber, code])
-  @@map("developer_otps")
-}
-
-/// Registre des Médias API (Image, Audio, Documents - Standard WhatsApp Media API)
-/// 🔴 TABLE MORTE depuis le 21/08/2026 — plus aucun code ne l'écrit ni ne la
-/// lit. `POST /api/v1/media` téléverse désormais pour de vrai et crée un
-/// [MediaFile] ordinaire, ce qui lui donne le contrôle d'accès de
-/// `/api/media/:id`. Cette table n'enregistrait qu'une URL fournie par
-/// l'appelant, avec une taille en dur et un type MIME jamais vérifié.
-/// ⚠️ NON SUPPRIMÉE : base partagée avec un second système. Ne pas la
-/// réutiliser — c'est [MediaFile] qui fait foi.
-model DeveloperMedia {
-  id          String           @id @default(uuid()) @map("media_id") @db.Uuid
-  developerId String           @map("developer_id") @db.Uuid
-  developer   DeveloperAccount @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  url         String           @db.VarChar(500)
-  mimeType    String           @map("mime_type") @db.VarChar(100)
-  size        Int
-  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz
-
-  @@map("developer_medias")
-}
-
-/// Registre Financier Double-Entrée pour Développeurs (Ledger)
-model DevLedger {
-  id          String            @id @default(uuid()) @map("ledger_id") @db.Uuid
-  developerId String            @map("developer_id") @db.Uuid
-  developer   DeveloperAccount  @relation(fields: [developerId], references: [id], onDelete: Cascade)
-  amount      BigInt // Positif = recharge, Négatif = consommation
-  type        TransactionType
-  status      TransactionStatus @default(SETTLED)
-  referenceId String?           @map("reference_id") @db.VarChar(100) // ID de message, ID d'appel ou ID Stripe
-  description String?           @db.VarChar(255)
-  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz
-
-  @@index([developerId, createdAt])
-  @@map("developer_ledgers")
 }
 
 // ===============================================================

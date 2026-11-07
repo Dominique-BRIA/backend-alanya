@@ -7,6 +7,40 @@ Ce document décrit ce qui est **gelé** — donc ce contre quoi on peut constru
 sans risque de reprise — et ce qui reste **à décider**. Tout ce qui n'y figure
 pas est susceptible de changer.
 
+> 🔴 **LES ROUTES DE LA CONSOLE ONT CHANGÉ LE 07/11/2026 — les ENSEIGNES.**
+> Ce qui suit l'emporte sur tout le reste du document.
+>
+> Une personne se connecte avec son compte Alanya, puis crée une **enseigne** :
+> un nom, et un compte Alanya propre (type 6) avec son numéro. Les clés, le
+> journal et le webhook appartiennent à l'enseigne, et c'est elle qui envoie
+> les messages. **Rien n'est plus créé à la simple lecture.** Les comptes
+> développeurs d'avant, leurs clés et les espaces de travail ont été supprimés.
+>
+> | Route | Rôle |
+> |---|---|
+> | `GET /api/developer/enseignes` | `{ autorise, limite, confirmationRequise, enseignes[] }` |
+> | `POST /api/developer/enseignes` | `{ nom }` → l'enseigne et son `numero` |
+> | `DELETE /api/developer/enseignes/:id` | supprime l'enseigne et tout ce qu'elle porte |
+> | `POST /api/developer/confirmation` | envoie un code dans l'application : `{ defiId }` |
+> | `PUT /api/developer/confirmation` | `{ defiId, code }` : confirme l'identité (30 min) |
+> | `GET /api/developer/keys?enseigne=` | les clés : nom, 12 premiers caractères, dates |
+> | `POST /api/developer/keys` | `{ enseigneId, nom? }` → `cleComplete`, montrée une fois |
+> | `DELETE /api/developer/keys` | `{ enseigneId, cleId }` : révoque |
+> | `GET /api/developer/webhooks?enseigne=` | l'adresse et le secret (réaffichable) |
+> | `POST /api/developer/webhooks` | `{ enseigneId, url, actif?, changerSecret? }` |
+> | `DELETE /api/developer/webhooks` | `{ enseigneId }` |
+> | `GET /api/developer/logs?enseigne=` | le journal, forme inchangée (§4.5) |
+>
+> - **Qui peut créer une enseigne** : tous les comptes sauf agent, centre
+>   d'appels et centre vocal (`403 TYPE_COMPTE_EXCLU`).
+> - **Combien** : réglé dans le backoffice (réglage `developpeur`, champ
+>   `enseignesParPersonne`), 1 par défaut (`409 LIMITE_ENSEIGNES`).
+> - **Confirmation** : un compte qui a l'application reçoit un code avant de
+>   créer une enseigne (`403 CONFIRMATION_REQUISE` tant qu'il n'est pas saisi).
+>   Un code de connexion web validé depuis moins de 30 minutes suffit.
+> - Les routes `workspaces`, `auth/register-dev` et le type Sandbox/Production
+>   n'existent plus.
+
 > 🔴 **CE DOCUMENT EST PARTIELLEMENT PÉRIMÉ — mise à jour du 21/08/2026.**
 >
 > **La facturation a été SUPPRIMÉE.** Cette API n'est pas vendue à des

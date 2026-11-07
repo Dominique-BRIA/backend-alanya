@@ -55,6 +55,12 @@ export const CODE = {
    * l'existence d'un identifiant qui ne vous regarde pas.
    */
   MEDIA_INTERDIT: "MEDIA_FORBIDDEN",
+  /**
+   * Le message est refusé pour une autre raison qu'un blocage (compte
+   * officiel, conversation réservée…). **HTTP 409.** Le motif interne est dans
+   * le message. Ajouté le 07/11/2026 : ces cas étaient rendus comme un blocage.
+   */
+  ENVOI_REFUSE: "MESSAGE_REFUSED",
   /** Type de fichier hors liste blanche. **HTTP 415.** */
   MEDIA_TYPE_REFUSE: "MEDIA_TYPE_REJECTED",
   /** Fichier au-delà du plafond de taille. **HTTP 413.** */

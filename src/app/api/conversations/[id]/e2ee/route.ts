@@ -59,9 +59,9 @@ async function etat(convId: string) {
         select: {
           userId: true,
           role: true,
-          // Le TYPE de chaque compte, et s'il écrit par l'API : c'est ce que
-          // juge `motifRefus`.
-          user: { select: { typeCompte: true, developerAccount: { select: { id: true } } } },
+          // Le TYPE de chaque compte : c'est ce que juge `motifRefus`. Une
+          // enseigne (type 6, l'expéditeur de l'API) est hors du périmètre.
+          user: { select: { typeCompte: true } },
         },
       },
     },
@@ -190,14 +190,6 @@ export const POST = withAuth(
         "Un participant a un type de compte que le chiffrement ne couvre pas.",
         400,
         "HORS_PERIMETRE",
-      );
-    }
-    if (e.refus === "EMETTEUR_API") {
-      return fail(
-        "Ce correspondant envoie des messages automatiques (codes, alertes) : " +
-          "la conversation ne peut pas être chiffrée pour l'instant.",
-        400,
-        "EMETTEUR_API",
       );
     }
     if (e.sansCles.length > 0) {

@@ -1,8 +1,26 @@
 # API Alanya v1 — guide d'intégration serveur à serveur
 
-**Rédigé pour être transmis tel quel.** Version du 21/08/2026.
+**Rédigé pour être transmis tel quel.** Version du 21/08/2026, mise à jour le
+07/11/2026.
 
 Destinataire : l'équipe dont la plateforme consomme `/api/v1/*` avec une clé API.
+
+> 🔴 **CE QUI CHANGE LE 07/11/2026 — les ENSEIGNES.**
+>
+> - **Une clé appartient à une enseigne.** Dans la console développeur, on se
+>   connecte avec son compte Alanya, puis on crée une enseigne : un nom, et un
+>   numéro Alanya qui lui est propre. **Les messages partent du numéro de
+>   l'enseigne**, jamais de celui de la personne qui la gère.
+> - **Toutes les clés d'avant ont été supprimées**, avec les comptes
+>   développeurs qui les portaient. Il faut en créer de nouvelles dans une
+>   enseigne.
+> - **Une seule sorte de clé**, `ak_live_…`. Le choix Sandbox / Production a
+>   disparu.
+> - Textes limités à **500 caractères**, refusés au-delà (§5) ; codes de
+>   vérification comptés **par enseigne** (§4, §7) ; webhooks en **https**
+>   vers une adresse publique, secret réaffichable dans la console (§8).
+> - On ne peut pas appeler une enseigne : son compte sert à envoyer, personne
+>   n'y répond.
 
 🔴 **Cette API n'est pas un produit vendu à des développeurs extérieurs.** Elle
 sert la plateforme de l'équipe, qui porte son propre mécanisme de paiement. Ce
@@ -45,9 +63,12 @@ La clé n'est montrée **qu'une fois**, à sa création. Nous n'en stockons que
 l'empreinte SHA-256 : nous ne pouvons pas vous la relire, seulement en émettre
 une nouvelle.
 
-⚠️ Les clés existent en deux types, `ak_test_` et `ak_live_`. **Cette distinction
-ne change rien** : il n'y a pas de bac à sable, les deux produisent des effets
-réels. Ne fondez aucune logique dessus.
+Une clé appartient à **une enseigne** : tout ce qu'elle fait (messages, codes,
+fichiers) se fait au nom de cette enseigne, et apparaît dans son journal. La
+console montre de chaque clé son nom, ses 12 premiers caractères (les mêmes que
+dans le journal), sa création et sa dernière utilisation.
+
+Il n'y a pas de bac à sable : toute clé produit des effets réels.
 
 🔴 **Une clé API dans du JavaScript de navigateur est une clé publiée.** Ces
 routes sont faites pour être appelées par **votre serveur**.
@@ -74,6 +95,7 @@ programme et ne change pas. **Ne jamais brancher sur `message`.**
 | `VALIDATION` | 422 | Un champ est absent, vide ou hors bornes — voir ci-dessous |
 | `RECIPIENT_NOT_FOUND` | 404 | Le numéro ne correspond à aucun compte Alanya |
 | `RECIPIENT_BLOCKED` | 403 | Blocage entre l'expéditeur et le destinataire |
+| `MESSAGE_REFUSED` | 409 | Message refusé pour une autre raison (motif dans `message`) |
 | `MEDIA_FORBIDDEN` | 403 | Média inconnu, ou téléversé par une autre clé |
 | `MEDIA_TYPE_REJECTED` | 415 | Type de fichier hors liste blanche |
 | `MEDIA_TOO_LARGE` | 413 | Fichier au-delà du plafond |
@@ -106,9 +128,12 @@ Le plafond est **par clé ET par route** : une rafale d'envois ne bloque pas la
 en-tête **`Retry-After` en secondes** — attendez cette durée plutôt que de
 deviner.
 
-`POST /api/v1/verifications` porte en plus des plafonds **par destination et par
-heure** et **par IP et par heure** : ils protègent la personne qui reçoit les
-codes, pas notre infrastructure.
+`POST /api/v1/verifications` porte en plus un plafond **par enseigne, par
+destination et par heure**, et un plafond global par destination trois fois
+plus large : ils protègent la personne qui reçoit les codes, pas notre
+infrastructure. Il n'y a **plus de plafond de codes par IP** (07/11/2026) :
+toutes vos demandes partent de votre serveur, il aurait limité toute votre
+plateforme d'un coup.
 
 > ⚠️ Ces compteurs vivent en mémoire du processus. Le backend n'en a qu'un
 > aujourd'hui, donc le compte est exact ; en grappe, le plafond réel sera plus
@@ -132,11 +157,13 @@ curl -X POST https://alanyavox.com/api/v1/messages \
 |---|---|---|
 | `destinataire` | oui | Numéro public Alanya **ou** mobile |
 | `type` | non | `TEXT` (défaut), `IMAGE`, `VIDEO`, `AUDIO`, `FILE`, `CONTACT`, `LOCATION` |
-| `texte` | selon | Le message, ou la légende d'un média. Charge JSON pour `CONTACT` / `LOCATION` |
+| `texte` | selon | Le message, ou la légende d'un média, **500 caractères au plus** (boutons compris). Charge JSON pour `CONTACT` / `LOCATION` |
 | `mediaIds` | selon | Jusqu'à 10 identifiants rendus par `POST /api/v1/media` |
 | `options` | non | Boutons de réponse rapide — voir §5.1 |
 
-Il faut **au moins** un `texte` ou un `mediaIds` non vide : sinon `422`.
+Il faut **au moins** un `texte` ou un `mediaIds` non vide : sinon `422`. Un
+texte de plus de 500 caractères est **refusé** (`422`), il n'est plus coupé
+sans prévenir. Le message part **du numéro de l'enseigne** de la clé.
 
 ```json
 {
@@ -153,12 +180,14 @@ Il faut **au moins** un `texte` ou un `mediaIds` non vide : sinon `422`.
 `id` est **l'identifiant réel du message**, sans préfixe ni enrobage : c'est la
 même valeur que celle portée par le webhook.
 
-Trois refus à traiter :
+Quatre refus à traiter :
 
 - **404 `RECIPIENT_NOT_FOUND`** — le destinataire doit avoir un compte Alanya.
   Il n'y a pas d'envoi vers un numéro hors plateforme.
 - **403 `RECIPIENT_BLOCKED`** — l'un des deux a bloqué l'autre. Ce n'est pas
   passager : cessez de réessayer.
+- **409 `MESSAGE_REFUSED`** — refus pour une autre raison, dite dans `message`.
+  Ce n'est pas passager non plus.
 - **403 `MEDIA_FORBIDDEN`** — un `mediaIds` est inconnu, ou a été téléversé par
   une autre clé. Vous ne pouvez joindre que vos propres fichiers.
 
@@ -258,8 +287,9 @@ suffisait que votre relais journalise nos réponses pour publier tous les codes.
 
 🔴 **`livraison: "REMIS"` est CONSTATÉ, jamais supposé.** Si rien n'est parti,
 vous recevez **502 `VERIFICATION_NOT_DELIVERED`** et non un faux succès. Un seul
-code est vivant à la fois par couple (destination, finalité) : en émettre un
-nouveau invalide le précédent.
+code est vivant à la fois par enseigne, destination et finalité : en émettre un
+nouveau invalide le précédent — le vôtre seulement. Le code qu'une autre
+enseigne a envoyé à la même personne n'est pas touché (07/11/2026).
 
 ### Vérifier
 
@@ -280,8 +310,15 @@ utilisateurs se faire bloquer sans prévenir.
 
 ## 8. Webhooks
 
-Configurés depuis le tableau de bord (`POST /api/developer/webhooks`). Nous
-appelons votre URL en `POST` :
+Configurés depuis la console développeur, un par enseigne. Nous appelons votre
+URL en `POST`, avec un délai maximal de 5 secondes et sans suivre de
+redirection.
+
+⚠️ **L'adresse doit être en `https://` et joignable sur Internet** (07/11/2026) :
+une adresse de réseau privé, locale ou interne à un hébergeur est refusée à
+l'enregistrement, et de nouveau contrôlée à chaque envoi.
+
+La charge :
 
 ```json
 {
@@ -298,7 +335,9 @@ appelons votre URL en `POST` :
 `evenement` n'a aujourd'hui qu'une valeur. **Aiguillez quand même dessus** :
 c'est ce qui nous permettra d'en ajouter sans casser votre récepteur.
 
-`statut` vaut `ENVOYE`, `REMIS`, `LU` ou `ECHEC`.
+`statut` vaut `ENVOYE`, `REMIS`, `LU` ou `ECHEC`. ⚠️ Aujourd'hui, un seul envoi
+part, au moment de l'envoi du message (`ENVOYE`) ; les statuts suivants et les
+messages reçus par l'enseigne ne sont pas encore transmis.
 
 ### Vérifier la signature
 
@@ -314,10 +353,10 @@ X-Alanya-Signature: sha256=<hex>
 3. **Rejetez toute requête non signée.** Si aucun secret n'est configuré, nous
    n'envoyons plus d'en-tête du tout, au lieu d'en envoyer un faux.
 
-Le `secretKey` est tiré par nos soins (32 octets d'aléa) et **rendu une seule
-fois**, à l'enregistrement du webhook. `GET /api/developer/webhooks` ne le relit
-plus ; il rend `secretKeyDefini: true|false`. Renvoyer un `secretKey` dans un
-`POST` le remplace ; ne pas en envoyer conserve celui en place.
+Le secret (`whsec_…`, 32 octets d'aléa) est tiré par nos soins à la première
+configuration. **Il se réaffiche dans la console à tout moment** (07/11/2026),
+et « Changer le secret » en tire un nouveau : l'ancien cesse aussitôt de
+valoir. Changer seulement l'adresse conserve le secret.
 
 ## 9. Journal d'activité, et ce qu'il nous faut de vous
 
@@ -335,7 +374,7 @@ De votre côté, il nous faut :
 1. **Le volume attendu** : messages par jour, et codes de vérification par jour.
    Les plafonds du §4 s'ajustent, mais pas après coup un jour de pointe.
 2. **L'IP ou les IP sortantes de votre serveur**, pour vérifier que le plafond
-   de 120/min par IP est confortable.
+   de 120 requêtes par minute et par IP est confortable.
 3. ⚠️ **Notre courrier sortant est aujourd'hui plafonné à 500 destinataires par
    jour** (relais Gmail), avec suspension de 24 h au dépassement — incompatible
    avec de la 2FA à volume. Nous basculons sur `no-reply@alanyavox.com` ;

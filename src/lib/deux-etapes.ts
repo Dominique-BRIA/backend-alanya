@@ -44,6 +44,21 @@ function empreinte(code: string): string {
   return createHash("sha256").update(code).digest("hex");
 }
 
+/**
+ * À quoi sert le code. Le même mécanisme confirme une connexion web et, depuis
+ * le 07/11/2026, la création d'une enseigne dans l'espace développeur (action
+ * sensible : elle donne le droit d'écrire à n'importe qui sur Alanya).
+ */
+export type ObjetDefi = "connexion" | "enseigne";
+
+const TEXTES_DEFI: Record<ObjetDefi, { titre: string; consigne: string }> = {
+  connexion: { titre: "Code de connexion web", consigne: "à saisir dans le navigateur" },
+  enseigne: {
+    titre: "Code de l'espace développeur",
+    consigne: "pour créer une enseigne, à saisir dans le navigateur",
+  },
+};
+
 export type ResultatDefi =
   | { ok: true; defiId: string }
   | { ok: false; code: "SANS_APPLICATION" };
@@ -56,7 +71,11 @@ export type ResultatDefi =
  * n'arriverait nulle part. On refuse plutôt que de laisser attendre un code
  * qui ne viendra jamais.
  */
-export async function lancerDefi(userId: string, req: NextRequest): Promise<ResultatDefi> {
+export async function lancerDefi(
+  userId: string,
+  req: NextRequest,
+  objet: ObjetDefi = "connexion",
+): Promise<ResultatDefi> {
   const appareils = await prisma.pushDevice.count({ where: { userId } });
   if (appareils === 0) return { ok: false, code: "SANS_APPLICATION" };
 
@@ -77,19 +96,22 @@ export async function lancerDefi(userId: string, req: NextRequest): Promise<Resu
   });
 
   // L'application ouverte : une fenêtre avec le code, et « Ce n'est pas moi ».
+  // `objet` dit à quoi sert le code ; une application ancienne l'ignore et
+  // affiche sa fenêtre de connexion web, avec le bon code quand même.
   await previensDesPersonnes({
     personnes: [userId],
     type: "connexion_web_code",
-    donnees: { defiId: defi.id, code, navigateur, ip, expireLe: expireLe.toISOString() },
+    donnees: { defiId: defi.id, code, navigateur, ip, expireLe: expireLe.toISOString(), objet },
   });
 
   // L'application en veille : une notification qui porte le code.
   try {
     const { sendPushToUser } = await import("@/../push.mjs");
+    const texte = TEXTES_DEFI[objet];
     await sendPushToUser(prisma, userId, {
-      title: "Code de connexion web",
-      body: `${code} — à saisir dans le navigateur (${navigateur}). Ce n'est pas vous ? Ignorez ce code.`,
-      data: { type: "connexion_web_code", defiId: defi.id, code, navigateur },
+      title: texte.titre,
+      body: `${code} — ${texte.consigne} (${navigateur}). Ce n'est pas vous ? Ignorez ce code.`,
+      data: { type: "connexion_web_code", defiId: defi.id, code, navigateur, objet },
     });
   } catch {
     // La trame temps réel a peut-être suffi ; le navigateur pourra redemander.

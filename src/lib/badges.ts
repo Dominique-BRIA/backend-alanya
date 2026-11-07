@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
+import { TYPE_COMPTE_ENSEIGNE } from "@/lib/developer/enseignes";
 
 /**
  * LES BADGES À CÔTÉ DU NOM — décidés ICI, affichés tels quels par les clients
@@ -16,12 +17,16 @@ import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
  * Les RÈGLES restent dans le code — ce sont celles du métier :
  *   - `officiel` : le compte « Alanya Work » (type_compte 5) ;
  *   - `verifie`  : une entreprise dont la vérification est accordée et pas
- *                  encore échue (`verification_statut` 2, `verifie_jusqua`).
+ *                  encore échue (`verification_statut` 2, `verifie_jusqua`) ;
+ *   - `enseigne` : le compte d'une enseigne de l'espace développeur
+ *                  (type_compte 6, 07/11/2026). Ses messages sont envoyés par
+ *                  l'API : le badge dit au destinataire qu'il parle à un
+ *                  service, pas à une personne.
  *
  * FACULTATIF POUR LE CLIENT : un client ancien ignore le champ `badge`.
  */
 
-export const TYPES_BADGE = ["officiel", "verifie"] as const;
+export const TYPES_BADGE = ["officiel", "verifie", "enseigne"] as const;
 export type TypeBadge = (typeof TYPES_BADGE)[number];
 
 export type ApparenceBadge = { actif: boolean; image: string; libelle: string };
@@ -32,6 +37,7 @@ export const CLE_REGLAGE_BADGES = "badges";
 export const BADGES_PAR_DEFAUT: Record<TypeBadge, ApparenceBadge> = {
   officiel: { actif: true, image: "/badges/officiel.png", libelle: "Compte officiel" },
   verifie: { actif: true, image: "/badges/verifie.png", libelle: "Entreprise vérifiée" },
+  enseigne: { actif: true, image: "/badges/enseigne.png", libelle: "Enseigne" },
 };
 
 export const apparenceSchema = z.object({
@@ -78,6 +84,7 @@ type CompteBadge = {
 /** Quel badge revient à ce compte ? (règle seule, sans l'apparence) */
 export function typeBadge(u: CompteBadge, maintenant = new Date()): TypeBadge | null {
   if (u.typeCompte === TYPE_COMPTE_OFFICIEL) return "officiel";
+  if (u.typeCompte === TYPE_COMPTE_ENSEIGNE) return "enseigne";
   if (
     u.verificationStatut === VERIFICATION_ACCORDEE &&
     (!u.verifieJusqua || u.verifieJusqua > maintenant)

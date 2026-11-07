@@ -5,9 +5,10 @@
  * Joue les VRAIES routes contre un serveur local (`next dev -p 3107`), sur la
  * base de DÉVELOPPEMENT.
  *
- *   ① les types 2, 3 et 4 chiffrent désormais, le 9 et l'inconnu non ;
- *   ② un tête-à-tête avec un compte qui envoie par l'API est refusé
- *     (EMETTEUR_API, provisoire) — un groupe ne l'est pas ;
+ *   ① les types 2, 3 et 4 chiffrent désormais ; le 6 (enseigne), le 9 et
+ *     l'inconnu non ;
+ *   ② l'API (07/11/2026) : la personne qui possède une enseigne chiffre comme
+ *     tout le monde ; un tête-à-tête avec l'enseigne elle-même, non ;
  *   ③ un groupe ne s'active que par un administrateur, depuis un appareil qui a
  *     publié ses clés, et crée la version 1 en même temps que le drapeau ;
  *   ④ deux activations simultanées : une seule version 1, aucune erreur ;
@@ -49,7 +50,7 @@ async function compte(marque) {
       typeCompte: 0,
     },
   })
-  await prisma.developerAccount.deleteMany({ where: { userId: user.id } })
+  await prisma.developerAccount.deleteMany({ where: { proprietaireId: user.id } })
   await prisma.e2eeIdentite.upsert({
     where: { userId_deviceId: { userId: user.id, deviceId: 1 } },
     update: {},
@@ -95,13 +96,15 @@ async function conversation(isGroup, membres) {
 }
 
 const crees = []
+/** Le compte d'enseigne créé par ②, supprimé à la fin. */
+let enseigne = null
 const A = await compte("a")
 const B = await compte("b")
 const C = await compte("c")
 
 try {
   titre("① les types de compte")
-  for (const [type, attendu] of [[0, true], [2, true], [3, true], [4, true], [9, false], [1, false]]) {
+  for (const [type, attendu] of [[0, true], [2, true], [3, true], [4, true], [6, false], [9, false], [1, false]]) {
     await typer(B, type)
     const t = await conversation(false, [[A, "MEMBER"], [B, "MEMBER"]])
     const e = await etat(A, t)
@@ -115,20 +118,28 @@ try {
     r.status === 400 && (await r.json()).error?.code === "HORS_PERIMETRE")
   await typer(B, 0)
 
-  titre("② les comptes qui envoient par l'API")
-  await prisma.developerAccount.create({ data: { userId: B.user.id } })
+  titre("② l'API écrit au nom d'une enseigne, pas de la personne")
+  // B possède une enseigne : son compte personnel chiffre quand même.
+  enseigne = await prisma.user.create({
+    data: {
+      typeCompte: 6,
+      nom: "Enseigne de banc",
+      publicNumber: `8${String(Math.floor(Math.random() * 1e7)).padStart(7, "0")}`,
+    },
+  })
+  await prisma.developerAccount.create({ data: { userId: enseigne.id, proprietaireId: B.user.id, nom: "Enseigne de banc" } })
   t = await conversation(false, [[A, "MEMBER"], [B, "MEMBER"]])
   let e = await etat(A, t)
-  verifie("tête-à-tête refusé : EMETTEUR_API", e.activable === false && e.motif === "EMETTEUR_API", JSON.stringify(e))
+  verifie("avec la propriétaire d'une enseigne : activable", e.activable === true, JSON.stringify(e))
   r = await activer(A, t)
-  verifie("le POST aussi (400)", r.status === 400 && (await r.json()).error?.code === "EMETTEUR_API")
+  verifie("et le POST l'active", r.ok, `${r.status} ${await r.clone().text()}`)
+  t = await conversation(false, [[A, "MEMBER"], [{ user: enseigne }, "MEMBER"]])
+  e = await etat(A, t)
+  verifie("avec l'enseigne elle-même : refusé (HORS_PERIMETRE)",
+    e.activable === false && e.motif === "HORS_PERIMETRE", JSON.stringify(e))
   let g = await conversation(true, [[A, "ADMIN"], [B, "MEMBER"]])
   e = await etat(A, g)
-  verifie("un groupe où il est membre reste activable", e.activable === true, JSON.stringify(e))
-  await prisma.developerAccount.deleteMany({ where: { userId: B.user.id } })
-  t = await conversation(false, [[A, "MEMBER"], [B, "MEMBER"]])
-  r = await activer(A, t)
-  verifie("sans compte développeur, le tête-à-tête s'active", r.ok, `${r.status} ${await r.clone().text()}`)
+  verifie("un groupe où la propriétaire est membre reste activable", e.activable === true, JSON.stringify(e))
 
   titre("③ activer un groupe")
   await typer(C, 2)
@@ -181,7 +192,8 @@ try {
   }
 } finally {
   await prisma.conversation.deleteMany({ where: { id: { in: crees } } }).catch(() => undefined)
-  await prisma.developerAccount.deleteMany({ where: { userId: B.user.id } }).catch(() => undefined)
+  // Supprimer le compte de l'enseigne emporte l'enseigne en cascade.
+  if (enseigne) await prisma.user.delete({ where: { id: enseigne.id } }).catch(() => undefined)
   await prisma.$disconnect()
 }
 

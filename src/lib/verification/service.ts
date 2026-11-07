@@ -101,22 +101,38 @@ export async function emettreCode(params: {
   const maintenant = new Date();
   const ilYAUneHeure = new Date(maintenant.getTime() - 3_600_000);
 
-  // Plafonds d'ÉMISSION. Sans eux, le plafond d'essais se contourne en
-  // redemandant un code neuf à chaque tentative.
-  const parDestination = await prisma.verification.count({
-    where: { destination, finalite, createdAt: { gte: ilYAUneHeure } },
-  });
-  if (parDestination >= politique.maxParDestinationParHeure) {
+  /*
+   * Plafonds d'ÉMISSION. Sans eux, le plafond d'essais se contourne en
+   * redemandant un code neuf à chaque tentative.
+   *
+   * 🔴 PAR ENSEIGNE (07/11/2026). Le plafond comptait les codes de TOUTES les
+   * enseignes pour une destination : n'importe quel compte développeur pouvait
+   * en épuiser le quota et empêcher cette personne de recevoir le code d'une
+   * autre plateforme. Chaque enseigne a désormais son propre compte.
+   *
+   * ⚠️ Un plafond GLOBAL reste au-dessus, plus large (3 fois celui d'une
+   * enseigne) : il protège la boîte de la personne contre une rafale venue de
+   * plusieurs enseignes à la fois.
+   *
+   * ⚠️ LE PLAFOND PAR IP A ÉTÉ RETIRÉ (07/11/2026). En serveur à serveur, l'IP
+   * est celle du serveur de l'enseigne, la même pour tous ses utilisateurs :
+   * il bloquait toute une plateforme à 20 codes par heure. Et l'IP se lisait
+   * dans `X-Forwarded-For`, que l'appelant écrit lui-même. Elle reste
+   * enregistrée (`ipDemande`) pour les journaux.
+   */
+  const [parEnseigne, parDestination] = await Promise.all([
+    prisma.verification.count({
+      where: { developerId, destination, finalite, createdAt: { gte: ilYAUneHeure } },
+    }),
+    prisma.verification.count({
+      where: { destination, finalite, createdAt: { gte: ilYAUneHeure } },
+    }),
+  ]);
+  if (
+    parEnseigne >= politique.maxParDestinationParHeure ||
+    parDestination >= politique.maxParDestinationParHeure * 3
+  ) {
     return { ok: false, motif: "TROP_DE_DEMANDES" };
-  }
-
-  if (params.ip) {
-    const parIp = await prisma.verification.count({
-      where: { ipDemande: params.ip, createdAt: { gte: ilYAUneHeure } },
-    });
-    if (parIp >= politique.maxParIpParHeure) {
-      return { ok: false, motif: "TROP_DE_DEMANDES" };
-    }
   }
 
   const code = tirerCode();
@@ -133,16 +149,20 @@ export async function emettreCode(params: {
   /*
    * Invalidation PUIS insertion, dans la MÊME transaction.
    *
-   * L'index unique partiel interdit deux codes vivants pour un même couple
-   * (destination, finalité) : sans transaction, deux demandes simultanées
-   * verraient toutes deux « rien à invalider » et la seconde insertion
-   * échouerait. La transaction sérialise, et l'index reste le garde-fou de
-   * dernier recours — y compris face à une écriture directe du second système
-   * qui partage cette base.
+   * L'index unique partiel interdit deux codes vivants pour un même triplet
+   * (enseigne, destination, finalité) : sans transaction, deux demandes
+   * simultanées verraient toutes deux « rien à invalider » et la seconde
+   * insertion échouerait. La transaction sérialise, et l'index reste le
+   * garde-fou de dernier recours — y compris face à une écriture directe du
+   * second système qui partage cette base.
+   *
+   * 🔴 SEULS LES CODES DE CETTE ENSEIGNE sont remplacés (07/11/2026) : avant,
+   * une enseigne périmait le code qu'une autre venait d'envoyer.
    */
   const ligne = await prisma.$transaction(async (tx) => {
     await tx.verification.updateMany({
       where: {
+        developerId,
         destination,
         finalite,
         consommeA: null,

@@ -122,7 +122,13 @@ CREATE INDEX IF NOT EXISTS "verification_developer_date_idx"
  * Le service invalide l'ancien avant d'insérer le nouveau ; cet index est ce
  * qui rend l'oubli impossible, y compris depuis une écriture directe du second
  * système qui partage cette base.
+ *
+ * ⚠️ PAR ENSEIGNE (07/11/2026). L'index portait sur (destination, finalité)
+ * seulement : le code demandé par une enseigne périmait celui qu'une AUTRE
+ * enseigne venait d'envoyer à la même personne. N'importe quel compte
+ * développeur pouvait ainsi empêcher quelqu'un de se connecter ailleurs.
+ * L'ancien index est retiré par `2026-11_enseignes_developpeur.sql`.
  */
-CREATE UNIQUE INDEX IF NOT EXISTS "verification_un_seul_vivant_idx"
-  ON "verification" ("destination", "finalite")
+CREATE UNIQUE INDEX IF NOT EXISTS "verification_un_vivant_par_enseigne_idx"
+  ON "verification" ("developer_id", "destination", "finalite")
   WHERE "consomme_a" IS NULL AND "livraison" <> 'REMPLACE';
