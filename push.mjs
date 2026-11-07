@@ -2,6 +2,7 @@
 // v1 : désactivé par défaut — aucun import firebase-admin tant que PUSH_ENABLED≠true.
 
 import { canalPourExpediteur } from "./src/lib/canal-message.mjs";
+import { signerJetonRefus } from "./src/lib/jeton-refus-appel.mjs";
 
 let firebase = null;
 
@@ -249,6 +250,31 @@ export async function pushNewMessage(prisma, {
   });
 }
 
+/**
+ * La photo de l'appelant telle que le push peut la porter : une adresse
+ * publique absolue, ou rien (07/11/2026).
+ *
+ * - `/api/media/<id>` (ancienne forme relative) : cette route exige un jeton,
+ *   que le téléphone n'a plus forcément application tuée. La même photo est
+ *   servie SANS jeton par `/api/avatars/<id>`, qui accepte les deux formes.
+ * - `data:` (photo en base64, écrite par l'application de l'équipe) : JAMAIS
+ *   dans le push. FCM refuse un message de plus de 4 Ko — l'appel entier ne
+ *   sonnerait pas, pour une photo.
+ * - Une adresse anormalement longue : même risque, même réponse.
+ */
+function photoPourPush(brute) {
+  const v = String(brute ?? "").trim();
+  if (!v || v.length > 512) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("/api/media/")) {
+    const id = v.slice("/api/media/".length);
+    if (!id || id.includes("/")) return "";
+    const base = (process.env.PUBLIC_BASE_URL ?? "https://alanyavox.com").replace(/\/+$/, "");
+    return `${base}/api/avatars/${id}`;
+  }
+  return "";
+}
+
 export async function pushIncomingCall(prisma, {
   recipientId,
   callId,
@@ -289,7 +315,11 @@ export async function pushIncomingCall(prisma, {
       // l'appelant ni sa conversation ; sans photo, l'écran d'appel natif
       // n'affichait que l'initiale.
       callerId: callerId ?? "",
-      callerAvatarUrl: callerAvatarUrl ?? "",
+      callerAvatarUrl: photoPourPush(callerAvatarUrl),
+      // Le droit de refuser CET appel sans session (07/11/2026) : application
+      // tuée, le jeton d'accès laissé au téléphone a souvent expiré. Voir
+      // `src/lib/jeton-refus-appel.mjs`.
+      jetonRefus: signerJetonRefus(recipientId, callId),
       isGroup: String(Boolean(isGroup)),
       title,
       body,

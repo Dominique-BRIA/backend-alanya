@@ -1,13 +1,42 @@
 import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { ok, fail } from "@/lib/http";
+import { ok, fail, handleError } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
+import { refuserSiMaintenance } from "@/lib/maintenance";
 import { conversationMeta } from "@/lib/calls";
+import { previensRefusAppel } from "@/lib/salle-temps-reel";
+import { verifierJetonRefus } from "@/lib/jeton-refus-appel.mjs";
 
-// POST /api/calls/:id/reject — refuse un appel (direct) ou décline un appel de groupe.
-export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
+/**
+ * POST /api/calls/:id/reject — refuse un appel (direct) ou décline un appel de groupe.
+ *
+ * DEUX FAÇONS DE S'IDENTIFIER (07/11/2026) :
+ *  - la session ordinaire (`Authorization: Bearer <jeton d'accès>`) ;
+ *  - `X-Jeton-Refus: <jeton>`, le jeton porté par le push d'appel. C'est celui
+ *    de l'écran d'appel natif, application tuée, quand le jeton d'accès laissé
+ *    au téléphone a expiré. Il ne vaut que pour CET appel et CE destinataire
+ *    (voir `src/lib/jeton-refus-appel.mjs`).
+ */
+const parSession = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const { id } = await ctx.params;
+  return refuser(id, userId);
+});
 
+export async function POST(req: NextRequest, ctx: { params: Promise<Record<string, string>> }) {
+  const jeton = req.headers.get("x-jeton-refus");
+  if (!jeton) return parSession(req, ctx);
+  try {
+    await refuserSiMaintenance();
+    const { id } = await ctx.params;
+    const userId = verifierJetonRefus(jeton, id);
+    if (!userId) return fail("Jeton de refus invalide ou expiré", 401, "UNAUTHORIZED");
+    return await refuser(id, userId);
+  } catch (err) {
+    return handleError(err);
+  }
+}
+
+async function refuser(id: string, userId: string): Promise<Response> {
   const part = await prisma.callParticipant.findUnique({
     where: { callId_userId: { callId: id, userId } },
     include: { call: true },
@@ -54,6 +83,7 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     // autrefois se déduire d'elle ; ce n'est plus le cas, et renvoyer `true`
     // pour un tête-à-tête transféré serait faux. Aucun client ne lit ce corps
     // (vérifié : `calls_repository.reject` et `rejectCallRest` l'ignorent).
+    await previensRefusAppel({ callId: id, userId });
     return ok({ id, declined: true, isGroup, multiPartie: true });
   }
 
@@ -62,5 +92,8 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     data: { status: "REJECTED", endedAt: now },
   });
 
+  // L'appelant l'apprend MAINTENANT, même si le refus vient d'un téléphone
+  // sans socket (application tuée). Voir `previensRefusAppel`.
+  await previensRefusAppel({ callId: id, userId });
   return ok({ id: updated.id, status: updated.status, declined: true, isGroup: false });
-});
+}

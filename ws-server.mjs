@@ -3803,11 +3803,42 @@ async function pousseDepartParticipant(callId, userId) {
   }
 }
 
+/**
+ * UN REFUS NE SE DIFFUSE QU'UNE FOIS (07/11/2026).
+ *
+ * Il arrive désormais par deux chemins : la trame `call_state` de
+ * l'application, et le pont interne, que l'API sonne après avoir enregistré
+ * `POST /api/calls/:id/reject` (seul chemin d'un téléphone dont l'application
+ * est tuée). Application ouverte, les deux arrivent : le second est ignoré,
+ * sinon l'appelant recevrait deux fois le refus, la fiche d'appel et les push
+ * d'annulation.
+ *
+ * Mémoire du processus, bornée : cinq minutes suffisent, un appel ne sonne
+ * pas plus de 90 s.
+ */
+const refusDiffuses = new Map();
+const REFUS_MEMOIRE_MS = 5 * 60_000;
+
+function refusDejaDiffuse(callId, userId) {
+  const cle = `${callId}:${userId}`;
+  const maintenant = Date.now();
+  const avant = refusDiffuses.get(cle);
+  if (avant && maintenant - avant < REFUS_MEMOIRE_MS) return true;
+  refusDiffuses.set(cle, maintenant);
+  if (refusDiffuses.size > 1000) {
+    for (const [k, t] of refusDiffuses) {
+      if (maintenant - t > REFUS_MEMOIRE_MS) refusDiffuses.delete(k);
+    }
+  }
+  return false;
+}
+
 async function handleCallState(ws, msg) {
   const { callId, state, userId: joinedUserId, displayName } = msg;
   if (!callId || !state) return;
   const ids = await callParticipantIds(callId);
   if (!ids.includes(ws.userId)) return;
+  if ((state === "rejected" || state === "declined") && refusDejaDiffuse(callId, ws.userId)) return;
 
   /**
    * CENTRE D'APPELS — ce qui vient de l'AGENT ne se propage pas tel quel.
@@ -3929,12 +3960,17 @@ async function handleCallState(ws, msg) {
   //  - appel décroché : seuls les autres appareils de celui qui a décroché sont
   //    concernés. Envoyer une annulation aux autres participants serait un
   //    contresens — pour eux, l'appel commence.
+  //
+  //  - refus en GROUPE (`declined`, 07/11/2026) : de même. Un membre qui
+  //    refuse ne termine que SA sonnerie ; l'annoncer à tous faisait taire le
+  //    téléphone, application fermée, des membres qui n'avaient encore rien
+  //    décidé.
   if (isPushEnabled()) {
-    const termine = ["ended", "rejected", "declined", "cancelled"].includes(state);
-    const decroche = ["joined", "accepted"].includes(state);
-    if (termine || decroche) {
+    const termine = ["ended", "rejected", "cancelled"].includes(state);
+    const pourMoiSeul = ["joined", "accepted", "declined"].includes(state);
+    if (termine || pourMoiSeul) {
       for (const uid of ids) {
-        if (decroche && uid !== ws.userId) continue;
+        if (pourMoiSeul && uid !== ws.userId) continue;
         await pushCallCancelled(prisma, { recipientId: uid, callId });
       }
     }
@@ -5214,6 +5250,17 @@ const PONT_CHEMIN_PERSONNES = "/interne/personnes/diffuser";
 /// autre compte — seulement accélérer la livraison de ce que le compte
 /// officiel a VRAIMENT écrit.
 const PONT_CHEMIN_OFFICIEL = "/interne/officiel/livrer";
+
+/// Le chemin des REFUS D'APPEL — ajouté le 07/11/2026.
+///
+/// `POST /api/calls/:id/reject` écrit le refus en base, puis sonne ici pour
+/// que l'appelant l'apprenne : un téléphone dont l'application est tuée refuse
+/// par l'API seule, sans socket pour envoyer `call_state`.
+///
+/// 🔴 L'APPELANT NE FOURNIT QUE DES IDENTIFIANTS, et la porte RELIT l'appel :
+/// elle ne diffuse un refus que s'il est écrit en base (appel `REJECTED`, ou
+/// départ du participant enregistré). Elle ne peut donc rien terminer seule.
+const PONT_CHEMIN_REFUS_APPEL = "/interne/appel/refus";
 /// Au-delà, l'appelant découpe. 500 identifiants tiennent largement dans 64 Ko.
 const PONT_OFFICIEL_MAX = 500;
 
@@ -5425,11 +5472,56 @@ async function pontLivrerOfficiel(res, corps) {
   pontRepond(res, 200, { ok: true, livres });
 }
 
+/**
+ * La porte des REFUS D'APPEL : diffuse un refus que l'API vient d'enregistrer,
+ * exactement comme la trame `call_state` qu'aurait envoyée l'application.
+ *
+ * Corps attendu : { callId, userId }.
+ */
+async function pontRefusAppel(res, corps) {
+  const callId = typeof corps?.callId === "string" ? corps.callId : "";
+  const userId = typeof corps?.userId === "string" ? corps.userId : "";
+  if (!callId || !userId) {
+    pontRepond(res, 400, { erreur: "BAD_BODY" });
+    return;
+  }
+  const part = await prisma.callParticipant.findUnique({
+    where: { callId_userId: { callId, userId } },
+    select: { leftAt: true, call: { select: { status: true } }, user: true },
+  });
+  if (!part) {
+    pontRepond(res, 404, { erreur: "NOT_FOUND" });
+    return;
+  }
+  // Les deux issues de la route : tête-à-tête clos (`REJECTED`), ou départ
+  // d'un seul participant (groupe, transfert, centre d'appels). Le même
+  // vocabulaire que l'application : `rejected` / `declined`.
+  let state;
+  if (part.call.status === "REJECTED") state = "rejected";
+  else if (part.leftAt) state = "declined";
+  else {
+    pontRepond(res, 409, { erreur: "NOT_REJECTED" });
+    return;
+  }
+  // Une socket fictive : `handleCallState` ne lit que `userId` et
+  // `callIdActif`. Tout le reste — centre d'appels, fiche d'appel, push
+  // d'annulation — suit le chemin d'un refus ordinaire.
+  await handleCallState(
+    { userId, callIdActif: null },
+    { callId, state, userId, displayName: part.user ? nomAffichage(part.user) : null },
+  );
+  pontRepond(res, 200, { ok: true, state });
+}
+
 async function pontTraite(req, res) {
   const chemin = (req.url ?? "").split("?")[0];
   const versPersonnes = chemin === PONT_CHEMIN_PERSONNES;
   const versOfficiel = chemin === PONT_CHEMIN_OFFICIEL;
-  if (req.method !== "POST" || (chemin !== PONT_CHEMIN && !versPersonnes && !versOfficiel)) {
+  const versRefusAppel = chemin === PONT_CHEMIN_REFUS_APPEL;
+  if (
+    req.method !== "POST" ||
+    (chemin !== PONT_CHEMIN && !versPersonnes && !versOfficiel && !versRefusAppel)
+  ) {
     pontRepond(res, 404, { erreur: "NOT_FOUND" });
     return;
   }
@@ -5468,6 +5560,10 @@ async function pontTraite(req, res) {
   }
   if (versOfficiel) {
     await pontLivrerOfficiel(res, corps);
+    return;
+  }
+  if (versRefusAppel) {
+    await pontRefusAppel(res, corps);
     return;
   }
 

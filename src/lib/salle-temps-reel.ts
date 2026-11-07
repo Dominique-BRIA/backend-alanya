@@ -130,6 +130,8 @@ const CHEMIN_PONT = "/interne/salle/diffuser";
 const CHEMIN_PONT_PERSONNES = "/interne/personnes/diffuser";
 /// La porte des MESSAGES OFFICIELS (16/10/2026) — voir `livrerMessagesOfficiels`.
 const CHEMIN_PONT_OFFICIEL = "/interne/officiel/livrer";
+/// La porte des REFUS D'APPEL (07/11/2026) — voir `previensRefusAppel`.
+const CHEMIN_PONT_REFUS_APPEL = "/interne/appel/refus";
 const ENTETE_PONT = "x-alanya-interne";
 
 /// Delai d'attente. C'est une requete vers un process de la MEME machine : elle
@@ -449,6 +451,39 @@ export async function previensDesPersonnes(params: {
      * consequence est benigne et deja connue : le destinataire relevera un peu
      * plus tard. Le demarrage, lui, dit deja si le pont est la.
      */
+    return false;
+  }
+}
+
+/**
+ * Annonce au serveur temps réel qu'un refus d'appel vient d'être enregistré
+ * par l'API (07/11/2026).
+ *
+ * 🐛 CE QU'IL CORRIGE. `POST /api/calls/:id/reject` ne faisait qu'écrire en
+ * base : l'appelant n'apprenait le refus que par la trame `call_state` que
+ * l'application du destinataire envoie ENSUITE sur son socket. Application
+ * tuée, ce socket n'existe pas — le refus pris sur l'écran d'appel natif
+ * partait par l'API seule, et chez l'appelant ça sonnait jusqu'au bout.
+ *
+ * Le serveur temps réel relit l'appel en base et ne diffuse que ce qui y est
+ * réellement écrit : cette porte ne peut rien terminer d'elle-même.
+ *
+ * Ne lève jamais : le refus est déjà enregistré, la route répond son succès.
+ */
+export async function previensRefusAppel(params: {
+  callId: string;
+  userId: string;
+}): Promise<boolean> {
+  if (PAR_RESEAU && !SECRET_PONT) return false;
+  try {
+    const corps = JSON.stringify({ callId: params.callId, userId: params.userId });
+    const reponse = PAR_RESEAU
+      ? await viaReseau(corps, CHEMIN_PONT_REFUS_APPEL)
+      : await viaSocket(corps, CHEMIN_PONT_REFUS_APPEL);
+    if (!reponse.ok) console.warn(`[pont] refus d'appel non diffusé : HTTP ${reponse.status}`);
+    return reponse.ok;
+  } catch (e) {
+    console.warn(`[pont] refus d'appel non diffusé : ${(e as Error)?.message ?? e}`);
     return false;
   }
 }
