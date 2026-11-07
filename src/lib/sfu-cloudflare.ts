@@ -23,7 +23,9 @@ import { HttpError } from "@/lib/http";
  *  - `PUT /sessions/:id/renegotiate` → la réponse du client à cette offre ;
  *  - `PUT /sessions/:id/tracks/close` → ne plus recevoir des pistes.
  *
- * Variables : `CLOUDFLARE_SFU_APP_ID` et `CLOUDFLARE_SFU_APP_TOKEN`.
+ * Variables : `CLOUDFLARE_SFU_ID` (l'identifiant de l'application, 32
+ * caractères hexadécimaux) et `CLOUDFLARE_SFU_API_TOKEN` (son jeton, 64).
+ * Les noms `CLOUDFLARE_SFU_APP_ID` / `CLOUDFLARE_SFU_APP_TOKEN` restent lus.
  */
 
 const DELAI_MS = 8000;

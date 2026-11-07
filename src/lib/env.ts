@@ -233,8 +233,12 @@ export const env = {
    * (07/11/2026) — voir `sfu-cloudflare.ts`. Une application distincte de la
    * clé TURN. Absent = le SFU ne peut pas être choisi dans la console.
    */
+  // Noms posés dans le .env de production : CLOUDFLARE_SFU_ID et
+  // CLOUDFLARE_SFU_API_TOKEN (07/11/2026). Les anciens noms restent lus.
   cloudflareSfu: {
-    appId: () => optional("CLOUDFLARE_SFU_APP_ID").trim() || null,
-    appToken: () => optional("CLOUDFLARE_SFU_APP_TOKEN").trim() || null,
+    appId: () =>
+      optional("CLOUDFLARE_SFU_ID").trim() || optional("CLOUDFLARE_SFU_APP_ID").trim() || null,
+    appToken: () =>
+      optional("CLOUDFLARE_SFU_API_TOKEN").trim() || optional("CLOUDFLARE_SFU_APP_TOKEN").trim() || null,
   },
 } as const;
