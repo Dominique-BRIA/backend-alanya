@@ -5,9 +5,10 @@ import { withAuth } from "@/lib/auth-context";
 import { activeCallParticipants, conversationMeta } from "@/lib/calls";
 import { marquerRecontacte } from "@/lib/queue";
 import { enregistrementPourAgent } from "@/lib/ivr.mjs";
+import { appareilSaitLeSfu } from "@/lib/sfu-salle";
 
 // POST /api/calls/:id/accept — accepte / rejoint un appel (direct ou groupe).
-export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
+export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const { id } = await ctx.params;
 
   const part = await prisma.callParticipant.findUnique({
@@ -32,6 +33,15 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     status === "BUSY"
   ) {
     return fail("Appel terminé", 409, "BAD_STATE");
+  }
+
+  // Appel en SFU (07/11/2026) : une application qui ne le connaît pas
+  // décrocherait sans rien entendre. Le SFU n'est retenu que si tous les
+  // membres ont une application à jour, mais un compte peut aussi décrocher
+  // depuis un appareil plus ancien : c'est donc l'APPAREIL qui doit le dire,
+  // par l'en-tête que seules les versions à jour envoient.
+  if (part.call.moteur === "sfu" && !appareilSaitLeSfu(req)) {
+    return fail("Mettez à jour Alanya Work pour rejoindre cet appel", 409, "APP_A_METTRE_A_JOUR");
   }
 
   const now = new Date();
@@ -120,5 +130,6 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     /// un client plus ancien : il ignorera simplement le champ.
     enregistrer: enregistrement != null,
     enregistrementCompanyId: enregistrement?.idCompany ?? null,
+    moteur: part.call.moteur === "sfu" ? "sfu" : "mesh",
   });
 });

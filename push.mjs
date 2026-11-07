@@ -287,6 +287,7 @@ export async function pushIncomingCall(prisma, {
   isGroup,
   groupName,
   callerAvatarUrl,
+  moteur,
 }) {
   if (!isPushEnabled()) return;
   callerName = (await nomDonnePar(prisma, recipientId, callerId)) ?? callerName;
@@ -320,6 +321,8 @@ export async function pushIncomingCall(prisma, {
       // tuée, le jeton d'accès laissé au téléphone a souvent expiré. Voir
       // `src/lib/jeton-refus-appel.mjs`.
       jetonRefus: signerJetonRefus(recipientId, callId),
+      // `sfu` pour un appel de groupe en SFU (07/11/2026), `mesh` sinon.
+      moteur: moteur === "sfu" ? "sfu" : "mesh",
       isGroup: String(Boolean(isGroup)),
       title,
       body,

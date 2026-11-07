@@ -19,8 +19,11 @@ const CORS_HEADERS = {
    *
    * `X-Envoi-Jeton` : le jeton d'un envoi en morceaux (`/api/media/envois`),
    * que le client web présentera pour chaque morceau.
+   *
+   * `X-Alanya-Capacites` (07/11/2026) : ce que sait faire l'appareil
+   * (« sfu »), envoyé en décrochant ou en entrant en réunion.
    */
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Api-Key, X-Envoi-Jeton",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Api-Key, X-Envoi-Jeton, X-Alanya-Capacites",
   "Access-Control-Max-Age": "86400",
 };
 

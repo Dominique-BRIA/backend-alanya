@@ -14,6 +14,7 @@ import {
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { ouvreUnStandard } from "@/lib/ivr.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { moteurPour } from "@/lib/reglages-appels";
 
 // GET /api/calls — historique des appels de l'utilisateur (50 derniers).
 export const GET = withAuth(async (_req: NextRequest, userId: string) => {
@@ -196,12 +197,19 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
     }
   }
 
+  // Le moteur de l'appel, fixé ici pour toute sa durée (07/11/2026) : le SFU
+  // pour un GROUPE si la console l'a choisi et que tous les membres ont une
+  // application qui le sait ; le direct (mesh) sinon, et toujours à deux.
+  const meta = await conversationMeta(convId);
+  const moteur = meta.isGroup ? await moteurPour(memberIds) : "mesh";
+
   const call = await prisma.call.create({
     data: {
       initiatorId: userId,
       convId,
       type,
       status: "RINGING",
+      moteur,
       participants: {
         create: memberIds.map((id) => ({
           userId: id,
@@ -224,8 +232,6 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       avatarUrl: avatarPublicUrl(p.user.avatarUrl ?? null),
     }));
 
-  const meta = await conversationMeta(call.convId);
-
   return ok(
     {
       id: call.id,
@@ -237,6 +243,7 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       memberCount: meta.memberCount,
       callees,
       callerName: nomAffichage(call.initiator),
+      moteur,
     },
     201,
   );

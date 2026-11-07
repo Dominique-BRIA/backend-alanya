@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { sfuConfigure } from "@/lib/sfu-cloudflare";
 
 /**
  * LES RÉGLAGES DES APPELS, PILOTÉS DEPUIS LA CONSOLE (07/11/2026).
@@ -26,21 +27,58 @@ export const CLE_REGLAGES_APPELS = "appels.reglages";
 
 export type RelaisPrincipal = "cloudflare" | "nos_relais";
 
+/**
+ * Le moteur des APPELS DE GROUPE ET DES RÉUNIONS (07/11/2026) :
+ *  - `mesh` : le système d'origine, une connexion par participant ;
+ *  - `sfu` : le SFU de Cloudflare, une seule connexion par participant vers
+ *    Cloudflare, qui redistribue. Voir `sfu-cloudflare.ts`.
+ *
+ * Le tête-à-tête reste TOUJOURS en direct (décision du user) : à deux, le
+ * chemin direct est le meilleur, et il ne coûte rien.
+ */
+export type MoteurGroupes = "mesh" | "sfu";
+
 export interface ReglagesAppels {
   relaisPrincipal: RelaisPrincipal;
+  moteurGroupes: MoteurGroupes;
 }
 
-export const REGLAGES_APPELS_DEFAUT: ReglagesAppels = { relaisPrincipal: "cloudflare" };
+export const REGLAGES_APPELS_DEFAUT: ReglagesAppels = {
+  relaisPrincipal: "cloudflare",
+  moteurGroupes: "mesh",
+};
 
 const DUREE_CACHE_MS = 10_000;
 let cache: { valeur: ReglagesAppels; lu: number } | null = null;
 
 /** Une valeur stockée, ramenée à des réglages valides. */
 export function normaliserReglagesAppels(brut: unknown): ReglagesAppels {
-  const v = (brut ?? {}) as { relaisPrincipal?: unknown };
+  const v = (brut ?? {}) as { relaisPrincipal?: unknown; moteurGroupes?: unknown };
   return {
     relaisPrincipal: v.relaisPrincipal === "nos_relais" ? "nos_relais" : "cloudflare",
+    moteurGroupes: v.moteurGroupes === "sfu" ? "sfu" : "mesh",
   };
+}
+
+/**
+ * Le moteur d'un appel de groupe ou d'une réunion qui COMMENCE, pour ces
+ * participants. Fixé une fois pour toutes : une bascule dans la console ne
+ * touche pas ce qui est en cours.
+ *
+ * Le SFU n'est retenu que si les trois conditions tiennent :
+ *  - la console l'a choisi ;
+ *  - il est configuré sur ce serveur (sinon personne ne pourrait s'y joindre) ;
+ *  - TOUS les participants ont une application qui sait le rejoindre
+ *    (`users.capacite_sfu`). Un seul téléphone pas encore mis à jour, et le
+ *    groupe reste en mesh : il aurait sonné sans pouvoir rien entendre.
+ */
+export async function moteurPour(userIds: string[]): Promise<MoteurGroupes> {
+  const reglages = await lireReglagesAppels();
+  if (reglages.moteurGroupes !== "sfu" || !sfuConfigure()) return "mesh";
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return "mesh";
+  const capables = await prisma.user.count({ where: { id: { in: ids }, capaciteSfu: true } });
+  return capables === ids.length ? "sfu" : "mesh";
 }
 
 export async function lireReglagesAppels(options: { frais?: boolean } = {}): Promise<ReglagesAppels> {

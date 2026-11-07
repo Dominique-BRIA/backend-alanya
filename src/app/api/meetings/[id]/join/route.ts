@@ -7,9 +7,11 @@ import {
   presentsEnBase,
   refusSallePleine,
 } from "@/lib/plafond-reunion";
+import { moteurDeLaReunion } from "@/lib/moteur-reunion";
+import { appareilSaitLeSfu } from "@/lib/sfu-salle";
 
 // POST /api/meetings/:id/join — accepte l'invitation et marque le participant comme connecté.
-export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
+export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
   const id = Number((await ctx.params).id);
   if (isNaN(id) || id <= 0) return fail("ID invalide", 400, "BAD_ID");
 
@@ -33,6 +35,13 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   // dans une reunion dont il n'a pas a connaitre l'existence.
   if (!participant && meeting.idOrganiser !== userId) {
     return fail("Vous n'êtes pas invité à cette réunion", 403, "FORBIDDEN");
+  }
+
+  // Le moteur de la réunion (07/11/2026), fixé à la première entrée : voir
+  // `src/lib/moteur-reunion.ts`.
+  const moteur = (await moteurDeLaReunion(id)) ?? "mesh";
+  if (moteur === "sfu" && !appareilSaitLeSfu(req)) {
+    return fail("Mettez à jour Alanya Work pour rejoindre cette réunion", 409, "APP_A_METTRE_A_JOUR");
   }
 
   // PLAFOND A L'ENTREE — la PRESENCE, pas le contingent.
@@ -88,5 +97,5 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     });
   }
 
-  return ok({ message: "Connecté à la réunion", idMeeting: id });
+  return ok({ message: "Connecté à la réunion", idMeeting: id, moteur: moteur === "sfu" ? "sfu" : "mesh" });
 });

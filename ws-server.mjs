@@ -3521,6 +3521,8 @@ async function handleCallRing(ws, msg) {
       isGroup,
       groupName,
       memberCount,
+      // Le moteur de l'appel (07/11/2026) : `sfu` pour un groupe en SFU.
+      moteur: call.moteur === "sfu" ? "sfu" : "mesh",
     };
     /**
      * Verrou de conversation : si un poste du compte destinataire a reserve
@@ -3597,6 +3599,7 @@ async function handleCallRing(ws, msg) {
         callType: call.type,
         isGroup,
         groupName,
+        moteur: call.moteur === "sfu" ? "sfu" : "mesh",
       });
     }
   }
@@ -4008,6 +4011,12 @@ async function handleCallInvite(ws, msg) {
     ws.send(JSON.stringify({ type: "call_invite_result", ok: false, reason: "BLOCKED", publicNumber }));
     return;
   }
+  // Appel en SFU (07/11/2026) : un invité dont l'application ne le connaît pas
+  // sonnerait sans pouvoir rien entendre.
+  if (call.moteur === "sfu" && !invitee.capaciteSfu) {
+    ws.send(JSON.stringify({ type: "call_invite_result", ok: false, reason: "APP_A_METTRE_A_JOUR", publicNumber }));
+    return;
+  }
 
   // Ajoute l'invité aux participants (pas encore "joined").
   await prisma.callParticipant.upsert({
@@ -4046,6 +4055,7 @@ async function handleCallInvite(ws, msg) {
     isGroup: true, // multi-partie tant que l'invité rejoint
     groupName,
     memberCount: memberCount + 1,
+    moteur: call.moteur === "sfu" ? "sfu" : "mesh",
   };
   if (!sendTo(invitee.id, chargeInvite)) {
     bufferPendingCall(invitee.id, chargeInvite);
@@ -4061,6 +4071,7 @@ async function handleCallInvite(ws, msg) {
       callType: call.type,
       isGroup: true,
       groupName,
+      moteur: call.moteur === "sfu" ? "sfu" : "mesh",
     });
   }
 
@@ -5291,7 +5302,10 @@ const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
 /// étapes, porté à l'application du titulaire — à lui seul (`deux-etapes.ts`).
 // `statut_*` (01/11/2026) : l'auteur d'un statut apprend en direct qu'on l'a
 // vu ou aimé (`statut_vu`, `statut_aime`).
-const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web|statut)_[a-z0-9_]+$/;
+// `sfu_*` (07/11/2026) : un participant d'un appel de groupe ou d'une réunion
+// en SFU vient de publier ses pistes ; les autres vont les chercher
+// (`sfu_pistes`). Des noms de pistes et des identifiants, rien d'autre.
+const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web|statut|sfu)_[a-z0-9_]+$/;
 
 /// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
 /// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines
@@ -5849,6 +5863,18 @@ wss.on("connection", (ws, req) => {
   ws.userId = userId;
   ws.isAlive = true;
   addClient(userId, ws);
+  /*
+   * CE QUE SAIT FAIRE CETTE APPLICATION (07/11/2026). Les versions à jour se
+   * connectent avec `?capacites=sfu` : elles savent rejoindre un appel de
+   * groupe ou une réunion en SFU. Noté sur le compte, une fois : un groupe ne
+   * passe en SFU que si tous ses membres l'ont (`moteurPour`).
+   */
+  const capacites = String((Array.isArray(query.capacites) ? query.capacites[0] : query.capacites) ?? "");
+  if (capacites.split(",").map((c) => c.trim().toLowerCase()).includes("sfu")) {
+    prisma.user
+      .updateMany({ where: { id: userId, capaciteSfu: false }, data: { capaciteSfu: true } })
+      .catch((e) => console.warn("[ws] capacité sfu non notée :", e?.message ?? e));
+  }
   // Un appel tenu en sursis reprend dès qu'une socket du compte revient,
   // sans rien attendre du client : sa demande de reprise, elle, suivra.
   annulerSursisReconnexion(userId);

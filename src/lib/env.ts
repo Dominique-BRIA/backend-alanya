@@ -228,4 +228,13 @@ export const env = {
     keyId: () => optional("CLOUDFLARE_TURN_ID").trim() || null,
     apiToken: () => optional("CLOUDFLARE_TURN_API_TOKEN").trim() || null,
   },
+  /**
+   * Le SFU de Cloudflare (Realtime SFU), pour les groupes et les réunions
+   * (07/11/2026) — voir `sfu-cloudflare.ts`. Une application distincte de la
+   * clé TURN. Absent = le SFU ne peut pas être choisi dans la console.
+   */
+  cloudflareSfu: {
+    appId: () => optional("CLOUDFLARE_SFU_APP_ID").trim() || null,
+    appToken: () => optional("CLOUDFLARE_SFU_APP_TOKEN").trim() || null,
+  },
 } as const;

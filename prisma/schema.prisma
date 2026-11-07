@@ -203,6 +203,10 @@ model User {
   resetOtp          String?   @map("reset_otp") @db.VarChar(6)
   resetOtpExpiresAt DateTime? @map("reset_otp_expires_at") @db.Timestamptz
 
+  /// L'application de ce compte sait rejoindre un appel en SFU (07/11/2026).
+  /// Posé par le serveur temps réel à la connexion d'une application à jour.
+  capaciteSfu Boolean @default(false) @map("capacite_sfu")
+
   /// Suppression logique, ajoutée par James. ⚠️ `users` porte désormais TROIS
   /// notions d'inactivité : `actif` (l'utilisateur), `exclus` (décision
   /// d'administration) et `isDelete` (effacement). Rien ne dit laquelle fait
@@ -1677,6 +1681,8 @@ model Call {
   startedAt        DateTime   @default(now()) @db.Timestamptz
   answeredAt       DateTime?  @db.Timestamptz
   endedAt          DateTime?  @db.Timestamptz
+  /// 'mesh' ou 'sfu', fixé à la création (07/11/2026). Nul = mesh.
+  moteur           String?    @db.VarChar(8)
 
   /// Identité à MONTRER À L'APPELÉ, ajouté le 15/08/2026 pour le rappel « sous
   /// le nom du centre » (`/api/queue/callback`) : un agent rappelle un client
@@ -1800,6 +1806,8 @@ model Meeting {
   isEnd          Int      @default(0) @db.SmallInt // MySQL tinyint → PG SMALLINT
   type_media     Int      @default(1) @db.SmallInt // MySQL tinyint → PG SMALLINT (1=audio, 2=vidéo)
   invitationAuto Int      @default(0) @map("invitation_auto") @db.SmallInt
+  /// 'mesh' ou 'sfu', fixé à la première entrée (07/11/2026). Nul = mesh.
+  moteur         String?  @db.VarChar(8)
 
   participants MeetingParticipant[]
   rappel       MeetingRappel?
@@ -3989,4 +3997,19 @@ model TrajetPoint {
   trajet     Trajet   @relation(fields: [trajetId], references: [id], onDelete: Cascade)
 
   @@map("trajet_point")
+}
+
+/// Une session ouverte chez le SFU de Cloudflare (07/11/2026) : un
+/// participant dans une salle (`call:<id>` ou `meeting:<id>`), avec les pistes
+/// qu'il publie. Voir `src/lib/sfu-cloudflare.ts`.
+model SfuSession {
+  sessionId String    @id @map("session_id") @db.VarChar(64)
+  salle     String    @db.VarChar(80)
+  userId    String    @map("user_id") @db.Uuid
+  /// `[{ nom, genre }]` — `genre` : "audio" ou "video".
+  pistes    Json      @default("[]") @db.JsonB
+  creeLe    DateTime  @default(now()) @map("cree_le") @db.Timestamptz
+  fermeLe   DateTime? @map("ferme_le") @db.Timestamptz
+
+  @@map("sfu_session")
 }
