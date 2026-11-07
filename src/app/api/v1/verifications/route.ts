@@ -53,10 +53,11 @@ async function emettre(req: NextRequest, cle: CleAuthentifiee): Promise<Response
   }
 
   /*
-   * L'IP sert le plafond par source. `x-forwarded-for` peut contenir une
-   * chaîne de relais : on prend la PREMIÈRE, celle du client d'origine.
-   * Falsifiable par l'appelant — c'est pourquoi ce plafond complète celui par
-   * destination, qui lui ne l'est pas, au lieu de le remplacer.
+   * L'IP est seulement ENREGISTRÉE, pour les journaux. Elle ne sert plus de
+   * plafond (07/11/2026) : en serveur à serveur, c'est celle du serveur de
+   * l'enseigne, la même pour tous ses utilisateurs, et `x-forwarded-for` est
+   * écrit par l'appelant lui-même. Les plafonds sont par enseigne et par
+   * destination (`emettreCode`).
    */
   const ip =
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||

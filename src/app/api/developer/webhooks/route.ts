@@ -1,139 +1,117 @@
-import crypto from 'crypto';
-import { type NextRequest } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { ok, fail } from '@/lib/http';
-import { withAuth } from '@/lib/auth-context';
+import crypto from "crypto";
+import { type NextRequest } from "next/server";
+import { z } from "zod";
+import { prisma } from "@/lib/prisma";
+import { ok, fail, handleError } from "@/lib/http";
+import { withAuth } from "@/lib/auth-context";
+import { enseigneDuProprietaire } from "@/lib/developer/enseignes";
+import { verifierUrlWebhook } from "@/lib/developer/url-webhook";
 
-/*
- * 🔴 `secretKey` NE SORT PLUS D'ICI EN LECTURE.
+/**
+ * LE WEBHOOK D'UNE ENSEIGNE (07/11/2026).
  *
- * `GET` le rendait dans sa réponse. Un secret de signature qui se relit est un
- * secret qui finit dans un cache de navigateur, dans une capture d'écran de
- * console et dans les journaux du relais du tableau de bord — exactement ce que
- * la clé API évite déjà en n'étant montrée qu'UNE fois à sa création.
+ * 🔴 LE SECRET SE RÉAFFICHE (décision du user, 07/11/2026). Il n'était rendu
+ * qu'une fois, et la console ne le montrait même pas : personne ne pouvait
+ * vérifier la signature que le guide exige. Comme chez Stripe, il est
+ * désormais lisible dans la console à tout moment — il est de toute façon
+ * gardé lisible, puisqu'il faut signer avec — et « Changer le secret » en
+ * tire un nouveau.
  *
- * Même règle ici : le secret n'est rendu qu'au moment où il est POSÉ, et jamais
- * plus. La lecture ne dit que s'il en existe un.
+ * 🔴 L'ADRESSE EST CONTRÔLÉE (`url-webhook.ts`) : https seulement, et aucune
+ * adresse de réseau privé, sinon notre serveur deviendrait un relais vers
+ * notre propre réseau.
+ *
+ * Le champ « Verify Token » a disparu : le serveur ne s'en servait jamais.
  */
 
-// GET /api/developer/webhooks — Récupérer la configuration Webhook Développeur
+const SELECTION_WEBHOOK = {
+  url: true,
+  secretKey: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
+
+function nouveauSecret(): string {
+  return `whsec_${crypto.randomBytes(32).toString("hex")}`;
+}
+
+// GET /api/developer/webhooks?enseigne=<id>
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
   try {
-    let developer = await prisma.developerAccount.findUnique({
-      where: { userId },
-      select: { id: true },
-    });
-
-    if (!developer) {
-      developer = await prisma.developerAccount.create({
-        data: { userId },
-        select: { id: true },
-      });
-    }
-
+    const enseigne = await enseigneDuProprietaire(userId, req.nextUrl.searchParams.get("enseigne"));
     const webhook = await prisma.developerWebhook.findUnique({
-      where: { developerId: developer.id },
-      select: {
-        id: true,
-        url: true,
-        verifyToken: true,
-        secretKey: true,
-        isActive: true,
-        createdAt: true,
-      },
+      where: { developerId: enseigne.id },
+      select: SELECTION_WEBHOOK,
     });
-
-    if (!webhook) return ok({ webhook: null });
-
-    const { secretKey, ...sansSecret } = webhook;
-    return ok({ webhook: { ...sansSecret, secretKeyDefini: Boolean(secretKey) } });
-  } catch (error: any) {
-    console.error('[API Developer Webhook] Erreur GET:', error);
-    return fail('Erreur lors de la récupération de la configuration Webhook', 500);
+    return ok({ webhook });
+  } catch (err) {
+    return handleError(err);
   }
 });
 
-// POST /api/developer/webhooks — Configurer l'URL Webhook Développeur (Standard WhatsApp)
+const enregistrementSchema = z.object({
+  enseigneId: z.string().uuid(),
+  url: z.string().trim().min(1, "L'adresse est requise").max(500),
+  actif: z.boolean().optional(),
+  /** `true` : tire un nouveau secret. L'ancien cesse aussitôt de valoir. */
+  changerSecret: z.boolean().optional(),
+});
+
+/**
+ * POST /api/developer/webhooks — `{ enseigneId, url, actif?, changerSecret? }`.
+ *
+ * Le secret est tiré par nous à la première configuration, puis CONSERVÉ :
+ * changer seulement l'adresse ne doit pas casser un récepteur en service. Il
+ * ne change que sur demande (`changerSecret`).
+ */
 export const POST = withAuth(async (req: NextRequest, userId: string) => {
   try {
-    let developer = await prisma.developerAccount.findUnique({
-      where: { userId },
-      select: { id: true },
-    });
+    const corps = enregistrementSchema.parse(await req.json().catch(() => ({})));
+    const enseigne = await enseigneDuProprietaire(userId, corps.enseigneId);
 
-    if (!developer) {
-      developer = await prisma.developerAccount.create({
-        data: { userId },
-        select: { id: true },
-      });
-    }
+    const verdict = await verifierUrlWebhook(corps.url);
+    if (!verdict.ok) return fail(verdict.message, 422, "WEBHOOK_URL_REFUSEE");
 
-    const body = await req.json().catch(() => ({}));
-    const url = body.url?.toString().trim();
-    const verifyToken = body.verifyToken?.toString().trim() || null;
-    const isActive = body.isActive !== false;
-
-    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-      return fail('Une URL HTTP/HTTPS valide est requise pour le Webhook.', 400);
-    }
-
-    /*
-     * Le secret est TIRÉ PAR NOUS quand il n'en existe pas encore.
-     *
-     * Il pouvait rester `null`, et il l'était en pratique : la signature partait
-     * alors avec le littéral `'v1_sha256'`. Un secret absent donnait donc un
-     * récepteur qui croit vérifier quelque chose. 32 octets d'aléa
-     * cryptographique valent mieux qu'une chaîne choisie à la main.
-     *
-     * ⚠️ L'ORDRE DES REPLIS EST CE QUI COMPTE : secret fourni → secret existant
-     * → tirage. Tirer dès que le corps n'en porte pas ferait ROULER le secret à
-     * chaque simple changement d'URL, et casserait silencieusement un récepteur
-     * déjà en service — une rotation doit être demandée, jamais subie.
-     */
     const existant = await prisma.developerWebhook.findUnique({
-      where: { developerId: developer.id },
+      where: { developerId: enseigne.id },
       select: { secretKey: true },
     });
-    const secretFourni = body.secretKey?.toString().trim() || null;
-    const secretKey = secretFourni || existant?.secretKey || crypto.randomBytes(32).toString('hex');
-    /** Vrai seulement quand l'appelant peut découvrir le secret dans la réponse. */
-    const secretNouveau = secretFourni !== null || !existant?.secretKey;
+    const secretKey =
+      corps.changerSecret || !existant?.secretKey ? nouveauSecret() : existant.secretKey;
 
     const webhook = await prisma.developerWebhook.upsert({
-      where: { developerId: developer.id },
+      where: { developerId: enseigne.id },
       create: {
-        developerId: developer.id,
-        url,
-        verifyToken,
+        developerId: enseigne.id,
+        url: verdict.url.toString(),
         secretKey,
-        isActive,
+        isActive: corps.actif ?? true,
       },
       update: {
-        url,
-        verifyToken,
+        url: verdict.url.toString(),
         secretKey,
-        isActive,
+        isActive: corps.actif ?? true,
       },
-      select: {
-        id: true,
-        url: true,
-        verifyToken: true,
-        isActive: true,
-        createdAt: true,
-      },
+      select: SELECTION_WEBHOOK,
     });
 
-    return ok({
-      webhook: { ...webhook, secretKeyDefini: true },
-      // ⚠️ Rendu UNE SEULE FOIS, comme `rawKey` à la création d'une clé API —
-      // et seulement quand il vient d'être posé ou remplacé.
-      ...(secretNouveau ? { secretKey } : {}),
-      message: secretNouveau
-        ? 'Configuration Webhook enregistrée. Conservez le secret : il ne sera plus jamais affiché.'
-        : 'Configuration Webhook enregistrée. Le secret existant est conservé.',
-    });
-  } catch (error: any) {
-    console.error('[API Developer Webhook] Erreur POST:', error);
-    return fail('Erreur d\'enregistrement de la configuration Webhook', 500);
+    return ok({ webhook });
+  } catch (err) {
+    return handleError(err);
+  }
+});
+
+const suppressionSchema = z.object({ enseigneId: z.string().uuid() });
+
+// DELETE /api/developer/webhooks — `{ enseigneId }` : plus aucun envoi.
+export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
+  try {
+    const corps = suppressionSchema.parse(await req.json().catch(() => ({})));
+    const enseigne = await enseigneDuProprietaire(userId, corps.enseigneId);
+    await prisma.developerWebhook.deleteMany({ where: { developerId: enseigne.id } });
+    return ok({ webhook: null });
+  } catch (err) {
+    return handleError(err);
   }
 });

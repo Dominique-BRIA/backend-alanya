@@ -1,6 +1,7 @@
 import { type NextRequest } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { ok, fail } from '@/lib/http';
+import { ok, fail, handleError, HttpError } from '@/lib/http';
+import { enseigneDuProprietaire } from '@/lib/developer/enseignes';
 import { withAuth } from '@/lib/auth-context';
 import { CODE } from '@/lib/developer/api-contract';
 
@@ -30,25 +31,11 @@ import { CODE } from '@/lib/developer/api-contract';
  */
 export const GET = withAuth(async (req: NextRequest, userId: string) => {
   try {
-    const developer = await prisma.developerAccount.findUnique({
-      where: { userId },
-      select: { id: true },
-    });
-
-    if (!developer) {
-      // Un compte sans profil développeur n'est pas une erreur : la console
-      // s'affiche vide. `total` et `nextCursor` sont présents quand même —
-      // le client ne doit jamais avoir à distinguer deux formes de réponse.
-      return ok({
-        logs: [],
-        nextCursor: null,
-        total: 0,
-        avgLatencyMs: 0,
-        successRatePercent: 100,
-      });
-    }
-
     const params = req.nextUrl.searchParams;
+    // Le journal d'UNE enseigne, qui doit appartenir à la personne connectée
+    // (07/11/2026) : avant, le compte développeur se déduisait du jeton.
+    const developer = await enseigneDuProprietaire(userId, params.get("enseigne"));
+
     const limitBrut = Number(params.get('limit'));
     const limit = Math.min(
       Math.max(Number.isFinite(limitBrut) && limitBrut > 0 ? limitBrut : 50, 1),
@@ -130,7 +117,8 @@ export const GET = withAuth(async (req: NextRequest, userId: string) => {
       // panne alors qu'il ne s'est simplement rien passé.
       successRatePercent: total > 0 ? Math.round((succes / total) * 100) : 100,
     });
-  } catch (error: any) {
+  } catch (error) {
+    if (error instanceof HttpError) return handleError(error);
     console.error('[API Developer Logs] Erreur:', error);
     return fail('Erreur de récupération des logs développeur', 500, CODE.ERREUR_INTERNE);
   }

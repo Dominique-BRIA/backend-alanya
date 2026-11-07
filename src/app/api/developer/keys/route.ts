@@ -1,132 +1,102 @@
-import { type NextRequest } from 'next/server';
-import { prisma } from '@/lib/prisma';
-import { ok, fail, handleError } from '@/lib/http';
-import { requireUser } from '@/lib/auth-context';
-import { generateApiKey } from '@/lib/developer/key-service';
-import { ApiKeyType } from '@prisma/client';
+import { type NextRequest } from "next/server";
+import { z } from "zod";
+import { prisma } from "@/lib/prisma";
+import { ok, handleError } from "@/lib/http";
+import { withAuth } from "@/lib/auth-context";
+import { generateApiKey } from "@/lib/developer/key-service";
+import { enseigneDuProprietaire } from "@/lib/developer/enseignes";
 
-// GET /api/developer/keys — Récupère le compte dev, solde et la liste des clés
-export async function GET(req: NextRequest) {
+/**
+ * LES CLÉS API D'UNE ENSEIGNE (07/11/2026).
+ *
+ * Chaque route vise UNE enseigne (`enseigne` en paramètre de requête, ou
+ * `enseigneId` dans le corps) et vérifie qu'elle appartient à la personne
+ * connectée. Rien n'est créé à la lecture.
+ *
+ * 🔴 PLUS DE CHOIX SANDBOX / PRODUCTION : les deux produisaient des effets
+ * réels. Toutes les clés commencent par `ak_live_`.
+ *
+ * La liste montre ce qui permet de reconnaître une clé sans la révéler, comme
+ * les consoles de Stripe ou d'OpenAI : son nom, ses 12 premiers caractères
+ * (les mêmes que dans le journal), sa date de création et sa dernière
+ * utilisation. La clé entière n'est montrée qu'une fois, à sa création.
+ */
+
+const SELECTION_CLE = {
+  id: true,
+  name: true,
+  prefix: true,
+  isActive: true,
+  lastUsedAt: true,
+  createdAt: true,
+} as const;
+
+// GET /api/developer/keys?enseigne=<id>
+export const GET = withAuth(async (req: NextRequest, userId: string) => {
   try {
-    const { sub: userId } = requireUser(req);
-
-    let devAccount = await prisma.developerAccount.findUnique({
-      where: { userId },
-      include: {
-        apiKeys: {
-          orderBy: { createdAt: 'desc' },
-          select: {
-            id: true,
-            prefix: true,
-            name: true,
-            type: true,
-            isActive: true,
-            lastUsedAt: true,
-            createdAt: true,
-          },
-        },
-      },
+    const enseigne = await enseigneDuProprietaire(userId, req.nextUrl.searchParams.get("enseigne"));
+    const cles = await prisma.apiKey.findMany({
+      where: { developerId: enseigne.id },
+      orderBy: { createdAt: "desc" },
+      select: SELECTION_CLE,
     });
-
-    /*
-     * Création automatique du compte à la première visite.
-     *
-     * 🔴 PLUS DE SOLDE, PLUS DE REGISTRE (21/08/2026). Les « 1 000 crédits de
-     * bienvenue » et leur ligne `DevLedger` ont disparu avec la facturation :
-     * cette API sert la plateforme de l'équipe, qui porte son propre paiement.
-     * `balanceCredits` et `holdCredits` ne sont plus rendus — un champ qui
-     * survit à son système laisse bâtir des écrans sur une valeur morte.
-     */
-    if (!devAccount) {
-      devAccount = await prisma.developerAccount.create({
-        data: { userId },
-        include: { apiKeys: true },
-      });
-    }
-
-    return ok({
-      developer: {
-        id: devAccount.id,
-        companyName: devAccount.companyName ?? null,
-      },
-      apiKeys: devAccount.apiKeys,
-    });
-  } catch (error) {
-    return handleError(error);
+    return ok({ cles });
+  } catch (err) {
+    return handleError(err);
   }
-}
+});
 
-// POST /api/developer/keys — Génère une nouvelle clé API
-export async function POST(req: NextRequest) {
+const creationSchema = z.object({
+  enseigneId: z.string().uuid(),
+  nom: z.string().trim().max(50).optional(),
+});
+
+// POST /api/developer/keys — `{ enseigneId, nom? }` → la clé, montrée UNE fois.
+export const POST = withAuth(async (req: NextRequest, userId: string) => {
   try {
-    const { sub: userId } = requireUser(req);
-    const body = await req.json().catch(() => ({}));
-    const name = (body.name?.toString().trim() || 'Ma clé API Développeur').slice(0, 50);
-    const type = body.type === 'LIVE' ? ApiKeyType.LIVE : ApiKeyType.SANDBOX;
+    const corps = creationSchema.parse(await req.json().catch(() => ({})));
+    const enseigne = await enseigneDuProprietaire(userId, corps.enseigneId);
 
-    // Récupère ou crée le compte dev
-    let devAccount = await prisma.developerAccount.findUnique({
-      where: { userId },
-    });
-
-    if (!devAccount) {
-      devAccount = await prisma.developerAccount.create({
-        data: { userId },
-      });
-    }
-
-    // Génération cryptographique de la clé
-    const { rawKey, keyHash, prefix } = generateApiKey(type);
-
-    const apiKey = await prisma.apiKey.create({
+    const { rawKey, keyHash, prefix } = generateApiKey();
+    const cle = await prisma.apiKey.create({
       data: {
-        developerId: devAccount.id,
-        name,
+        developerId: enseigne.id,
+        name: corps.nom || "Clé API",
         keyHash,
         prefix,
-        type,
       },
+      select: SELECTION_CLE,
     });
 
-    return ok({
-      message: 'Clé API générée avec succès. Conservez-la en lieu sûr !',
-      // ⚠️ rawKey est renvoyé UNE SEULE ET UNIQUE FOIS ici !
-      rawKey,
-      apiKey: {
-        id: apiKey.id,
-        prefix: apiKey.prefix,
-        name: apiKey.name,
-        type: apiKey.type,
-        createdAt: apiKey.createdAt,
+    return ok(
+      {
+        // ⚠️ La clé entière n'est rendue qu'ICI : seule son empreinte est gardée.
+        cleComplete: rawKey,
+        cle,
       },
-    });
-  } catch (error) {
-    return handleError(error);
+      201,
+    );
+  } catch (err) {
+    return handleError(err);
   }
-}
+});
 
-// DELETE /api/developer/keys — Révoque/désactive une clé API
-export async function DELETE(req: NextRequest) {
+const revocationSchema = z.object({
+  enseigneId: z.string().uuid(),
+  cleId: z.string().uuid(),
+});
+
+// DELETE /api/developer/keys — `{ enseigneId, cleId }` : la clé cesse aussitôt de marcher.
+export const DELETE = withAuth(async (req: NextRequest, userId: string) => {
   try {
-    const { sub: userId } = requireUser(req);
-    const body = await req.json().catch(() => ({}));
-    const keyId = body.keyId?.toString();
-
-    if (!keyId) return fail('Paramètre keyId requis', 400);
-
-    const devAccount = await prisma.developerAccount.findUnique({
-      where: { userId },
-    });
-
-    if (!devAccount) return fail('Compte développeur introuvable', 404);
-
+    const corps = revocationSchema.parse(await req.json().catch(() => ({})));
+    const enseigne = await enseigneDuProprietaire(userId, corps.enseigneId);
     await prisma.apiKey.updateMany({
-      where: { id: keyId, developerId: devAccount.id },
+      where: { id: corps.cleId, developerId: enseigne.id },
       data: { isActive: false },
     });
-
-    return ok({ message: 'Clé API révoquée avec succès.' });
-  } catch (error) {
-    return handleError(error);
+    return ok({ message: "Clé révoquée." });
+  } catch (err) {
+    return handleError(err);
   }
-}
+});

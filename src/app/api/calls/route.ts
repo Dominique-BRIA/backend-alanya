@@ -13,6 +13,7 @@ import {
 } from "@/lib/calls";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { ouvreUnStandard } from "@/lib/ivr.mjs";
+import { TYPE_COMPTE_ENSEIGNE } from "@/lib/developer/enseignes";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { moteurPour } from "@/lib/reglages-appels";
 
@@ -142,6 +143,16 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       where: { id: calleeId },
       select: { typeCompte: true, appelsContactsSeulement: true },
     });
+
+    /*
+     * 🔴 UNE ENSEIGNE NE REÇOIT PAS D'APPELS (07/11/2026). C'est le compte au
+     * nom duquel l'API envoie ses messages : personne ne s'y connecte, aucun
+     * téléphone ne sonnerait. Refusé avant de sonner, avec un motif que les
+     * clients traduisent.
+     */
+    if (cible?.typeCompte === TYPE_COMPTE_ENSEIGNE) {
+      return fail("Ce compte envoie des messages automatiques et ne reçoit pas d'appels", 403, "APPEL_ENSEIGNE");
+    }
 
     /*
      * 🔴 « CONTACTS PRÉFÉRÉS UNIQUEMENT » (29/10/2026, user) : l'appelé n'accepte

@@ -7,7 +7,7 @@ import { CODE, statutPublic } from '@/lib/developer/api-contract';
 import { notifierStatutMessage } from '@/lib/developer/webhook';
 import { findOrCreateDirectConversation } from '@/modules/messaging/access';
 import { creerMessage } from '@/modules/messaging/envoi';
-import { chargeValide } from '@/lib/message-payload.mjs';
+import { chargeValide, LONGUEUR_MAX_CONTENU } from '@/lib/message-payload.mjs';
 
 const CHEMIN = '/api/v1/messages';
 
@@ -49,7 +49,14 @@ const envoiV1Schema = z
     type: z
       .enum(['TEXT', 'IMAGE', 'FILE', 'AUDIO', 'VIDEO', 'CONTACT', 'LOCATION'])
       .default('TEXT'),
-    texte: z.string().trim().min(1).max(8000).optional(),
+    /*
+     * ⚠️ 500 CARACTÈRES AU PLUS (07/11/2026), la taille de la colonne. L'API en
+     * acceptait 8 000, et la base COUPAIT le reste sans rien dire : l'appelant
+     * recevait un 201 pour un message tronqué. Les boutons, ajoutés en fin de
+     * texte, disparaissaient les premiers. Le refus est maintenant explicite —
+     * voir aussi le contrôle de longueur avec les boutons, plus bas.
+     */
+    texte: z.string().trim().min(1).max(LONGUEUR_MAX_CONTENU).optional(),
     mediaIds: z.array(z.string().uuid()).max(10).optional(),
     /*
      * Boutons de réponse rapide — « Veux-tu manger ? [OUI] [NON] ».
@@ -107,7 +114,19 @@ const envoiV1Schema = z
   .refine((d) => !d.options?.length || Boolean(d.texte), {
     message: 'Des options exigent un texte : le bouton répond à une question',
     path: ['options'],
-  });
+  })
+  // Texte ET boutons tiennent ensemble dans la colonne : sinon la base
+  // couperait les boutons, et la question resterait sans réponse possible.
+  .refine(
+    (d) =>
+      !d.options?.length ||
+      !d.texte ||
+      composerTexteAvecOptions(d.texte, d.options).length <= LONGUEUR_MAX_CONTENU,
+    {
+      message: `Le texte et ses boutons dépassent ${LONGUEUR_MAX_CONTENU} caractères`,
+      path: ['texte'],
+    },
+  );
 
 /**
  * Encode les boutons dans le texte, au format que les DEUX clients lisent déjà.
@@ -157,6 +176,16 @@ async function envoyer(req: NextRequest, cle: CleAuthentifiee): Promise<Response
       `Aucun compte Alanya pour le numéro ${corps.destinataire}.`,
       404,
       CODE.DESTINATAIRE_INTROUVABLE,
+    );
+  }
+
+  // Le numéro de l'enseigne elle-même : le message atterrirait dans sa
+  // conversation « Moi », que personne ne lit.
+  if (destinataire.id === cle.userId) {
+    return fail(
+      "Le destinataire est le numéro de l'enseigne elle-même.",
+      422,
+      CODE.REQUETE_INVALIDE,
     );
   }
 
@@ -212,7 +241,15 @@ async function envoyer(req: NextRequest, cle: CleAuthentifiee): Promise<Response
      * fait, la route HTTP de conversation le fait — l'API était la seule porte
      * par laquelle on pouvait écrire à quelqu'un qui vous a bloqué.
      */
-    return fail('Destinataire non joignable.', 403, CODE.DESTINATAIRE_BLOQUE);
+    if (envoi.motif === 'BLOQUE') {
+      return fail('Destinataire non joignable.', 403, CODE.DESTINATAIRE_BLOQUE);
+    }
+    /*
+     * Les autres refus (compte officiel, etc.) étaient tous rendus comme un
+     * blocage, ce qui envoyait l'appelant sur une fausse piste. Le motif est
+     * désormais dit tel quel.
+     */
+    return fail(`Message refusé (${envoi.motif}).`, 409, CODE.ENVOI_REFUSE);
   }
 
   const message = envoi.message;

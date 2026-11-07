@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { fail } from "@/lib/http";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
-import { validateApiKey } from "./key-service";
+import { LONGUEUR_PREFIXE, validateApiKey } from "./key-service";
 import { CODE, STATUT_TROP_DE_REQUETES } from "./api-contract";
 
 /**
@@ -44,27 +44,21 @@ const PLAFOND_PAR_IP_PAR_MINUTE = 120;
 
 /** Ce qu'une route reçoit une fois l'appelant identifié. */
 export interface CleAuthentifiee {
-  /** `developer_accounts.developer_id` — la portée de TOUTES les données. */
+  /** L'enseigne (`developer_accounts.developer_id`) — la portée de TOUTES les données. */
   developerId: string;
-  /** Le compte Alanya qui porte l'abonnement : l'expéditeur des messages. */
+  /** Le compte Alanya de l'enseigne : l'expéditeur des messages. */
   userId: string;
   /** Douze premiers caractères, pour la télémétrie. Jamais la clé entière. */
   prefixe: string;
 }
 
 /*
- * 🔴 IL N'Y A PAS DE BAC À SABLE (décision du user, 21/08/2026).
+ * 🔴 IL N'Y A PAS DE BAC À SABLE (décision du user, 21/08/2026). Une clé est
+ * une clé, et toutes produisent des effets réels. Le type Sandbox / Production
+ * a été retiré de la base et de la console le 07/11/2026.
  *
- * `ApiKeyType` distingue toujours `SANDBOX` de `LIVE` en base, mais **aucune
- * route n'en tient compte** : une clé est une clé, et toutes produisent des
- * effets réels. La distinction n'avait de sens que face à un développeur
- * extérieur qui essaie avant d'acheter ; l'appelant est ici la plateforme de
- * l'équipe, qui a ses propres environnements.
- *
- * ⚠️ La colonne `type` est LAISSÉE en base — elle est partagée avec le second
- * système qui écrit dans cette base, et retirer une valeur d'enum PostgreSQL
- * casserait ses lectures. Elle ne veut simplement plus rien dire de notre côté :
- * ne pas la réintroduire dans une décision d'exécution sans en reparler.
+ * `developerId` désigne une ENSEIGNE (07/11/2026) : `userId` est le compte
+ * Alanya de l'enseigne, jamais celui de la personne qui l'a créée.
  */
 
 /**
@@ -104,14 +98,14 @@ export async function routeV1(
   }
 
   const donnees = await validateApiKey(rawKey);
-  if (!donnees || !donnees.developer) {
+  if (!donnees) {
     return fail("Clé API invalide, révoquée ou introuvable.", 401, CODE.CLE_INVALIDE);
   }
 
   const cle: CleAuthentifiee = {
     developerId: donnees.developer.id,
     userId: donnees.developer.userId,
-    prefixe: rawKey.slice(0, 12),
+    prefixe: rawKey.slice(0, LONGUEUR_PREFIXE),
   };
 
   const parCle = await rateLimit(
