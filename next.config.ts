@@ -39,6 +39,29 @@ const nextConfig: NextConfig = {
   },
 
   compress: false,
+
+  /*
+   * 🔴 L'ADRESSE DE L'ESPACE DÉVELOPPEUR : alanyavox.com/developer (demande du
+   * user, 07/11/2026 — le mot en anglais).
+   *
+   * La console vit dans le client web, servi sous `/webapp/`. Le domaine
+   * transmet à ce serveur tout ce qui n'est pas `/webapp/` (c'est ce qui sert
+   * déjà les liens `/u/…` et `/i/…`) : on renvoie donc `/developer` et ses
+   * sous-pages vers la même page du client web.
+   *
+   * ⚠️ 307 et non 308 : une redirection permanente est gardée par les
+   * navigateurs, et on ne pourrait plus déplacer la console sans eux.
+   */
+  async redirects() {
+    return [
+      {
+        source: "/developer/:chemin*",
+        destination: "/webapp/developer/:chemin*",
+        permanent: false,
+      },
+    ];
+  },
+
   async headers() {
     return [
       {
