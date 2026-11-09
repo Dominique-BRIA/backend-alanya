@@ -56,16 +56,16 @@ export const PUT = routeAdmin("settings.write", async (req, session) => {
     // Sans ses clés, le SFU ne porterait aucun appel : on refuse de le choisir
     // plutôt que de laisser croire qu'il est en service.
     if (corps.moteurGroupes === "sfu" && !sfuConfigure()) {
-      throw new ErreurAdmin(400, "Le SFU de Cloudflare n'est pas configuré sur le serveur", "SFU_NON_CONFIGURE");
+      throw new ErreurAdmin(400, "SFU Meeting n'est pas configuré sur le serveur", "SFU_NON_CONFIGURE");
     }
     suivant.moteurGroupes = corps.moteurGroupes;
   }
   const motifs: string[] = [];
   if (suivant.relaisPrincipal !== actuel.relaisPrincipal) {
-    motifs.push(suivant.relaisPrincipal === "cloudflare" ? "relais principal : Cloudflare" : "relais principal : nos relais");
+    motifs.push(suivant.relaisPrincipal === "cloudflare" ? "relais principal : P2P Cloud" : "relais principal : P2P Alanya");
   }
   if (suivant.moteurGroupes !== actuel.moteurGroupes) {
-    motifs.push(suivant.moteurGroupes === "sfu" ? "groupes et réunions : SFU Cloudflare" : "groupes et réunions : système actuel");
+    motifs.push(suivant.moteurGroupes === "sfu" ? "groupes et réunions : SFU Meeting" : "groupes et réunions : P2P Meeting");
   }
   session.audit = { motif: motifs.join(" ; ") || null };
   await ecrireReglage(CLE_REGLAGES_APPELS, suivant, session);
