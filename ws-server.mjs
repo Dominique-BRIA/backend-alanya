@@ -5305,7 +5305,10 @@ const PONT_VERBE = /^meeting_[a-z0-9_]+$/;
 // `sfu_*` (07/11/2026) : un participant d'un appel de groupe ou d'une réunion
 // en SFU vient de publier ses pistes ; les autres vont les chercher
 // (`sfu_pistes`). Des noms de pistes et des identifiants, rien d'autre.
-const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web|statut|sfu)_[a-z0-9_]+$/;
+// `invitation_*` (11/11/2026) : l'invitation QR du destinataire vient d'être
+// utilisée (`invitation_utilisee` : le jeton et l'identifiant de celui qui
+// l'a prise) ; son écran remplace le code par un neuf.
+const PONT_VERBE_PERSONNES = /^(e2ee|vue_unique|connexion_web|statut|sfu|invitation)_[a-z0-9_]+$/;
 
 /// Comparaison a temps constant. Les deux empreintes font toujours 32 octets :
 /// `timingSafeEqual` refuse des longueurs differentes, et comparer les chaines

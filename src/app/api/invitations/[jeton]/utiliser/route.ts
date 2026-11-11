@@ -7,6 +7,7 @@ import { nomAffichage } from "@/lib/display-name.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
 import { findOrCreateDirectConversation } from "@/modules/messaging/access";
 import { JETON_REGEX, etatInvitation } from "@/lib/invitation-qr";
+import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 
 // POST /api/invitations/<jeton>/utiliser — utilise l'invitation : les deux
 // personnes s'ajoutent mutuellement aux contacts, et la conversation directe
@@ -76,6 +77,19 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     if (!prise) {
       return fail("Cette invitation a déjà été utilisée", 410, "INVITATION_UTILISEE");
     }
+
+    /*
+     * LE CRÉATEUR L'APPREND TOUT DE SUITE (11/11/2026), comme dans
+     * l'application de référence : son écran de QR affiche un code mort,
+     * qu'il remplace aussitôt par un neuf. Des identifiants seulement, comme
+     * tout ce qui passe par le pont. Sans effet s'il n'est pas connecté ;
+     * l'ajout, lui, est déjà fait.
+     */
+    await previensDesPersonnes({
+      personnes: [createurId],
+      type: "invitation_utilisee",
+      donnees: { jeton, parId: userId },
+    });
   }
 
   const conv = await findOrCreateDirectConversation(userId, createurId);
