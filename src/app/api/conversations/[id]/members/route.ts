@@ -8,6 +8,7 @@ import { isGroupAdmin } from "@/lib/groups";
 import { proprietaireEffectif, transmettrePropriete } from "@/lib/groupe-droits.mjs";
 import { peutChiffrer } from "@/lib/e2ee-perimetre";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
+import { previensManquants } from "@/lib/e2ee-v2";
 import { nomAffichage } from "@/lib/display-name.mjs";
 import { deposerMessageSysteme, nomPourAvis } from "@/lib/messages-systeme";
 import { avatarPublicUrl } from "@/lib/avatar";
@@ -234,6 +235,13 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
     });
   }
 
+  /*
+   * GROUPE CHIFFRÉ : LES MEMBRES QUI ONT LES CLÉS EMBALLENT POUR LES NOUVEAUX
+   * (chiffrement des groupes v2, 11/11/2026). L'appareil qui vient d'ajouter
+   * le fait aussitôt ; les autres complètent si besoin (`…/e2ee/manquants`).
+   */
+  if (conv.e2eeActif) await previensManquants(convId);
+
   return ok({
     message: `${toAdd.length} membre(s) ajouté(s)`,
     added: toAdd.map((u) => u.publicNumber),
@@ -303,6 +311,8 @@ export const DELETE = withAuth(async (req: NextRequest, userId: string, ctx) => 
     prisma.e2eeTrousseau.deleteMany({ where: { convId, userId: targetId } }),
     // Ses boîtes permanentes aussi (chapitre 39).
     prisma.e2eeBoite.deleteMany({ where: { convId, userId: targetId } }),
+    // Et ses emballages (chiffrement des groupes v2, 11/11/2026).
+    prisma.e2eeEmballage.deleteMany({ where: { convId, userId: targetId } }),
   ]);
   /*
    * 🔴 IMMÉDIATEMENT APRÈS LE RETRAIT. Cette liste est le contrôle d'accès de la

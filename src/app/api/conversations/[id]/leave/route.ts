@@ -35,6 +35,8 @@ export const POST = withAuth(async (_req: NextRequest, userId: string, ctx) => {
     prisma.e2eeTrousseau.deleteMany({ where: { convId, userId } }),
     // Ses boîtes permanentes aussi (chapitre 39).
     prisma.e2eeBoite.deleteMany({ where: { convId, userId } }),
+    // Et ses emballages (chiffrement des groupes v2, 11/11/2026).
+    prisma.e2eeEmballage.deleteMany({ where: { convId, userId } }),
   ]);
   // Le propriétaire qui part transmet le groupe (01/11/2026).
   await transmettrePropriete(prisma, convId, userId);

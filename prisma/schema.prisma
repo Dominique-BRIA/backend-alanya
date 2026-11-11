@@ -1019,6 +1019,7 @@ model Conversation {
   messagesGroupe E2eeMessageGroupe[]
   trousseaux     E2eeTrousseau[]
   boites         E2eeBoite[]
+  emballages     E2eeEmballage[]
   e2eeEnveloppes E2eeEnveloppe[]
   messages       Message[]
   locks          ConversationLock[]
@@ -3937,4 +3938,37 @@ model SfuSession {
   fermeLe   DateTime? @map("ferme_le") @db.Timestamptz
 
   @@map("sfu_session")
+}
+
+/// LA CLÉ D'UN COMPTE — chiffrement des groupes v2 (11/11/2026). Une paire
+/// X25519 par compte ; la partie privée est chiffrée par la clé maîtresse de
+/// l'archive de son propriétaire (illisible ici). Voir
+/// `docs/2026-11-11-e2ee-groupes-v2-conception.md`, § 3.1.
+model E2eeCleCompte {
+  userId         String   @id @map("alanyaID") @db.Uuid
+  version        Int      @default(1)
+  publique       String   @db.VarChar(64)
+  priveeChiffree String   @map("privee_chiffree")
+  creeLe         DateTime @default(now()) @map("cree_le") @db.Timestamptz
+  majLe          DateTime @default(now()) @map("maj_le") @db.Timestamptz
+
+  @@map("e2ee_cles_compte")
+}
+
+/// UN EMBALLAGE DE GROUPE — chiffrement des groupes v2 (11/11/2026) : la clé
+/// d'une version d'un groupe, scellée pour la clé de compte d'un membre.
+/// Permanent, premier dépôt gagnant. Conception, § 3.2.
+model E2eeEmballage {
+  convId        String       @map("conv_id") @db.Uuid
+  userId        String       @map("alanyaID") @db.Uuid
+  version       Int
+  versionCompte Int          @map("version_compte")
+  corps         String
+  deposePar     String       @map("depose_par") @db.Uuid
+  deposeLe      DateTime     @default(now()) @map("depose_le") @db.Timestamptz
+  conv          Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+
+  @@id([convId, userId, version, versionCompte], map: "e2ee_emballages_pkey")
+  @@index([userId, convId], map: "idx_e2ee_emballages_destinataire")
+  @@map("e2ee_emballages")
 }
