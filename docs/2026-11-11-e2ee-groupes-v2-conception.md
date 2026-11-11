@@ -50,11 +50,15 @@
 
 ### 3.1 La clé du compte
 
-- Paire **X25519** tirée sur l'appareil à la première connexion qui n'en
-  trouve pas (aléa sûr de la plateforme).
+- Paire **Curve25519** tirée sur l'appareil à la première connexion qui n'en
+  trouve pas (aléa sûr de la plateforme). Format de la bibliothèque Signal :
+  publique **33 octets** (préfixe `0x05`), privée 32 octets.
 - **Publique** : publiée sur le serveur, liée au compte.
-- **Privée** : `AES-256-GCM(clé maîtresse, privée)`, AAD
-  `"alanya-compte-v1" | userId | version`, déposée sur le serveur. Copie
+- **Privée** : la copie de trousseau personnelle existante (`chiffrerCopie` :
+  `0x01 | nonce | AES-256-GCM`) appliquée à la privée en base64, sous la clé
+  maîtresse, AAD `"alanya-compte-v1
+" userId "
+" version`, déposée sur le serveur. Copie
   locale dans le stockage sécurisé de l'appareil (Keystore / Keychain ;
   IndexedDB non extractible sur le web), comme la clé maîtresse aujourd'hui.
 - **Versionnée** (`version` = 1, 2…) : elle ne change que si la clé maîtresse
@@ -67,10 +71,19 @@
 ### 3.2 L'emballage de groupe
 
 ```
-corps = base64( 0x01 | éphémère_pub(32) | nonce(12) | AES-256-GCM(K, clé_de_groupe_v) )
+corps = base64( 0x01 | éphémère_pub(33) | nonce(12) | AES-256-GCM(K, clé_de_groupe_v 32) + étiquette(16) )
 K     = HKDF-SHA256( X25519(éphémère_priv, compte_pub_destinataire),
-                     info = "alanya-emballage-v1" | convId | destinataireId | version | versionCompte )
+                     sel = 32 zéros, info = "alanya-emballage-v1" )
+AAD   = "alanya-emballage-v1
+" convId "
+" destinataireId "
+" version "
+" versionCompte
 ```
+
+Implémentation de référence : `e2ee_groupe.dart` (mobile, `emballerCle` /
+`deballerCle`), vecteurs figés dans `test/e2ee_groupe_v2_test.dart` — le web
+(lot 4) doit produire les mêmes octets.
 
 C'est le scellement que nous utilisons déjà pour les boîtes (`scellerBoite`),
 adressé au **compte** au lieu de l'appareil. L'AAD colle l'emballage à son
@@ -80,8 +93,20 @@ groupe, son destinataire et sa version : le serveur ne peut pas le déplacer.
 
 ```
 corps = base64( 0x02 | nonce(12) | AES-256-GCM(clé_de_groupe_v, charge) )
-AAD   = "alanya-groupe-v2" | convId | messageId | version | expediteurId
+AAD   = "alanya-groupe-v2
+" convId "
+" messageId "
+" version "
+" expediteurId
 ```
+
+L'appareil reste transmis au serveur (`groupe.appareil`) mais ne fait pas
+partie des données associées.
+
+> **Écrit seulement à partir du lot 5.** Tant qu'un membre peut avoir une
+> application qui ne lit que le format 1, on écrit le format 1
+> (`GroupeChiffre.ecrireFormat2 = false`) ; la lecture des deux formats est
+> active dès le lot 3.
 
 - **Plus de signature par appareil.** C'est le serveur qui garantit
   l'expéditeur (il refuse un message dont l'auteur n'est pas l'appelant), et
