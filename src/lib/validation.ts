@@ -62,6 +62,37 @@ export const deviceIdSchema = z.string().trim().min(8).max(255).optional();
  */
 export const typeDeviceSchema = z.number().int().min(0).max(9).optional();
 
+/**
+ * 🔴 UN NOM DE PERSONNE A DE VRAIES LETTRES (13/11/2026, demande du user).
+ *
+ * `trim().min(2)` laissait passer « .. », « -- » ou deux caractères
+ * INVISIBLES (espace sans largeur, remplissage coréen « ㅤ », espace braille…),
+ * que `trim()` ne retire pas : un compte s'affichait alors sans nom.
+ *
+ * Le nom est nettoyé (invisibles retirés, espaces regroupés), puis il doit
+ * compter au moins DEUX lettres ou chiffres, de n'importe quelle écriture.
+ * Même règle sur le mobile : `lib/core/nom_personne.dart`.
+ */
+const INVISIBLES =
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u2800\u3164\uFEFF\uFFA0]/g;
+
+export function nettoyerNom(brut: string): string {
+  return brut.replace(INVISIBLES, "").replace(/\s+/gu, " ").trim();
+}
+
+export function nomPersonneValide(nom: string): boolean {
+  return (nettoyerNom(nom).match(/[\p{L}\p{N}]/gu)?.length ?? 0) >= 2;
+}
+
+const NOM_SANS_LETTRES = "Entre ton vrai nom : au moins deux lettres";
+
+function nomPersonneSchema(max: number, tropLong: string) {
+  return z
+    .string()
+    .transform(nettoyerNom)
+    .pipe(z.string().max(max, tropLong).refine(nomPersonneValide, NOM_SANS_LETTRES));
+}
+
 export const setupSchema = z.object({
   // Reste OBLIGATOIRE : le formulaire ne le demande plus, mais il y recopie le
   // nom avant l'envoi. Le contrat d'API est donc inchangé, et un client plus
@@ -72,9 +103,9 @@ export const setupSchema = z.object({
   // l'insertion en base, et l'utilisateur récupérerait une erreur 500 au lieu
   // d'un message clair. ⚠️ Le nom, lui, va jusqu'à 100 : le client doit donc
   // TRONQUER avant de le recopier ici.
-  pseudo: z.string().trim().min(2, "Pseudo trop court").max(50, "Pseudo trop long (50 caractères maximum)"),
+  pseudo: nomPersonneSchema(50, "Pseudo trop long (50 caractères maximum)"),
   password: z.string().min(8, "Le mot de passe doit faire au moins 8 caractères").max(128),
-  nom: z.string().trim().min(1, "Le nom est requis").max(100).optional(),
+  nom: nomPersonneSchema(100, "Nom trop long (100 caractères maximum)").optional(),
   // Numéro de téléphone personnel, distinct de l'Alanya ID. 20 caractères,
   // longueur relevée sur la colonne users.mobile — au-delà, la validation
   // passerait et l'insertion échouerait.
@@ -153,7 +184,7 @@ export const positionSchema = z.object({
 
 export const updateProfileSchema = z.object({
   // Aligné sur la longueur de la colonne — voir setupSchema.
-  pseudo: z.string().trim().min(2).max(50, "Pseudo trop long (50 caractères maximum)").optional(),
+  pseudo: nomPersonneSchema(50, "Pseudo trop long (50 caractères maximum)").optional(),
   avatarUrl: z.string().trim().max(2048).regex(/^(https?:\/\/[^\s]+|\/api\/media\/[a-zA-Z0-9-]+)$/, "avatarUrl invalide").nullable().optional(),
   statusMsg: z.string().trim().max(255).nullable().optional(),
   /**
