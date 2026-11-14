@@ -205,18 +205,26 @@ Note : le service de vérification existe déjà côté API (`POST /api/v1/verif
 `/verifications/check`, voir `docs/2026-08-21-api-v1-integration.md`) ; rien ne l'utilise à la
 connexion web.
 
-#### B2 — Nom personnalisé par contact, affiché partout 🟨 *socle existant*
+#### B2 — Nom personnalisé par contact, affiché partout ✅ 18/10 mobile (Dominique), 07/11 web (`a136e43`)
 Le nom qu'un utilisateur donne à un contact doit s'afficher **partout où ce contact
 apparaît** : liste des fils, en-tête de conversation, messages entrants, appels entrants et
 sortants, notifications.
 **Ce qui existe déjà** : la colonne `Contact.alias` (`prisma/schema.prisma:704`), l'API
 (`/api/contacts`, `/api/contacts/[id]`), le champ « Alias (optionnel) » du formulaire de
 contact sur le web. `/api/accounts/lookup` préfère déjà l'alias au nom public.
-**Ce qui manque** : l'alias n'est utilisé que dans la recherche de contacts. Il n'est appliqué
-ni aux conversations, ni aux appels, ni aux notifications, et **rien n'existe côté mobile**.
-**Réserve technique à dire au professeur** : l'option « interdire aux autres de me renommer »
-n'est pas tenable. On peut refuser de stocker l'alias sur le serveur, on ne peut pas empêcher
-un client d'afficher un nom qu'il garde en local.
+**Fait** : règle unique des deux côtés — le nom que J'AI donné s'il existe, sinon le nom du
+profil (`lib/core/noms_donnes.dart`, `src/services/noms-donnes.ts`). Appliquée **dans la couche
+de données** et non dans les écrans : titre de conversation, appel entrant, liste de ceux qui
+ont vu mon statut. Registre gardé localement pour servir dès le premier affichage, effacé à la
+déconnexion.
+⚠️ **CE QUI SORT DE L'APPLICATION GARDE LE NOM DU PROFIL** — mention écrite, contact partagé,
+tout ce qui part au serveur. Le nom donné est privé.
+**Et « interdire qu'on me renomme »** : `User.nomVerrouille` côté serveur (18/10), réglage dans
+les paramètres du web depuis le 07/11. Le serveur cesse de renvoyer l'alias (`alias: null`).
+⚠️ La réserve dite au professeur tient toujours : le filtrage est au SERVEUR, seule place sûre.
+Un client garde en mémoire ce qu'il veut ; on peut seulement cesser de le lui dire.
+**Reste** : le nom pendant un appel EN COURS (pas l'entrant) — l'identifiant du correspondant
+n'est pas dans le message du serveur à cet endroit, à reprendre quand on touchera aux appels.
 
 #### B3 — Documents sensibles : marquage à la descente ✅ 18 au 26/10, PAR DOMINIQUE
 Huit commits côté web (`d47a9df` → `3a47772`) : le navigateur ne les ouvre ni ne les transfère,
@@ -351,13 +359,44 @@ Mesurer le chemin complet d'un média chiffré — dérivation de clé, téléch
 déchiffrement, rendu — et optimiser le maillon le plus lent, chiffres en main. Distinct de A5,
 qui porte sur l'envoi.
 
-#### E3 — Filtres de visage en appel vidéo 🔵
-Barbe, modification de la forme du visage, à la manière de Snapchat. Demande d'étude de
-faisabilité, pas de réalisation immédiate.
+#### E3 — Filtres de visage en appel vidéo ⛔ essayé puis RETIRÉ par Dominique
+Barbe, lunettes, grosse tête : ajoutés le 18/10 côté mobile (« effets de visage gratuits et
+natifs »), avec un commit de diagnostic le même jour (« quand l'effet ne se voit pas »), puis
+**retirés le 22/10** (« Appels vidéo : retrait des effets de visage »).
+⚠️ **Décision du user, 07/11/2026 : on ne refait pas ce qu'il a ajouté puis retiré.**
+Il reste dans le dépôt mobile un document de faisabilité (« Docs : filtres de visage en appel
+vidéo — faisabilité et choix du moteur ») : **à lire avant que quiconque relance le sujet**, il
+contient vraisemblablement la raison de l'abandon.
 
 ---
 
 ## Journal
+
+- **14/11/2026** — Hors liste du professeur : **deux retours des testeurs du web**, livrés côté
+  web (`6af9a93`).
+  1. Enregistrer quelqu'un qui nous a écrit **sans recopier son ID** : bandeau en tête de la
+     discussion (Bloquer / Enregistrer le contact / masquer) et bouton « Ajouter » du panneau
+     d'infos. Le « n'est pas un contact » vient du répertoire du SERVEUR, jamais du seul cache.
+  2. **Couper le téléchargement automatique** : Paramètres › Stockage et données, quatre
+     familles (photos, vocaux, vidéos, documents), réglage propre à l'appareil. Allumé = le
+     comportement d'avant (défaut) ; éteint = un média reçu ne vient qu'au clic.
+  ⚠️ **Le mobile n'a ni l'un ni l'autre** (vérifié dans `alanya` : `add_to_contacts` n'existe
+  que sur la fiche partagée et le clavier d'appel, aucun réglage de téléchargement). À porter
+  si les testeurs du téléphone font les mêmes remarques.
+  ⚠️ Quatre vocaux de remarques (web + mobile) reçus le même jour, **pas encore transcrits** :
+  aucun outil de transcription sur la machine.
+  Relevé en reprenant : deux commits du 07/11 n'avaient jamais été poussés (push refusé,
+  « fetch first ») — la tuile du média chiffré sans clé, web et mobile ; rebasés le 14/11.
+
+- **07/11/2026** — Mise à jour sur les trois dépôts (78 commits mobiles et 37 web depuis le
+  17/10, presque tous de Dominique). **B1 et B3 sont à lui**, et **E3 a été essayé puis
+  retiré** par lui. Livré côté web, pour rattraper le mobile : **B2** (nom personnalisé partout
+  + verrou de renommage, `a136e43`), l'archivage des discussions (`092be6c`) et la forme d'onde
+  des bulles vocales (`56c7a53`) — ces deux derniers ne sont pas sur la liste du professeur mais
+  manquaient au web.
+  ⚠️ Relevé au passage et **non traité** : le partage d'écran existe en réunion sur le web
+  (`meeting-room.tsx`) mais **pas du tout sur le mobile** — aucun `MediaProjection`. Un
+  participant sur téléphone voit l'écran partagé mais ne peut pas partager le sien.
 
 - **27/10/2026** — Mise à jour sur les dépôts : Dominique a livré **B1** (connexion en deux
   étapes) et **B3** (documents sensibles signés et non repartageables), plus des chantiers hors
