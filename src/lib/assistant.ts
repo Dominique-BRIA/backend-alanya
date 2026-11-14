@@ -1,5 +1,6 @@
 import { setDefaultResultOrder } from "node:dns";
 import { env } from "./env";
+import { CONSIGNE_WEB, executerOutil, OUTILS_WEB, type OutilNeutre } from "./web/outils-assistant";
 
 /**
  * L'ASSISTANT ALANYA — la couche qui parle au modèle de langage.
@@ -117,41 +118,124 @@ export async function generateReply(history: TourAssistant[]): Promise<string> {
     `https://generativelanguage.googleapis.com/v1beta/models/${env.assistant.model}:generateContent` +
     `?key=${apiKey}`;
 
-  const body = {
-    systemInstruction: { parts: [{ text: CONSIGNE }] },
-    contents: history.map((t) => ({ role: t.role, parts: [{ text: t.text }] })),
-    generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
-  };
+  /*
+   * 🔁 LA RECHERCHE WEB (14/11/2026, demande du user) : le modèle peut
+   * demander `rechercher_web` et `lire_page` ; NOUS les exécutons
+   * (`web/outils-assistant.ts`) et lui rendons le résultat, jusqu'à ce qu'il
+   * réponde par du texte. Sans moteur configuré, rien ne change : pas d'outil.
+   *
+   * ⚠️ BORNÉ EN TOURS ET EN TEMPS. [MAX_TOURS_OUTILS] tours d'outils au plus,
+   * et plus aucun outil passé [BUDGET_OUTILS_MS] : l'appel suivant force alors
+   * une réponse (`mode: NONE`). Sans ces bornes, un modèle qui cherche encore
+   * et encore ferait attendre l'utilisateur au-delà du délai des applications.
+   *
+   * ⚠️ LA RÉPONSE DU MODÈLE LUI EST RENVOYÉE TELLE QUELLE à chaque tour, parties
+   * invisibles comprises : le modèle y joint une signature de son raisonnement,
+   * sans laquelle l'appel suivant est refusé.
+   */
+  const moteur = env.assistant.moteurRecherche;
+  const consigne = moteur ? `${CONSIGNE}\n\n${CONSIGNE_WEB(new Date())}` : CONSIGNE;
+  const contents: unknown[] = history.map((t) => ({ role: t.role, parts: [{ text: t.text }] }));
+  const debut = Date.now();
+  const compte = { recherches: 0, pages: 0 };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  for (let tour = 0; ; tour++) {
+    const outilsPermis =
+      Boolean(moteur) && tour < MAX_TOURS_OUTILS && Date.now() - debut < BUDGET_OUTILS_MS;
+    const body = {
+      systemInstruction: { parts: [{ text: consigne }] },
+      contents,
+      ...(moteur
+        ? {
+            tools: [{ functionDeclarations: OUTILS_WEB.map(versDeclaration) }],
+            toolConfig: { functionCallingConfig: { mode: outilsPermis ? "AUTO" : "NONE" } },
+          }
+        : {}),
+      generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+    };
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    /*
-     * 🔴 LE DÉTAIL VA AU JOURNAL, JAMAIS DANS L'EXCEPTION. C'est par là que la
-     * panne du 25/08 s'est affichée dans la conversation de l'utilisateur : le
-     * message d'erreur portait le corps de la réponse du fournisseur, la route
-     * le recopiait dans la bulle, et la bulle était enregistrée en base. Le
-     * refus complet — nom du service, code, motif — s'est retrouvé à l'écran.
-     */
-    console.error(`[assistant] réponse ${res.status} du fournisseur : ${detail.slice(0, 500)}`);
-    throw new Error(`assistant: réponse ${res.status}`);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      /*
+       * 🔴 LE DÉTAIL VA AU JOURNAL, JAMAIS DANS L'EXCEPTION. C'est par là que la
+       * panne du 25/08 s'est affichée dans la conversation de l'utilisateur : le
+       * message d'erreur portait le corps de la réponse du fournisseur, la route
+       * le recopiait dans la bulle, et la bulle était enregistrée en base. Le
+       * refus complet — nom du service, code, motif — s'est retrouvé à l'écran.
+       */
+      console.error(`[assistant] réponse ${res.status} du fournisseur : ${detail.slice(0, 500)}`);
+      throw new Error(`assistant: réponse ${res.status}`);
+    }
+
+    const data = (await res.json()) as {
+      candidates?: { content?: { parts?: PartieModele[] } }[];
+    };
+    const parties = data.candidates?.[0]?.content?.parts ?? [];
+    const appels = parties.flatMap((p) => (p.functionCall ? [p.functionCall] : []));
+
+    if (appels.length > 0 && outilsPermis) {
+      contents.push({ role: "model", parts: parties });
+      // Trois appels au plus par tour, exécutés ensemble.
+      const reponses = await Promise.all(
+        appels.slice(0, 3).map(async (appel) => {
+          if (appel.name === "rechercher_web") compte.recherches++;
+          if (appel.name === "lire_page") compte.pages++;
+          const resultat = await executerOutil(appel.name, appel.args ?? {}, moteur);
+          return { functionResponse: { name: appel.name, response: resultat } };
+        }),
+      );
+      contents.push({ role: "user", parts: reponses });
+      continue;
+    }
+
+    const text = parties.map((p) => p.text ?? "").join("");
+    if (!text.trim()) {
+      // Une réponse vide n'est pas une réponse : la montrer telle quelle
+      // afficherait une bulle blanche que l'utilisateur prendrait pour un bogue
+      // d'affichage.
+      console.error("[assistant] réponse vide du fournisseur");
+      throw new Error("assistant: réponse vide");
+    }
+    if (compte.recherches || compte.pages) {
+      // Des compteurs seulement : la requête et les pages viennent de
+      // l'utilisateur, elles n'ont rien à faire dans les journaux.
+      console.log(
+        `[assistant] ${compte.recherches} recherche(s), ${compte.pages} page(s), ${Date.now() - debut} ms`,
+      );
+    }
+    return text.trim();
   }
-
-  const data = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  if (!text.trim()) {
-    // Une réponse vide n'est pas une réponse : la montrer telle quelle
-    // afficherait une bulle blanche que l'utilisateur prendrait pour un bogue
-    // d'affichage.
-    console.error("[assistant] réponse vide du fournisseur");
-    throw new Error("assistant: réponse vide");
-  }
-  return text.trim();
 }
+
+/** Une partie de réponse du modèle : du texte, ou une demande d'outil. */
+interface PartieModele {
+  text?: string;
+  functionCall?: { name: string; args?: Record<string, unknown> };
+  [autre: string]: unknown;
+}
+
+/** Un outil neutre, dans le format du fournisseur. */
+function versDeclaration(o: OutilNeutre) {
+  return {
+    name: o.nom,
+    description: o.description,
+    parameters: {
+      type: "OBJECT",
+      properties: Object.fromEntries(
+        Object.entries(o.parametres).map(([cle, p]) => [cle, { type: "STRING", description: p.description }]),
+      ),
+      required: o.requis,
+    },
+  };
+}
+
+/** Tours d'outils au plus par réponse : une protection contre les boucles, pas un quota. */
+const MAX_TOURS_OUTILS = 4;
+/** Au-delà, plus d'outil : le modèle doit répondre avec ce qu'il a déjà. */
+const BUDGET_OUTILS_MS = 35_000;

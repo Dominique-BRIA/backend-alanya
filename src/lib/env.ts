@@ -110,6 +110,14 @@ export const env = {
       optional("ASSISTANT_MODEL") ||
       optional("GEMINI_MODEL") ||
       "gemini-2.5-flash",
+    /// Notre moteur de recherche (SearXNG), pour la recherche web de
+    /// l'assistant (14/11/2026). Installé sur le VPS par
+    /// `scripts/installer-searxng.sh`, il n'écoute que sur la machine.
+    /// `non` coupe la recherche : l'assistant répond alors sans outil.
+    moteurRecherche: (() => {
+      const v = optional("ASSISTANT_MOTEUR_RECHERCHE", "http://127.0.0.1:8888").trim();
+      return v.toLowerCase() === "non" ? "" : v;
+    })(),
   },
 
   media: {
