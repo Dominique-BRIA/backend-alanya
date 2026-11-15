@@ -3418,6 +3418,23 @@ model E2eeEnveloppe {
   @@map("e2ee_enveloppes")
 }
 
+/// RENVOI PAR L'EXPÉDITEUR (piste B, 14/11/2026). Voir
+/// `prisma/manual/2026-11_e2ee_renvois.sql` et `api/e2ee/renvois`.
+model E2eeRenvoi {
+  id              String    @id @default(uuid()) @db.Uuid
+  messageId       String    @map("message_id") @db.Uuid
+  convId          String    @map("conversation_id") @db.Uuid
+  expediteurId    String    @map("expediteur_id") @db.Uuid
+  demandeurId     String    @map("demandeur_id") @db.Uuid
+  demandeurDevice Int       @map("demandeur_device")
+  creeLe          DateTime  @default(now()) @map("cree_le") @db.Timestamptz
+  serviLe         DateTime? @map("servi_le") @db.Timestamptz
+
+  @@unique([messageId, demandeurId, demandeurDevice], map: "e2ee_renvois_unique")
+  @@index([expediteurId, serviLe], map: "e2ee_renvois_expediteur_idx")
+  @@map("e2ee_renvois")
+}
+
 // ---------------------------------------------------------------------------
 // INVITATION_QR — le QR code à usage unique (15 minutes), partageable
 // ---------------------------------------------------------------------------
