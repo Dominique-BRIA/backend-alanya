@@ -54,12 +54,55 @@ async function loadFirebase() {
   }
 }
 
-async function tokensForUser(prisma, userId) {
+/**
+ * Les jetons à notifier pour ce compte.
+ *
+ * 🔴 PAS DE SESSION VIVANTE, PAS DE NOTIFICATION (15/11/2026, user :
+ * « quand une personne se déconnecte, elle continue de recevoir les
+ * notifications »).
+ *
+ * La déconnexion supprime le jeton de l'appareil, mais seulement celui qu'elle
+ * connaît à cet instant. En production, 24 jetons restaient rattachés à un
+ * appareil sans aucune session : déconnexion dont le `DELETE` n'est pas
+ * arrivé, jeton FCM renouvelé et réenregistré pendant la déconnexion elle-même,
+ * session expirée. Chacun recevait encore messages et appels.
+ *
+ * La règle vit donc ICI, au moment d'envoyer : un jeton rattaché à un appareil
+ * n'est notifié que si cet appareil a une session vivante (jeton de
+ * rafraîchissement ni révoqué ni expiré). Sinon il est supprimé. Un jeton
+ * ancien, sans appareil (enregistré avant le 06/11), reste notifié : on ne
+ * sait pas à quel appareil il appartient.
+ */
+export async function tokensForUser(prisma, userId) {
   const rows = await prisma.pushDevice.findMany({
     where: { userId },
-    select: { token: true },
+    select: { id: true, token: true, deviceId: true },
   });
-  return rows.map((r) => r.token);
+  if (rows.length === 0) return [];
+  const appareils = [...new Set(rows.map((r) => r.deviceId).filter(Boolean))];
+  const vivants = new Set(
+    appareils.length === 0
+      ? []
+      : (
+          await prisma.refreshToken.findMany({
+            where: {
+              userId,
+              deviceId: { in: appareils },
+              revoked: false,
+              expiresAt: { gt: new Date() },
+            },
+            select: { deviceId: true },
+          })
+        ).map((r) => r.deviceId),
+  );
+  const orphelins = rows.filter((r) => r.deviceId && !vivants.has(r.deviceId));
+  if (orphelins.length > 0) {
+    await prisma.pushDevice
+      .deleteMany({ where: { id: { in: orphelins.map((r) => r.id) } } })
+      .catch(() => undefined);
+    console.log(`[push] ${orphelins.length} jeton(s) sans session supprimé(s)`);
+  }
+  return rows.filter((r) => !r.deviceId || vivants.has(r.deviceId)).map((r) => r.token);
 }
 
 /**
