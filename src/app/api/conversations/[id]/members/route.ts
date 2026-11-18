@@ -1,12 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { MEMBRE_ACTIF, donneesDepart, donneesRetour } from "@/lib/appartenance.mjs";
+import { MEMBRE_ACTIF, donneesDepart } from "@/lib/appartenance.mjs";
 import { invaliderConversation } from "@/lib/cache-redis.mjs";
 import { ok, fail } from "@/lib/http";
 import { withAuth } from "@/lib/auth-context";
 import { isGroupAdmin } from "@/lib/groups";
 import { proprietaireEffectif, transmettrePropriete } from "@/lib/groupe-droits.mjs";
-import { peutChiffrer } from "@/lib/e2ee-perimetre";
+import { integrerMembres, peutPartagerLien, refusChiffrement } from "@/lib/groupe-adhesion";
 import { previensDesPersonnes } from "@/lib/salle-temps-reel";
 import { previensManquants } from "@/lib/e2ee-v2";
 import { nomAffichage } from "@/lib/display-name.mjs";
@@ -31,6 +31,11 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
   const moi = conv.participants.find((p) => p.userId === userId);
   if (!moi) return fail("Accès refusé", 403, "FORBIDDEN");
   const proprietaire = proprietaireEffectif(conv, conv.participants);
+  const jeSuisAdmin = isGroupAdmin(conv.participants, userId);
+  // Les demandes du lien en attente : les admins seuls les voient (18/11/2026).
+  const demandesEnAttente = jeSuisAdmin
+    ? await prisma.demandeAdhesion.count({ where: { convId, statut: "attente" } })
+    : 0;
 
   return ok({
     /*
@@ -45,6 +50,10 @@ export const GET = withAuth(async (_req: NextRequest, userId: string, ctx) => {
       adminsSeulsModifient: conv.adminsSeulsModifient,
       adminsSeulsAjoutent: conv.adminsSeulsAjoutent,
       historiqueCacheNouveaux: conv.historiqueCacheNouveaux,
+      // Privé ou public, et ce qui touche au lien (18/11/2026).
+      acces: conv.acces,
+      peutPartagerLien: peutPartagerLien(conv, conv.participants, userId),
+      demandesEnAttente,
     },
     moi: { arriveeAConfirmer: moi.arriveeAConfirmer },
     members: conv.participants.map((p) => ({
@@ -129,51 +138,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
    * groupe muet. On refuse TOUT l'ajout, en nommant les numéros en cause,
    * plutôt que d'en ajouter une partie en silence.
    */
-  if (conv.e2eeActif) {
-    const avecCles = new Set(
-      (
-        await prisma.e2eeIdentite.findMany({
-          where: { userId: { in: toAdd.map((u) => u.id) } },
-          select: { userId: true },
-          distinct: ["userId"],
-        })
-      ).map((i) => i.userId),
-    );
-    const horsPerimetre = toAdd.filter((u) => !peutChiffrer(u));
-    const sansCles = toAdd.filter((u) => peutChiffrer(u) && !avecCles.has(u.id));
-    if (horsPerimetre.length > 0) {
-      return NextResponse.json(
-        {
-          error: {
-            message: "Ce type de compte ne peut pas rejoindre un groupe chiffré.",
-            code: "HORS_PERIMETRE",
-            numeros: horsPerimetre.map((u) => u.publicNumber),
-          },
-        },
-        { status: 409 },
-      );
-    }
-    if (sansCles.length > 0) {
-      return NextResponse.json(
-        {
-          error: {
-            message:
-              "Ce groupe est chiffré : la personne doit d'abord ouvrir Alanya sur " +
-              "un appareil à jour pour publier ses clés.",
-            code: "CLES_MANQUANTES",
-            numeros: sansCles.map((u) => u.publicNumber),
-          },
-        },
-        { status: 409 },
-      );
-    }
-  }
+  const refus = await refusChiffrement(conv, toAdd);
+  if (refus) return NextResponse.json({ error: refus }, { status: 409 });
 
-  /*
-   * 🔴 UN ANCIEN MEMBRE QUI REVIENT EST RÉACTIVÉ, PAS RECRÉÉ (09/10/2026). Sa
-   * ligne existe encore (`est_membre = false`) : la recréer violerait
-   * l'unicité (conversation, compte). Les deux écritures vont ensemble.
-   */
   const lignesAnciennes = await prisma.participant.findMany({
     where: { convId, userId: { in: toAdd.map((u) => u.id) }, estMembre: false },
     select: { userId: true, excluPar: true },
@@ -190,39 +157,22 @@ export const POST = withAuth(async (req: NextRequest, userId: string, ctx) => {
       return fail("Seul un admin peut faire revenir un membre retiré", 403, "NOT_ADMIN");
     }
   }
-  const anciens = new Set(lignesAnciennes.map((p) => p.userId));
   /*
-   * L'ARRIVÉE À CONFIRMER ET L'HISTORIQUE (01/11/2026) : le nouveau venu voit
-   * la bannière « Rester / Quitter » ; si le groupe cache l'historique aux
-   * nouveaux, il ne lit que ce qui s'écrit à partir de maintenant.
+   * L'ENTRÉE ELLE-MÊME (`groupe-adhesion.ts`, commune avec le lien du groupe) :
+   * réactive les anciens membres, crée les autres, puis invalide le cache —
+   * ⚠️ AVANT L'AVIS SYSTÈME QUI SUIT, sans quoi le serveur WebSocket lirait
+   * une liste sans les nouveaux venus et l'avis de leur arrivée ne leur
+   * parviendrait pas. Ajouté par quelqu'un : la bannière « Rester / Quitter ».
    */
-  const arrivee = {
-    arriveeAConfirmer: true,
-    historiqueDepuis: conv.historiqueCacheNouveaux ? new Date() : null,
-  };
-  await prisma.$transaction([
-    prisma.participant.updateMany({
-      where: { convId, userId: { in: [...anciens] }, estMembre: false },
-      data: { ...donneesRetour(), role: "MEMBER", ...arrivee },
-    }),
-    prisma.participant.createMany({
-      data: toAdd
-        .filter((u) => !anciens.has(u.id))
-        .map((u) => ({
-          convId,
-          userId: u.id,
-          role: "MEMBER" as const,
-          ...arrivee,
-        })),
-    }),
-  ]);
+  await integrerMembres(conv, toAdd.map((u) => u.id), { arriveeAConfirmer: true });
   /*
-   * ⚠️ AVANT L'AVIS SYSTÈME QUI SUIT, PAS APRÈS. Cet avis est diffusé en temps
-   * réel par le serveur WebSocket, qui demande alors la liste des membres : s'il
-   * la lisait encore en cache, elle ne contiendrait pas les nouveaux venus, et
-   * le message annonçant leur arrivée n'arriverait justement pas jusqu'à eux.
+   * Une demande du lien restée en attente n'a plus d'objet : la personne est
+   * entrée autrement (18/11/2026).
    */
-  await invaliderConversation(convId);
+  await prisma.demandeAdhesion.updateMany({
+    where: { convId, userId: { in: toAdd.map((u) => u.id) }, statut: "attente" },
+    data: { statut: "acceptee", traiteePar: userId, traiteeLe: new Date() },
+  });
 
   // Un avis par personne ajoutée : « X a été ajouté par Y ». Les noms sont
   // figés dans l'avis — si quelqu'un change de pseudo plus tard, l'historique

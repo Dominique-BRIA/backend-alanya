@@ -498,6 +498,37 @@ export async function pushMeetingRequestDecided(prisma, {
   });
 }
 
+/**
+ * GROUPE PRIVÉ : QUELQU'UN DEMANDE À ENTRER PAR LE LIEN (18/11/2026).
+ * Part vers chaque admin du groupe ; toucher la notification ouvre la liste
+ * des demandes.
+ */
+export async function pushDemandeGroupe(prisma, { recipientId, convId, groupe, demandeurName }) {
+  if (!isPushEnabled()) return;
+  const nom = groupe?.trim() || "Groupe";
+  await sendPushToUser(prisma, recipientId, {
+    title: nom,
+    body: `${demandeurName || "Quelqu'un"} demande à rejoindre le groupe`,
+    data: { type: "groupe_demande", convId },
+  });
+}
+
+/**
+ * La réponse des admins, au DEMANDEUR seul (18/11/2026). Acceptée, toucher la
+ * notification ouvre le groupe.
+ */
+export async function pushDecisionGroupe(prisma, { recipientId, convId, groupe, accepte }) {
+  if (!isPushEnabled()) return;
+  const nom = groupe?.trim() || "Groupe";
+  await sendPushToUser(prisma, recipientId, {
+    title: nom,
+    body: accepte
+      ? "Votre demande a été acceptée : vous êtes membre du groupe"
+      : "Votre demande pour rejoindre le groupe a été refusée",
+    data: { type: "groupe_decision", convId, accepte: String(Boolean(accepte)) },
+  });
+}
+
 /** Notifie (data-only) que l'appel est terminé/annulé → le client retire la
  *  notif d'appel plein écran, même app fermée. Ciblé par le callId partagé. */
 /**

@@ -19,15 +19,15 @@ import styles from "./page-lien.module.css";
  * Pas de lien de téléchargement de l'APK pour le moment (décision du user).
  *
  * Dossier `_liens` : le soulignement le rend privé, Next ne le sert pas comme
- * une route. Il est partagé par `/u/<ID>` et `/i/<jeton>`.
+ * une route. Il est partagé par `/u/<ID>`, `/i/<jeton>` et `/g/<code>`.
  */
 
 const PAQUET_ANDROID = "com.alanya237.work";
 const WEB = "/webapp/";
 
 /** Le lien `intent://` qui ouvre le même chemin dans l'application Android. */
-function lienIntent(chemin: string, origine: string): string {
-  const repli = encodeURIComponent(`${origine}${WEB}`);
+function lienIntent(chemin: string, origine: string, web: string): string {
+  const repli = encodeURIComponent(`${origine}${web}`);
   return (
     `intent://alanyavox.com${chemin}#Intent;scheme=https;` +
     `package=${PAQUET_ANDROID};S.browser_fallback_url=${repli};end`
@@ -40,7 +40,11 @@ export function PageLien(props: {
   chemin: string;
   origine: string;
   android: boolean;
+  /// Où mène « Continuer sur le web » : l'accueil du client web par défaut ;
+  /// le lien d'un groupe (`/g/<code>`) y ouvre directement la même page.
+  web?: string;
 }) {
+  const web = props.web ?? WEB;
   return (
     <main className={styles.page}>
       <div className={styles.carte}>
@@ -59,14 +63,14 @@ export function PageLien(props: {
           {props.android && (
             <a
               className={styles.principal}
-              href={lienIntent(props.chemin, props.origine)}
+              href={lienIntent(props.chemin, props.origine, web)}
             >
               Ouvrir dans l&apos;application
             </a>
           )}
           <a
             className={props.android ? styles.secondaire : styles.principal}
-            href={WEB}
+            href={web}
           >
             Continuer sur le web
           </a>

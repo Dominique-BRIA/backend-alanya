@@ -11,6 +11,7 @@ import { nomAffichage } from "@/lib/display-name.mjs";
 // clients qui lisent `conversation.lastMessage` tel quel.
 import { apercuMessage } from "@/lib/message-payload.mjs";
 import { avatarPublicUrl } from "@/lib/avatar";
+import { nouveauCodeLien } from "@/lib/groupe-adhesion";
 import { TYPE_COMPTE_OFFICIEL } from "@/lib/compte-officiel.mjs";
 import { preparerBadges } from "@/lib/badges";
 
@@ -363,6 +364,9 @@ export const POST = withAuth(async (req: NextRequest, userId: string) => {
       // Le créateur est le PROPRIÉTAIRE (01/11/2026) : voir `groupe-droits.mjs`.
       proprietaireId: userId,
       ...(body.description ? { description: body.description } : {}),
+      // Privé ou public (18/11/2026) ; le lien du groupe existe dès sa création.
+      acces: body.acces ?? "prive",
+      codeLien: nouveauCodeLien(),
       participants: {
         create: Array.from(memberIds).map((id) => ({
           userId: id,

@@ -4,6 +4,8 @@ import {
   pushMeetingInvitation,
   pushMeetingRequest,
   pushMeetingRequestDecided,
+  pushDemandeGroupe,
+  pushDecisionGroupe,
 } from "../../push.mjs";
 
 export function isPushConfigured(): boolean {
@@ -124,4 +126,24 @@ export async function notifieDecisionDemandeReunion(args: {
   accepte: boolean;
 }): Promise<void> {
   await pushMeetingRequestDecided(prisma, args);
+}
+
+/** Prévient un admin qu'une demande attend pour son groupe privé (18/11/2026). */
+export async function notifieDemandeGroupe(args: {
+  recipientId: string;
+  convId: string;
+  groupe: string | null;
+  demandeurName: string;
+}): Promise<void> {
+  await pushDemandeGroupe(prisma, args);
+}
+
+/** Annonce au demandeur la réponse des admins (18/11/2026). */
+export async function notifieDecisionGroupe(args: {
+  recipientId: string;
+  convId: string;
+  groupe: string | null;
+  accepte: boolean;
+}): Promise<void> {
+  await pushDecisionGroupe(prisma, args);
 }

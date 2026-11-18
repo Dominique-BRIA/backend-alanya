@@ -280,6 +280,7 @@ model User {
   conversationLocks     ConversationLock[]
   invitationsQrCreees   InvitationQr[]         @relation("InvitationQrCreateur")
   invitationsQrUtilisees InvitationQr[]        @relation("InvitationQrUtilisateur")
+  demandesAdhesion      DemandeAdhesion[]      @relation("DemandeAdhesionDemandeur")
 
   // --- Espace Développeur ---
   /// Rempli seulement sur le compte d'une ENSEIGNE (type 6).
@@ -1067,7 +1068,42 @@ model Conversation {
   /// Un membre ajouté ne voit pas les messages d'avant son arrivée.
   historiqueCacheNouveaux Boolean @default(false) @map("historique_cache_nouveaux")
 
+  // --- GROUPES PRIVÉS ET PUBLICS (18/11/2026) ---
+  // SQL : prisma/manual/2026-11_groupes_acces_lien.sql
+
+  /// « prive » : le lien du groupe place dans une liste d'attente que les
+  /// admins traitent. « public » : le lien fait entrer aussitôt. Les groupes
+  /// d'avant sont privés.
+  acces String @default("prive") @db.VarChar(10)
+
+  /// Le code du lien https://alanyavox.com/g/<code> (128 bits, base64url).
+  /// Créé à la première demande ; un admin peut le renouveler, ce qui rend
+  /// l'ancien lien inutilisable.
+  codeLien String? @unique @map("code_lien") @db.VarChar(43)
+
+  demandesAdhesion DemandeAdhesion[]
+
   @@map("conversation")
+}
+
+/// Une demande pour entrer dans un groupe PRIVÉ par son lien (18/11/2026).
+/// Une seule ligne par (groupe, personne) : redemander après un refus remet
+/// la même ligne « en attente ».
+model DemandeAdhesion {
+  id         String       @id @default(uuid()) @db.Uuid
+  convId     String       @map("conv_id") @db.Uuid
+  conv       Conversation @relation(fields: [convId], references: [id], onDelete: Cascade)
+  userId     String       @map("user_id") @db.Uuid
+  user       User         @relation("DemandeAdhesionDemandeur", fields: [userId], references: [id], onDelete: Cascade)
+  /// « attente », « acceptee » ou « refusee ».
+  statut     String       @default("attente") @db.VarChar(10)
+  creeLe     DateTime     @default(now()) @map("cree_le") @db.Timestamptz
+  traiteePar String?      @map("traitee_par") @db.Uuid
+  traiteeLe  DateTime?    @map("traitee_le") @db.Timestamptz
+
+  @@unique([convId, userId])
+  @@index([convId, statut])
+  @@map("demande_adhesion")
 }
 
 enum ParticipantRole {

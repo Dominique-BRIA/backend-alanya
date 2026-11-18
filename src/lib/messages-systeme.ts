@@ -24,7 +24,10 @@ export type CodeSysteme =
   | "e2ee_cle_changee"
   // « X a fait une capture d'écran » (29/10/2026). Même règle : un client plus
   // ancien n'affiche rien.
-  | "capture_ecran";
+  | "capture_ecran"
+  // « X a rejoint le groupe par son lien » (18/11/2026) ; avec `actor`
+  // quand un admin a accepté la demande. Même règle.
+  | "member_joined_link";
 
 /**
  * Dépose un message système dans une conversation.

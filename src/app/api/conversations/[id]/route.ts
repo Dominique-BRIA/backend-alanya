@@ -7,6 +7,7 @@ import { apresChangementDePhoto } from "@/lib/avatar-profil";
 import { MEMBRE_ACTIF } from "@/lib/appartenance.mjs";
 import { estAdminDuGroupe } from "@/lib/groupe-droits.mjs";
 import { invaliderConversation } from "@/lib/cache-redis.mjs";
+import { ACCES_GROUPE } from "@/lib/groupe-adhesion";
 
 /** Les quatre réglages du groupe (01/11/2026), réservés aux admins. */
 const REGLAGES = [
@@ -54,6 +55,17 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
     data.description = d === "" ? null : d;
   }
 
+  /*
+   * PRIVÉ OU PUBLIC (18/11/2026) : les admins, toujours. Les demandes déjà en
+   * attente restent dans la liste : passer en public ne fait entrer personne
+   * à la place des admins.
+   */
+  if (body.acces !== undefined) {
+    if (!isAdmin) return fail("Seul un admin peut changer les réglages du groupe", 403, "NOT_ADMIN");
+    if (!ACCES_GROUPE.includes(body.acces)) return fail("Accès invalide", 400, "BAD_SETTING");
+    data.acces = body.acces;
+  }
+
   const reglages = REGLAGES.filter((k) => body[k] !== undefined);
   if (reglages.length > 0) {
     if (!isAdmin) return fail("Seul un admin peut changer les réglages du groupe", 403, "NOT_ADMIN");
@@ -85,5 +97,6 @@ export const PATCH = withAuth(async (req: NextRequest, userId: string, ctx) => {
     adminsSeulsModifient: maj.adminsSeulsModifient,
     adminsSeulsAjoutent: maj.adminsSeulsAjoutent,
     historiqueCacheNouveaux: maj.historiqueCacheNouveaux,
+    acces: maj.acces,
   });
 });
