@@ -124,7 +124,7 @@ async function main() {
   verifie(
     "le dossier porte le groupe, son nom et sa description",
     dossier?.cibleId === g.id && (dossier?.extrait ?? "").includes("Groupe signalé"),
-    JSON.stringify(dossier),
+    JSON.stringify(dossier, (_k, v) => (typeof v === "bigint" ? String(v) : v)),
   );
   const s2 = await appel(jA, "POST", "/api/signalements", { cible: "group", convId: g.id, motif: "spam" });
   verifie("une seconde fois tant que c'est ouvert : 409", s2.statut === 409, `HTTP ${s2.statut}`);
@@ -140,7 +140,7 @@ async function main() {
   const ia = await appel(jA, "POST", "/api/signalements", { cible: "ia", aiMessageId: reponse.id, motif: "violence" });
   verifie("sa propre réponse : 201", ia.statut === 201, ia.texte.slice(0, 160));
   const dossierIa = await prisma.gestionSignalement.findFirst({ where: { auteurId: alice.id, cibleType: "ia" } });
-  verifie("son texte exact est au dossier", dossierIa?.extrait === "une réponse choquante", JSON.stringify(dossierIa));
+  verifie("son texte exact est au dossier", dossierIa?.extrait === "une réponse choquante", JSON.stringify(dossierIa, (_k, v) => (typeof v === "bigint" ? String(v) : v)));
   const iaQ = await appel(jA, "POST", "/api/signalements", { cible: "ia", aiMessageId: question.id, motif: "other" });
   verifie("sa propre QUESTION n'est pas une réponse : 404", iaQ.statut === 404, `HTTP ${iaQ.statut}`);
   const iaI = await appel(jI, "POST", "/api/signalements", { cible: "ia", aiMessageId: reponse.id, motif: "other" });
