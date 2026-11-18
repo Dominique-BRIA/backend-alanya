@@ -83,7 +83,7 @@ Nous pouvons aussi transmettre des données si la loi nous y oblige.
 Vous pouvez consulter et modifier vos informations dans l'application, et **supprimer votre compte** :
 
 - dans l'application : Paramètres, puis Supprimer mon compte ;
-- sur le web, même sans l'application : https://alanyavox.com/suppression-compte
+- sur le web, même sans l'application : https://alanyavox.com/webapp/suppression-compte
 
 Pour toute autre demande (accès, rectification, opposition), écrivez à [adresse e-mail de contact].
 
@@ -144,7 +144,7 @@ Vous restez propriétaire de ce que vous envoyez. Vous nous accordez seulement l
 
 ## 7. Suspension et suppression
 
-Nous pouvons suspendre ou supprimer un compte qui enfreint ces conditions. Vous pouvez supprimer votre compte à tout moment, dans l'application ou sur https://alanyavox.com/suppression-compte
+Nous pouvons suspendre ou supprimer un compte qui enfreint ces conditions. Vous pouvez supprimer votre compte à tout moment, dans l'application ou sur https://alanyavox.com/webapp/suppression-compte
 
 ## 8. Responsabilité
 
