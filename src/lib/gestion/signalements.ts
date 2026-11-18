@@ -25,9 +25,18 @@ export const MOTIFS = ["harassment", "hate", "violence", "sexual", "scam", "spam
 const TYPES_MESSAGE: Record<string, number> = { TEXT: 0, IMAGE: 1, VIDEO: 2, AUDIO: 3, FILE: 4, SYSTEM: 5, CONTACT: 6, LOCATION: 7 };
 
 const signalementSchema = z.object({
-  cible: z.enum(["message", "user"]),
+  /*
+   * `group` et `ia` (18/11/2026, publication sur le Play Store) : Google exige
+   * qu'on puisse signaler un groupe dans une messagerie, et une réponse
+   * choquante d'une IA générative.
+   */
+  cible: z.enum(["message", "user", "group", "ia"]),
   messageId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
+  /** Le groupe signalé (`group`). */
+  convId: z.string().uuid().optional(),
+  /** La réponse de l'Assistant signalée (`ia`). */
+  aiMessageId: z.string().uuid().optional(),
   motif: z.enum(MOTIFS),
   note: z.string().trim().max(1000).optional(),
   /// Pour un message chiffré seulement : le texte, déchiffré par l'auteur.
@@ -51,6 +60,27 @@ export async function signaler(auteurId: string, brut: unknown) {
     if (m.senderId === auteurId) throw new ErreurAdmin(400, "On ne signale pas ses propres messages", "SELF");
     const extrait = m.content?.trim() ? m.content : m.conv.e2eeActif ? (c.extrait ?? null) : null;
     return creer({ cibleType: "message", messageId: m.id, userId: m.senderId, auteurId, motif: c.motif, note: c.note ?? null, extrait });
+  }
+  if (c.cible === "group") {
+    if (!c.convId) throw new ErreurAdmin(400, "Groupe requis", "VALIDATION");
+    // Seul un membre (même parti depuis peu, il a pu en être chassé) signale.
+    const g = await prisma.conversation.findFirst({
+      where: { id: c.convId, isGroup: true, participants: { some: { userId: auteurId } } },
+      select: { id: true, name: true, description: true },
+    });
+    if (!g) throw new ErreurAdmin(404, "Groupe introuvable", "NOT_FOUND");
+    const extrait = [g.name, g.description].filter(Boolean).join(" — ") || null;
+    return creer({ cibleType: "group", cibleId: g.id, messageId: null, userId: null, auteurId, motif: c.motif, note: c.note ?? null, extrait });
+  }
+  if (c.cible === "ia") {
+    if (!c.aiMessageId) throw new ErreurAdmin(400, "Réponse requise", "VALIDATION");
+    // Une réponse de l'Assistant, dans une conversation de CE compte.
+    const r = await prisma.aiMessage.findFirst({
+      where: { id: c.aiMessageId, role: "MODEL", thread: { userId: auteurId } },
+      select: { id: true, content: true },
+    });
+    if (!r) throw new ErreurAdmin(404, "Réponse introuvable", "NOT_FOUND");
+    return creer({ cibleType: "ia", cibleId: r.id, messageId: null, userId: null, auteurId, motif: c.motif, note: c.note ?? null, extrait: r.content.slice(0, 4000) });
   }
   if (!c.userId) throw new ErreurAdmin(400, "Compte requis", "VALIDATION");
   if (c.userId === auteurId) throw new ErreurAdmin(400, "On ne se signale pas soi-même", "SELF");
@@ -94,6 +124,11 @@ export async function listerSignalements(p: URLSearchParams, pg: ReturnType<type
   ]);
   const idsComptes = [...new Set(lignes.flatMap((l) => [l.auteurId, l.userId].filter(Boolean) as string[]))];
   const idsMessages = lignes.map((l) => l.messageId).filter(Boolean) as string[];
+  const idsGroupes = lignes.filter((l) => l.cibleType === "group" && l.cibleId).map((l) => l.cibleId!) as string[];
+  const groupes = await prisma.conversation.findMany({
+    where: { id: { in: idsGroupes } },
+    select: { id: true, name: true, _count: { select: { participants: { where: { ...MEMBRE_ACTIF } } } } },
+  });
   const [comptes, messages] = await Promise.all([
     prisma.user.findMany({ where: { id: { in: idsComptes } }, select: { id: true, nom: true, pseudo: true, publicNumber: true, exclus: true } }),
     prisma.message.findMany({ where: { id: { in: idsMessages } }, select: { id: true, type: true, content: true, deletedAt: true, createdAt: true, senderId: true } }),
@@ -122,6 +157,11 @@ export async function listerSignalements(p: URLSearchParams, pg: ReturnType<type
         msgContent: l.extrait ?? m?.content ?? null,
         msgDeleted: l.cibleType === "message" && (!m || m.deletedAt !== null),
         msgSentAt: m?.createdAt ?? null,
+        targetConvId: l.cibleType === "group" ? l.cibleId : null,
+        targetGroupNom: l.cibleType === "group" ? (groupes.find((g) => g.id === l.cibleId)?.name ?? null) : null,
+        targetGroupMembres:
+          l.cibleType === "group" ? (groupes.find((g) => g.id === l.cibleId)?._count.participants ?? null) : null,
+        targetAiMsgId: l.cibleType === "ia" ? l.cibleId : null,
         actions: l._count.actions,
       };
     }),

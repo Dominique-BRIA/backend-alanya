@@ -3760,7 +3760,9 @@ model GestionBienvenueEnvoi {
 
 model GestionSignalement {
   id        BigInt                     @id @default(autoincrement())
-  cibleType String                     @map("cible_type") @db.VarChar(8)
+  cibleType String                     @map("cible_type") @db.VarChar(10)
+  /// Groupe signalé, ou message de l'Assistant signalé (`group`, `ia`).
+  cibleId   String?                    @map("cible_id") @db.Uuid
   messageId String?                    @map("message_id") @db.Uuid
   userId    String?                    @map("user_id") @db.Uuid
   auteurId  String                     @map("auteur_id") @db.Uuid
@@ -3772,6 +3774,20 @@ model GestionSignalement {
   actions   GestionSignalementAction[]
 
   @@map("gestion_signalement")
+}
+
+/// LES PAGES LÉGALES (18/11/2026) : politique de confidentialité et conditions
+/// d'utilisation, modifiées depuis la console. Voir
+/// `prisma/manual/2026-11_pages_legales_signalements.sql`.
+model PageLegale {
+  slug    String   @id @db.VarChar(40)
+  titre   String   @db.VarChar(200)
+  contenu String
+  version Int      @default(1)
+  majLe   DateTime @default(now()) @map("maj_le") @db.Timestamptz
+  majPar  String?  @map("maj_par") @db.VarChar(100)
+
+  @@map("pages_legales")
 }
 
 model GestionSignalementAction {
