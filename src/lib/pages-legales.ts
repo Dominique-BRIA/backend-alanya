@@ -60,14 +60,15 @@ Nous n'importons pas votre carnet d'adresses et nous ne vendons aucune donnée.
 
 ## 3. Avec qui elles sont partagées
 
-Uniquement avec les prestataires nécessaires au fonctionnement, pour ce seul usage :
+Uniquement avec les prestataires techniques nécessaires au fonctionnement, liés par contrat et pour ce seul usage :
 
-- **Google Firebase** : acheminement des notifications.
-- **Google (Gemini)** : production des réponses de l'Assistant Alanya, à partir de vos questions.
-- **Cloudflare** : relais des appels et stockage de fichiers.
-- **Backblaze** : stockage des fichiers (chiffrés pour les conversations chiffrées).
-- **Notre hébergeur de serveurs** et **notre prestataire d'e-mails** (codes de vérification).
-- **MapTiler** : affichage des cartes.
+- l'acheminement des notifications sur votre appareil ;
+- un service d'intelligence artificielle, qui produit les réponses de l'Assistant Alanya à partir de vos questions ;
+- le relais des appels, quand une connexion directe entre les appareils n'est pas possible ;
+- l'hébergement de nos serveurs et le stockage des fichiers (chiffrés pour les conversations chiffrées) ;
+- l'envoi des e-mails (codes de vérification) ;
+- l'affichage des cartes ;
+- la traduction des messages, uniquement quand vous la demandez et selon le service de traduction que vous choisissez.
 
 Nous pouvons aussi transmettre des données si la loi nous y oblige.
 
@@ -89,7 +90,7 @@ Pour toute autre demande (accès, rectification, opposition), écrivez à [adres
 
 ## 6. Sécurité
 
-Chiffrement de bout en bout des conversations chiffrées, connexions chiffrées (HTTPS), mots de passe hachés, contrôle des appareils connectés.
+Chiffrement de bout en bout des conversations chiffrées, connexions chiffrées, mots de passe stockés sous une forme irréversible, contrôle des appareils connectés.
 
 ## 7. Enfants
 
