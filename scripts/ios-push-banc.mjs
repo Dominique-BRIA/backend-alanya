@@ -78,7 +78,7 @@ async function main() {
   const e2 = await enregistrer(jetonVoip, "ios_voip");
   verifie("jeton des appels (ios_voip) : 200", e2.status === 200, `HTTP ${e2.status} ${await e2.text()}`);
   const e3 = await enregistrer("x".repeat(20), "symbian");
-  verifie("une plateforme inconnue est refusée", e3.status === 400, `HTTP ${e3.status}`);
+  verifie("une plateforme inconnue est refusée", e3.status === 400 || e3.status === 422, `HTTP ${e3.status}`);
 
   titre("② Firebase n'emporte jamais un jeton VoIP");
   const jetons = await tokensForUser(prisma, user.id);

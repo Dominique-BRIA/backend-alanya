@@ -75,6 +75,7 @@ function jetonJwt(config) {
 /** Une connexion HTTP/2 gardée ouverte, comme Apple le recommande. */
 let session = null;
 let sessionHote = null;
+let enCours = 0;
 
 function obtenirSession(hote) {
   if (session && !session.closed && !session.destroyed && sessionHote === hote) return session;
@@ -88,8 +89,6 @@ function obtenirSession(hote) {
   s.on("close", () => {
     if (session === s) session = null;
   });
-  // Ne retient pas un script (banc) qui a fini ; le serveur, lui, vit seul.
-  s.unref?.();
   session = s;
   sessionHote = hote;
   return s;
@@ -105,9 +104,16 @@ function envoyerUn(config, jeton, corps, expiration) {
       return;
     }
     let fini = false;
+    // La connexion reste ouverte pour les appels suivants, mais ne retient
+    // pas un processus qui n'a plus rien à faire (un banc) : retenue pendant
+    // la requête seulement.
+    enCours++;
+    s.ref?.();
     const finir = (r) => {
       if (fini) return;
       fini = true;
+      enCours--;
+      if (enCours === 0) s.unref?.();
       resoudre(r);
     };
     let requete;
