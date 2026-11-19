@@ -3,6 +3,7 @@
 
 import { canalPourExpediteur } from "./src/lib/canal-message.mjs";
 import { signerJetonRefus } from "./src/lib/jeton-refus-appel.mjs";
+import { envoyerVoip, voipConfigure } from "./apns-voip.mjs";
 
 let firebase = null;
 
@@ -74,9 +75,18 @@ async function loadFirebase() {
  * sait pas à quel appareil il appartient.
  */
 export async function tokensForUser(prisma, userId) {
+  // Les jetons VoIP des iPhone (19/11/2026) ne sont pas des jetons Firebase :
+  // ils partent par `apns-voip.mjs`, jamais par ici.
+  return (await appareilsVivants(prisma, userId))
+    .filter((r) => r.platform !== "ios_voip")
+    .map((r) => r.token);
+}
+
+/** Même règle, avec la plateforme de chaque jeton. */
+async function appareilsVivants(prisma, userId) {
   const rows = await prisma.pushDevice.findMany({
     where: { userId },
-    select: { id: true, token: true, deviceId: true },
+    select: { id: true, token: true, deviceId: true, platform: true },
   });
   if (rows.length === 0) return [];
   const appareils = [...new Set(rows.map((r) => r.deviceId).filter(Boolean))];
@@ -102,7 +112,7 @@ export async function tokensForUser(prisma, userId) {
       .catch(() => undefined);
     console.log(`[push] ${orphelins.length} jeton(s) sans session supprimé(s)`);
   }
-  return rows.filter((r) => !r.deviceId || vivants.has(r.deviceId)).map((r) => r.token);
+  return rows.filter((r) => !r.deviceId || vivants.has(r.deviceId));
 }
 
 /**
@@ -122,11 +132,21 @@ export async function tokensForUser(prisma, userId) {
 export const TTL_APPEL_MS = 90 * 1000;
 export const TTL_ANNULATION_MS = 120 * 1000;
 
-export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false, ttlMs = null, canal = null }) {
+export async function sendPushToUser(prisma, userId, { title, body, data = {}, dataOnly = false, ttlMs = null, canal = null, sansIos = false }) {
   const fb = await loadFirebase();
   if (!fb) return;
 
-  const tokens = await tokensForUser(prisma, userId);
+  const lignes = (await appareilsVivants(prisma, userId)).filter((r) => r.platform !== "ios_voip");
+  // ⚠️ ANDROID ET WEB : EXACTEMENT LE MÊME ENVOI QU'AVANT. Les iPhone
+  // (19/11/2026) ont le leur, plus bas — iOS ne livre pas un message « données
+  // seules » à une application fermée.
+  const tokens = lignes.filter((r) => r.platform !== "ios").map((r) => r.token);
+  const tokensIos = sansIos ? [] : lignes.filter((r) => r.platform === "ios").map((r) => r.token);
+  if (tokens.length === 0 && tokensIos.length === 0) return;
+
+  if (tokensIos.length > 0) {
+    await envoyerIos(prisma, fb, tokensIos, { title, body, data, dataOnly, ttlMs });
+  }
   if (tokens.length === 0) return;
 
   try {
@@ -197,6 +217,88 @@ export async function sendPushToUser(prisma, userId, { title, body, data = {}, d
   } catch (e) {
     console.error("[push] envoi FCM:", e.message);
   }
+}
+
+/*
+ * ══════════════ LES iPHONE (19/11/2026) ══════════════
+ *
+ * iOS n'affiche un message « données seules » ni ne le livre à une
+ * application fermée par l'utilisateur. D'où :
+ *   · une notification VISIBLE (titre, texte) pour tout ce qui en a une, et
+ *     pour un appel entrant quand la notification VoIP n'a pas pu partir ;
+ *   · un réveil discret (`content-available`, au mieux) pour le reste, comme
+ *     l'annulation d'un appel — l'application vérifie de toute façon l'état
+ *     de l'appel en se connectant.
+ */
+export function chargeIos({ title, body, data, dataOnly, ttlMs }) {
+  const expiration =
+    ttlMs != null
+      ? { "apns-expiration": String(Math.floor(Date.now() / 1000) + Math.floor(ttlMs / 1000)) }
+      : {};
+  const visible = !dataOnly || data?.type === "incoming_call";
+  if (visible) {
+    const titre = (dataOnly ? data?.title : title) || title || "Alanya Work";
+    const texte = (dataOnly ? data?.body : body) || body || "";
+    return {
+      data,
+      notification: { title: titre, body: texte },
+      apns: {
+        headers: { "apns-push-type": "alert", "apns-priority": "10", ...expiration },
+        payload: {
+          aps: {
+            sound: "default",
+            "mutable-content": 1,
+            ...(data?.convId ? { "thread-id": String(data.convId) } : {}),
+          },
+        },
+      },
+    };
+  }
+  return {
+    data,
+    apns: {
+      headers: { "apns-push-type": "background", "apns-priority": "5", ...expiration },
+      payload: { aps: { "content-available": 1 } },
+    },
+  };
+}
+
+async function envoyerIos(prisma, fb, tokens, options) {
+  try {
+    const messaging = fb.getMessaging(fb.app);
+    const res = await messaging.sendEachForMulticast({ tokens, ...chargeIos(options) });
+    const morts = [];
+    res.responses.forEach((r, i) => {
+      if (
+        !r.success &&
+        ["messaging/invalid-registration-token", "messaging/registration-token-not-registered"].includes(
+          r.error?.code,
+        )
+      ) {
+        morts.push(tokens[i]);
+      }
+    });
+    if (morts.length > 0) await prisma.pushDevice.deleteMany({ where: { token: { in: morts } } });
+  } catch (e) {
+    console.error("[push] envoi iOS:", e.message);
+  }
+}
+
+/**
+ * L'appel entrant vers les iPhone du destinataire, par notification VoIP.
+ * Rend le nombre d'iPhone servis (0 si les réglages Apple manquent).
+ */
+async function envoyerAppelVoip(prisma, userId, champs, ttlMs) {
+  if (!voipConfigure()) return 0;
+  const jetons = (await appareilsVivants(prisma, userId))
+    .filter((r) => r.platform === "ios_voip")
+    .map((r) => r.token);
+  if (jetons.length === 0) return 0;
+  const { servis, morts } = await envoyerVoip(jetons, champs, { ttlMs });
+  if (morts.length > 0) {
+    await prisma.pushDevice.deleteMany({ where: { token: { in: morts } } }).catch(() => undefined);
+  }
+  return servis;
 }
 
 /**
@@ -340,6 +442,45 @@ export async function pushIncomingCall(prisma, {
     ? `${callerName} appelle le groupe`
     : `${callerName} · ${callType === "VIDEO" ? "Vidéo" : "Audio"}`;
 
+  const data = {
+    type: "incoming_call",
+    callId,
+    convId: convId ?? "",
+    callerName,
+    callType,
+    // Identité de l'appelant, comme dans la trame socket (06/11/2026) :
+    // application fermée, c'est ce push SEUL qui fait sonner. Sans
+    // `callerId`, le téléphone ne retrouvait ni la sonnerie de la liste de
+    // l'appelant ni sa conversation ; sans photo, l'écran d'appel natif
+    // n'affichait que l'initiale.
+    callerId: callerId ?? "",
+    callerAvatarUrl: photoPourPush(callerAvatarUrl),
+    // Le droit de refuser CET appel sans session (07/11/2026) : application
+    // tuée, le jeton d'accès laissé au téléphone a souvent expiré. Voir
+    // `src/lib/jeton-refus-appel.mjs`.
+    jetonRefus: signerJetonRefus(recipientId, callId),
+    // `sfu` pour un appel de groupe en SFU (07/11/2026), `mesh` sinon.
+    moteur: moteur === "sfu" ? "sfu" : "mesh",
+    isGroup: String(Boolean(isGroup)),
+    title,
+    body,
+    // Horodatage d'ÉMISSION. Le TTL empêche FCM de garder le message trop
+    // longtemps, mais un push déjà en transit peut malgré tout arriver en
+    // retard : le client compare cette date à l'heure de réception et ignore
+    // un appel périmé, plutôt que de faire sonner dans le vide.
+    sentAt: new Date().toISOString(),
+  };
+
+  // iPhone (19/11/2026) : l'appel part par PushKit, directement chez Apple.
+  // Servi, il ne repart pas par Firebase vers les mêmes iPhone.
+  const iphones = await envoyerAppelVoip(
+    prisma,
+    recipientId,
+    // Le nom du groupe, pour l'écran CallKit (« Awa · Équipe terrain »).
+    { ...data, groupName: groupName ?? "" },
+    TTL_APPEL_MS,
+  );
+
   await sendPushToUser(prisma, recipientId, {
     title,
     body,
@@ -347,34 +488,8 @@ export async function pushIncomingCall(prisma, {
     // d'appel PLEIN ÉCRAN (full-screen intent) même app fermée.
     dataOnly: true,
     ttlMs: TTL_APPEL_MS,
-    data: {
-      type: "incoming_call",
-      callId,
-      convId: convId ?? "",
-      callerName,
-      callType,
-      // Identité de l'appelant, comme dans la trame socket (06/11/2026) :
-      // application fermée, c'est ce push SEUL qui fait sonner. Sans
-      // `callerId`, le téléphone ne retrouvait ni la sonnerie de la liste de
-      // l'appelant ni sa conversation ; sans photo, l'écran d'appel natif
-      // n'affichait que l'initiale.
-      callerId: callerId ?? "",
-      callerAvatarUrl: photoPourPush(callerAvatarUrl),
-      // Le droit de refuser CET appel sans session (07/11/2026) : application
-      // tuée, le jeton d'accès laissé au téléphone a souvent expiré. Voir
-      // `src/lib/jeton-refus-appel.mjs`.
-      jetonRefus: signerJetonRefus(recipientId, callId),
-      // `sfu` pour un appel de groupe en SFU (07/11/2026), `mesh` sinon.
-      moteur: moteur === "sfu" ? "sfu" : "mesh",
-      isGroup: String(Boolean(isGroup)),
-      title,
-      body,
-      // Horodatage d'ÉMISSION. Le TTL empêche FCM de garder le message trop
-      // longtemps, mais un push déjà en transit peut malgré tout arriver en
-      // retard : le client compare cette date à l'heure de réception et ignore
-      // un appel périmé, plutôt que de faire sonner dans le vide.
-      sentAt: new Date().toISOString(),
-    },
+    sansIos: iphones > 0,
+    data,
   });
 }
 

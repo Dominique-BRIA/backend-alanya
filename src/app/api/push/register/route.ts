@@ -7,7 +7,8 @@ import { registerPushToken, unregisterPushToken } from "@/lib/push";
 
 const schema = z.object({
   token: z.string().min(1).max(512),
-  platform: z.enum(["android", "ios", "web"]),
+  // `ios_voip` (19/11/2026) : le jeton PushKit des appels sur iPhone.
+  platform: z.enum(["android", "ios", "ios_voip", "web"]),
   // Même identifiant que `Appareil.cookies_WebID`. Facultatif : un client plus
   // ancien continue de s'enregistrer, mais ses notifications ne pourront pas
   // être coupées appareil par appareil.

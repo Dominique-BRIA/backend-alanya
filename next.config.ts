@@ -52,6 +52,17 @@ const nextConfig: NextConfig = {
    * ⚠️ 307 et non 308 : une redirection permanente est gardée par les
    * navigateurs, et on ne pourrait plus déplacer la console sans eux.
    */
+  // Les liens universels de l'iPhone (19/11/2026) : iOS lit ce chemin exact,
+  // sans extension ; la route le sert selon l'identifiant d'équipe Apple.
+  async rewrites() {
+    return [
+      {
+        source: "/.well-known/apple-app-site-association",
+        destination: "/api/apple-app-site-association",
+      },
+    ];
+  },
+
   async redirects() {
     return [
       {
