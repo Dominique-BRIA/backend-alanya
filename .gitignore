@@ -14,3 +14,9 @@ node_modules/
 *-adminsdk*.json
 *serviceAccount*.json
 service-account*.json
+
+# Artefact de compilation TypeScript, régénéré à chaque build.
+# ⚠️ IL ÉTAIT SUIVI PAR ERREUR, et provoquait un conflit de fusion à chaque
+# échange : deux machines ne produisent jamais le même, et son contenu
+# n'apprend rien à personne.
+tsconfig.tsbuildinfo
