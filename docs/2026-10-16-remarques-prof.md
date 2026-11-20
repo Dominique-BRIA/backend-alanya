@@ -349,15 +349,40 @@ Trois défauts derrière ce seul symptôme, tous côté web :
 
 ### E. Confort d'usage
 
-#### E1 — Affichage « Média chiffré en cours » ⬜
-L'état transitoire affiché pendant le déchiffrement est jugé inesthétique (« avant, il y avait
-un trait au milieu »). À redessiner en indicateur sobre.
+#### E1 — Affichage « Média chiffré en cours » ⛔ tentative ANNULÉE le 20/11
+**Ce qui a été vérifié, et qui vaut pour la suite** : pendant le DÉCHIFFREMENT, les deux
+clients montrent déjà l'aperçu flouté et un indicateur qui tourne — rien à redire. C'est le cas
+« cet appareil n'a pas la clé » qui s'affiche, **des deux côtés**, en une ligne de texte en
+italique à la place du média. Le web n'était donc pas en avance : il n'y avait rien à recopier.
 
-#### E2 — Latence perçue du chemin chiffré ⬜
+Une tuile (cadenas barré, filet, phrase) a été posée sur les deux clients le 07/11, puis
+**annulée le 20/11 sur demande du user** (web : commit retiré avant poussée ; mobile :
+`ebc9f67`). ⚠️ Ne pas la refaire sans qu'il la redemande.
+
+⚠️ **LEÇON À RETENIR DE CETTE ANNULATION** : le commit mobile avait modifié 1771 lignes pour
+une tuile de 30, parce que le fichier était en **CRLF** et qu'un script Python l'a réécrit en
+LF. Toujours ouvrir et écrire avec `newline=""` quand on modifie un fichier par script.
+
+#### E2 — Latence perçue du chemin chiffré ✅ 07/11 (web `081104d`)
 « Le problème n'est pas le chiffrement en tant que tel, c'est juste une petite lenteur. »
-Mesurer le chemin complet d'un média chiffré — dérivation de clé, téléchargement,
-déchiffrement, rendu — et optimiser le maillon le plus lent, chiffres en main. Distinct de A5,
-qui porte sur l'envoi.
+
+**Trouvé et mesuré** : les blocs étaient chiffrés et déchiffrés **un par un**. Chaque appel à
+`crypto.subtle` est un aller-retour vers le fil de chiffrement du navigateur ; en série on le
+paie autant de fois qu'il y a de blocs de 64 Kio — 160 pour 10 Mo, 800 pour 50 Mo.
+
+| Taille | En série | 8 de front | Gain |
+|---|---|---|---|
+| 1 Mo | 9 ms | 5 ms | ×1,85 |
+| 10 Mo | 69 ms | 35 ms | ×1,95 |
+| 50 Mo | 330 ms | 189 ms | ×1,75 |
+
+⚠️ **Plus de fronts n'est pas plus rapide** : à 50 Mo, seize sont plus lents que quatre. Huit
+est le compromis mesuré, commenté avec ses chiffres dans le code.
+🔴 Possible parce que chaque bloc porte son nonce dérivé de son INDICE et s'écrit à une place
+calculée depuis ce même indice — propriété du format, pas un hasard. Le chiffrement à l'ENVOI
+avait le même défaut, corrigé aussi.
+✅ **Le format sur le fil ne change pas d'un octet** : éprouvé à quatre tailles contre l'ancien
+chiffreur reconstruit pour l'occasion, et un fichier d'avant se déchiffre toujours.
 
 #### E3 — Filtres de visage en appel vidéo ⛔ essayé puis RETIRÉ par Dominique
 Barbe, lunettes, grosse tête : ajoutés le 18/10 côté mobile (« effets de visage gratuits et
@@ -371,6 +396,16 @@ contient vraisemblablement la raison de l'abandon.
 ---
 
 ## Journal
+
+- **20/11/2026** — ⚠️ **DEUX DOUBLONS ÉVITÉS DE JUSTESSE, ET UN DIAGNOSTIC FAUX.** Dominique a
+  corrigé, dans `9955e48` côté web, les deux défauts signalés par les testeurs : la liste des
+  membres qui couvrait l'écran (c'était bien l'EN-TÊTE, pas un message comme je l'avais conclu)
+  et le crash du dessin sur photo. Il avait aussi déjà écrit la validation du nom à
+  l'inscription, au fichier et à la règle près — mon commit a été abandonné au rebase.
+  **La règle « lire ses commits AVANT d'écrire, pas après » vaut une poussée de retard.**
+  Livré de mon côté et qui tient : la zone d'écriture qui grandit (elle avait une hauteur fixe
+  d'UNE ligne pour 500 caractères admis) et le repli d'un très long message (`dec2baa`).
+  E1 annulé, E2 livré — voir leurs sections.
 
 - **14/11/2026** — Hors liste du professeur : **deux retours des testeurs du web**, livrés côté
   web (`6af9a93`).
