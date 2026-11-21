@@ -49,6 +49,27 @@ export async function annoncerMessageChiffre(params: {
    */
   const autres = personnes.filter((id) => id !== expediteurId);
   if (autres.length === 0) return;
+
+  /*
+   * ⚡ LA NOTIFICATION PART SANS ÊTRE ATTENDUE (21/11/2026, « l'envoi est lent,
+   * la réception rapide »). Cette fonction répond à l'EXPÉDITEUR : tant
+   * qu'elle attendait Google et Apple — une requête par destinataire, de
+   * quelques centaines de millisecondes à plusieurs secondes —, son message
+   * restait « en cours d'envoi » alors que le destinataire l'avait déjà reçu
+   * par la sonnette ci-dessus. L'expéditeur ne gagne rien à l'attendre :
+   * la notification ne peut ni réussir ni échouer pour lui. Elle
+   * suit donc seule, et ses erreurs restent journalisées ci-dessous.
+   */
+  void notifierAutres(convId, expediteurId, messageId, autres);
+}
+
+/** La notification poussée d'un message chiffré — voir [annoncerMessageChiffre]. */
+async function notifierAutres(
+  convId: string,
+  expediteurId: string,
+  messageId: string,
+  autres: string[],
+): Promise<void> {
   try {
     /*
      * LA SOURDINE COMPLÈTE (01/11/2026) : pour toujours, pour un temps, ou
